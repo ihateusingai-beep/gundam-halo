@@ -111,6 +111,33 @@ The skill's canonical first-person view:
 
 **Reading rule**: in any ambiguous layout decision, the closer to center and the bigger the element, the more important it is. **The active project's chat always wins for attention.**
 
+### 3.5 Responsive / mobile behavior (locked 2026-06-05)
+
+Cockpit layouts are grid-based and don't shrink well. **Strategy: responsive cockpit + Telegram/Signal as the primary mobile control surface.**
+
+**Breakpoints**:
+- `≥1280px` (desktop) — full cockpit grid as designed
+- `768–1279px` (tablet) — same layout, slightly tighter spacing, gauges shrink
+- `<768px` (phone) — vertical stack, with collapsible sections
+
+**Phone layout** (vertical top-to-bottom):
+1. Project switcher (full-width pill, tap to expand list)
+2. Active project chat (full-width, large, primary focus)
+3. Gauges — **single horizontal bar** showing CPU / RAM / disk as a stacked segmented bar (not 4 vertical gauges)
+4. **Collapsed sections** (3 tabs at bottom):
+   - **System** — gauges detail, logs, security
+   - **Tools** — skill/tool registry
+   - **Channels** — Telegram/Signal feed preview
+5. Theme switcher — stays bottom-right floating
+6. Command input — sticky at bottom (full-width text field with `.gundam-holo` border)
+
+**The real mobile control surface = Telegram / Signal** (already configured in Hermes, will be replicated in Gundam Halo):
+- Phone web dashboard = **monitoring** (read project status, gauges, memory)
+- Phone agent control = **chat** (Telegram/Signal bot — invoke, ask, get responses)
+- This avoids the problem of forcing a multi-panel cockpit UI into a 3.5" screen
+
+**Why this split**: Telegram/Signal UX is purpose-built for phones. Trying to make the web dashboard do both "visual overview" and "agent control" on a phone compromises both. Better to specialize each surface.
+
 ---
 
 ## 4. Pages / views
@@ -246,6 +273,35 @@ Then read user override from `~/.gundam-halo/config.toml` and apply.
 | 1 | MS silhouette (faint, optional) |
 | 0 | Normal content |
 
+### 6.7 Desktop (Tauri) behavior (locked 2026-06-05)
+
+**Strategy: single Tauri 2 app + menu bar tray icon. No separate floating panel for v1.**
+
+**Why not a separate floating panel**:
+- Maintenance cost is high (two UIs, two state trees, two routing schemes)
+- "Floating panel is useful" is a pain you'd only feel after NOT having it — speculative v1 features often miss
+- Mac-native feel is already delivered by a **menu bar tray icon** + the same dashboard
+
+**What we build for v1**:
+- **Tauri 2 main window** — hosts the same React app (no separate desktop code, full code reuse)
+- **Tauri 2 tray icon** — sits in the Mac menu bar, persistent
+  - Click → focus existing window (or open new if closed)
+  - Right-click menu: "Open Dashboard" / "Quick Status" / "Quit"
+- **Keyboard shortcut** (configurable, default `⌥Space` like Spotlight) — call dashboard to front
+- **Window state persistence** — remember size/position across launches (Tauri's `tauri-plugin-window-state`)
+
+**Configurable in `~/.gundam-halo/config.toml`**:
+```toml
+[desktop]
+shortcut = "Alt+Space"   # global hotkey to summon dashboard
+start_minimized = false  # launch hidden in tray, or show window
+tray_icon = "default"    # allow per-theme tray icons later (NT-D emblem / SEED wing etc.)
+```
+
+**Out of scope for v1** (v2 if needed):
+- "Always-on-top mini panel" mode — only add if we genuinely feel the pain of context-switching to a full window
+- Multiple windows / workspaces per project — over-engineered for single-user
+
 ---
 
 ## 7. Asset integration
@@ -261,7 +317,7 @@ The cockpit UI works **without any image assets** — it's all CSS-driven (radar
 If we add them, prioritize:
 - `02-ui-components/hud-frames/hud-corner-tl.png` + `hud-corner-br.png` — corner decorations
 - `01-icons/emblems/emblem-ntd.png` — top-left emblem (default theme)
-- `04-backgrounds/core-unicorn/bg-ntd-psychoframe-*.jpg` — dashboard background (random 1 of 4)
+- `04-backgrounds/core-unicorn/bg-ntd-psychoframe-*.jpg` — **optional background** (4 JPGs, random-pick OR user-selectable in Settings) — see locked decision §8 #2
 
 ### Copy pattern (if/when we add assets)
 
@@ -278,15 +334,19 @@ cp "$SRC/01-icons/emblems/emblem-ntd.png" "$DEST/"
 
 ---
 
-## 8. Open decisions
+## 8. Locked product decisions
 
-These need user input before implementation:
+All 5 open decisions from the previous version of this doc — now locked 2026-06-05.
 
-1. **Should the theme be per-user or per-project?** Current plan: per-user (one theme at a time). Per-project would be cool but adds complexity.
-2. **Should the dashboard background use one of the 4 NT-D psychoframe JPGs**, or stick with pure CSS hex grid? Current plan: pure CSS, add JPGs later if desired.
-3. **Toast notifications (Sonner)** — should they follow the theme (cyan/pink) or stay neutral? Current plan: themed.
-4. **Mobile layout** — Tailscale access from phone will be on small screens. Cockpit layouts don't shrink well. Need a mobile-specific layout (probably stacked, not grid). **Open question.**
-5. **Tauri desktop app** — should the desktop app use the same React frontend in a Tauri shell, or have a separate "always-on-top floating panel" mode for quick agent invocation? **Open question.**
+| # | Decision | Choice | Reasoning |
+|---|---|---|---|
+| 1 | **Theme scope** | **Per-user only** | Single-user project (Ken). Per-project adds complexity for no v1 benefit. |
+| 2 | **Background image** | **Both — user-toggleable** | Default: pure CSS hex grid (no extra asset, fast, accessible). Optional: switch to one of 4 NT-D psychoframe JPGs from `04-backgrounds/core-unicorn/`. Toggle exposed in `/settings → General`. |
+| 3 | **Sonner toast style** | **Themed** | Cyan/pink borders + glow on success/info, danger-red on error. Match the cockpit aesthetic. |
+| 4 | **Mobile layout** | **Responsive cockpit + Telegram/Signal as primary phone control** | Detailed in [§3.5](#35-responsive--mobile-behavior-locked-2026-06-05). Vertical stack on phone, gauges collapse to single horizontal bar, sections become tabs. Telegram/Signal bot is the real phone UX. |
+| 5 | **Tauri desktop app** | **Single Tauri app + menu bar tray icon** | Detailed in [§6.7](#67-desktop-tauri-behavior-locked-2026-06-05). No separate floating panel for v1 — that pain point is speculative. Tray icon + global hotkey cover the "summon from anywhere" use case. |
+
+**Result**: all 5 decisions are locked. Doc is implementation-ready. We can proceed to `ARCHITECTURE.md` and then scaffold `backend/` + `frontend/`.
 
 ---
 
@@ -312,3 +372,4 @@ These need user input before implementation:
 | Date | Change |
 |---|---|
 | 2026-06-05 | Initial design spec. Default theme NT-D / Unicorn. First-person cockpit layout. 5 pages defined. Component inventory mapped. |
+| 2026-06-05 | Locked all 5 open decisions. Added §3.5 (responsive/mobile) and §6.7 (Tauri desktop) as concrete strategies. Replaced "Open decisions" with "Locked product decisions" table. Doc is now implementation-ready. |
