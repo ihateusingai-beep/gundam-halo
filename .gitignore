@@ -1,0 +1,108 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Type / lint caches
+.mypy_cache/
+.ruff_cache/
+.pyright_cache/
+
+# Secrets / auth (NEVER commit)
+.env
+.env.local
+.env.*.local
+.envrc
+auth.json
+secrets/
+*.pem
+*.key
+*.crt
+secrets.yaml
+secrets.json
+credentials/
+.gcp-credentials.json
+.aws/credentials
+
+# Local MiniMax / API state
+.runtime/
+.cache/
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+.pnp.*
+
+# Editor / IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.fleet/
+.cursor/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Project local state (per-project workspaces, runtime data)
+# Uncomment if/when structure is finalized:
+# projects/*/.active/
+# projects/*/.cache/
+# sessions/.active/
