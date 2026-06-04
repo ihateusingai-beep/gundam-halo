@@ -1,0 +1,314 @@
+# Gundam Halo — Dashboard Design
+
+> **Cockpit-themed dashboard** for personal AI agent on Mac. Built on the [gundam-design](../../gundam-design/) skill system.
+
+**Status**: 📐 Design spec — locks the visual language, layout, and component choices. Implementation will follow.
+
+---
+
+## 1. Why a cockpit dashboard?
+
+The gundam-design skill's core philosophy is **第一人稱沉浸 (first-person immersion)** — the user is the pilot, the dashboard is the cockpit, every panel is a system readout. This maps cleanly to Gundam Halo's needs:
+
+- **Per-project isolation** = each project = a separate "mobile suit" with its own status panel
+- **Mac control** = cockpit gauges (CPU, RAM, disk, network)
+- **Real-time activity** = radar / reticle / status pulses
+- **Remote control via phone** = the same view works on small screens (cockpit layouts are responsive by design)
+
+The 3 core design principles from the skill carry over verbatim:
+
+1. **軍事精準** (military precision) — every readout has a clear meaning, no decorative noise
+2. **第一人稱沉浸** (first-person immersion) — you're piloting, not browsing
+3. **高對比黑暗中清晰** (clarity in darkness) — default dark theme, NT-D cyan + psychoframe pink as primary signal colors
+
+---
+
+## 2. Theme system
+
+### Default theme: **NT-D / Unicorn** (`gundam-ntd`)
+
+Per user decision (2026-06-04). Accent: `#00D4FF` (cyan) + `#FF69B4` (psychoframe pink). Most iconic of the 8 available themes.
+
+### 8 switchable themes (via the skill's switcher widget)
+
+| Attribute | Name | Primary | Signature |
+|---|---|---|---|
+| `gundam-ntd` | **NT-D / Unicorn** ⭐ default | `#00D4FF` | Psychoframe pink pulse |
+| `gundam-seed` | SEED Freedom | `#FFD700` | Prismatic burst |
+| `gundam-crossbone` | Crossbone X-1 | `#CC0000` | Skull flash |
+| `gundam-ntd-green` | NT-D Green Frame | `#00FF88` | Scan wave +感应波 |
+| `gundam-00` | 00 Qubit | `#00FF88` | Trans-Am burst |
+| `gundam-destiny` | Destiny / Legend | `#CC0000` | Beam blade shimmer |
+| `gundam-god` | God Gundam | `#FF6600` | Flame surge |
+| `gundam-cartoon` | Cartoon Kawaii | `#FF9ECF` | Bounce + wobble |
+
+### Theme application rules (from skill, mandatory)
+
+- **Theme via `data-theme` attribute on `<html>` ONLY**. Do not try to inject classes onto React-managed elements via `querySelectorAll` after the bundle loads — React owns the DOM, class additions get overwritten on re-render.
+- Use **CSS attribute selectors**: `[data-theme^="gundam-"] .gundam-hud-card { ... }`
+- React integration via `useEffect`:
+  ```tsx
+  const [theme, setTheme] = useState<GundamTheme>('gundam-ntd');
+  useEffect(() => {
+    document.documentElement.removeAttribute('data-theme');
+    if (theme) document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+  ```
+- All animations respect `prefers-reduced-motion: reduce` (skill provides the media query).
+- Light-mode fallback for non-cartoon themes is provided in the skill.
+
+### Theme switcher widget
+
+The skill provides a complete fixed-position switcher (bottom-right, 72×72px button, expanding to 8 mode buttons + OFF). Use it as-is from `SKILL.md` lines 1437-1475. It's vanilla JS + inline CSS, works alongside any React app.
+
+### Per-user theme storage
+
+- Default: `gundam-ntd`
+- User override: persisted in `~/.gundam-halo/config.toml` under `[ui] theme = "gundam-ntd"`
+- Read at app boot, applied via the React useEffect pattern above.
+- **No per-project theme override** in v1 (one theme at a time keeps the system simple). Reconsider in v2 if it becomes a real pain point.
+
+---
+
+## 3. Dashboard layout — first-person cockpit
+
+The skill's canonical first-person view:
+
+```
+        ┌──────────────────────────────────┐
+[導航]  │           中央焦點區             │  [雷達]
+        │     瞄準 / 目標鎖定 / 速度         │
+[狀態]  │        (最大、最亮)              │  [能源]
+        │                                   │
+[通信]  │    周邊狀態欄 (中等大小)         │  [系統]
+        │                                   │
+        │    浮動全息窗口 (可折疊)           │
+        └──────────────────────────────────┘
+        底部威脅指示 / 快速狀態 (最小)
+```
+
+### Mapped to Gundam Halo
+
+| Cockpit region | Gundam Halo element | Component | Priority |
+|---|---|---|---|
+| **Top-left (導航)** | Project switcher (active + recent) | `.gundam-hud-card` + status indicators | Medium |
+| **Top-right (雷達)** | Active project activity radar | `.gundam-radar` (60-80px) | High (small but visible) |
+| **Center (焦點)** | Active project chat / agent output | `.gundam-reticle` wrapper + chat content | **Largest, brightest, primary** |
+| **Middle-left (狀態)** | Skills/tools registry status | `.gundam-status-ok/warn/alert` list | Medium |
+| **Middle-right (能源)** | Mac system gauges (CPU / RAM / disk / network) | `.gundam-gauge-v` × 4 | Medium |
+| **Bottom-left (通信)** | Incoming channels (Telegram / Signal feeds) | `.gundam-holo-panel` | Low-medium |
+| **Bottom-right (系統)** | Theme switcher (skill-provided widget) | skill switcher | N/A |
+| **Bottom (威脅)** | Audit log / recent actions / security alerts | `.gundam-data-stream` | Lowest (small) |
+
+### Information priority rules (from skill)
+
+| Priority | Size | Brightness | Color | Animation |
+|---|---|---|---|---|
+| 緊急 (security alert / error) | Large | Brightest | Danger red | `damageFlash` + `screenShake` |
+| 重要 (active agent / project) | Large | Highlighted | Accent cyan | `targetLock` sweep |
+| 正常 (system status) | Medium | Medium | Accent | `slowPulse` |
+| 背景 (decoration / nav) | Small | Dim | Muted | None / `scanline` only |
+
+**Reading rule**: in any ambiguous layout decision, the closer to center and the bigger the element, the more important it is. **The active project's chat always wins for attention.**
+
+---
+
+## 4. Pages / views
+
+### 4.1 `/` — Cockpit overview (default landing)
+
+The first-person cockpit layout above. No active project selected.
+
+- Center: empty state with reticle + prompt "SELECT PROJECT TO INITIATE" (using `gundam-glitch-text` for the empty state, low pulse)
+- Top-left: list of recent projects (3-5 most recent, with status indicators)
+- Right: Mac system gauges
+- Bottom: recent activity stream (collapsed by default)
+
+### 4.2 `/projects/:id` — Project detail (primary use)
+
+Same cockpit layout, but the **center is now the active project's chat** + agent output. Specifically:
+
+- Center (large): chat messages (user ↔ agent) + agent "thinking" state (reticle spinner)
+- Top-left: project breadcrumb + name (large, `gundam-text-neon`)
+- Top-right: project status (active / idle / archived) + ring progress for "completeness"
+- Middle-left: tools used in this project (skill/tool registry, with status)
+- Middle-right: per-project memory indicator (count, last accessed)
+- Bottom: command input (gundam-styled chat input)
+
+### 4.3 `/projects/:id/memory` — Memory browser
+
+- Lists all memory entries (conversations, file references, tool calls, decisions)
+- Each entry is a `.gundam-hud-card` with timestamp + tag + content preview
+- Top: search/filter (skill chips, date range)
+- Right: Holo panel with "memory stats" (size, last accessed, related projects)
+
+### 4.4 `/projects/new` — New project wizard
+
+- 3-step: name + description → initial preset selection → mac control permissions
+- Each step is a full-width `.gundam-hud-card` with `data-stream-scroll` for visual interest
+- Progress at top: ring progress (`.gundam-ring-progress`) showing step 1/3, 2/3, 3/3
+
+### 4.5 `/settings` — Settings
+
+- Tabs: General · Mac Control · Channels · Themes · Security
+- General: default project preset, agent type, MiniMax model
+- Mac Control: file path policy, shell allowlist, Accessibility API permission
+- Channels: Telegram bot token, Signal config, Tailscale hostname
+- Themes: theme picker preview (shows all 8 themes as live mini-cards)
+- Security: audit log, allowed chat IDs, command log
+
+---
+
+## 5. Component inventory
+
+### From `templates/gundam.css` (the canonical base — copy this file)
+
+| CSS class | Used in Gundam Halo for |
+|---|---|
+| `.gundam-hud-card` | Project list items, memory entries, settings panels (everywhere we need a "panel") |
+| `.gundam-cockpit-frame` | The dashboard root frame (glass reflection, blurred backdrop) |
+| `.gundam-radar` | Active agent activity radar (60-80px circles) |
+| `.gundam-mini-radar` (SVG variant) | Settings pages, more detailed mini-radar visualizations |
+| `.gundam-energy-bar` + `.gundam-energy-bar-fill` | Project "energy" (how active), Mac memory bar |
+| `.gundam-gauge-v` | Mac CPU / RAM / disk / network (vertical gauges, 4 of them on right side) |
+| `.gundam-ring-progress` | Project completion %, "step N of M" in wizards |
+| `.gundam-reticle` | Center focus wrapper on project detail (concentric rings + crosshair) |
+| `.gundam-holo-panel` | Floating windows (Telegram/Signal feed, system notifications) |
+| `.gundam-status-ok/warn/alert` | Project status, tool status, channel status indicators |
+| `.gundam-scanlines` | Optional overlay on inactive panels (gives "CRT" feel) |
+| `.gundam-pulse` | Active project "I'm running" indicator |
+| `.gundam-glitch-text` | System titles ("GUNDAM HALO // COCKPIT ONLINE"), empty states |
+| `.gundam-hex-bg` | Dashboard root background (subtle hex grid pattern) |
+| `.gundam-holo` | Floating windows (adds flicker) |
+| `.gundam-scan` | Top-of-screen scanning line (system "scanning" effect) |
+| `.gundam-target` | Active project "lock" indicator |
+| `.gundam-damage-overlay` | Triggered on security alert / system error |
+
+### Mode-specific animations (NT-D default)
+
+- `.gundam-pulse` → `psychoframePulse` (2s pink pulse) — applied to active project card
+- `.gundam-scanlines` (optional) — gives "psychoframe" texture
+- Default scan overlay (`.gundam-scan`) — 4s scanningLine loop at top of screen
+
+### Theme switcher widget
+
+Use as-is from `SKILL.md` lines 1437-1475 (the 72px button + 8 mode buttons + OFF).
+
+---
+
+## 6. Implementation
+
+### Tech stack alignment (from `README.md`)
+
+- **Vite + React 19 + shadcn/ui + Tailwind v4 + Tauri 2**
+- TypeScript (~5.7), React Router 7, Zustand (state), Sonner (toasts)
+
+### CSS architecture
+
+1. **Copy `~/workspace/gundam-design/templates/gundam.css`** to `frontend/src/styles/gundam.css` (do not modify the original in the skill folder).
+2. **Import it once in `frontend/src/main.tsx`**: `import './styles/gundam.css';`
+3. **Don't put Gundam styles in Tailwind's `@layer`** — let them live as plain CSS so the attribute selectors work cleanly.
+4. **Tailwind for layout, Gundam for visuals**: use Tailwind for spacing/grid/flexbox, use `.gundam-*` classes for the visual treatment.
+5. **shadcn components inside `.gundam-hud-card`**: shadcn primitives (Button, Input, Dialog) can be wrapped in `.gundam-hud-card` to inherit the cockpit styling.
+
+### Font loading
+
+In `frontend/index.html` `<head>`:
+```html
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Rajdhani:wght@600&family=Exo+2:wght@400&display=swap" rel="stylesheet">
+```
+
+(Could also use `@fontsource-variable/geist` which is already in OpenJarvis's stack, but for the cockpit aesthetic, Orbitron + Rajdhani + Exo 2 is more on-brand.)
+
+### Default theme on boot
+
+In `frontend/src/main.tsx`:
+```tsx
+// Set default theme BEFORE React renders to avoid flash
+document.documentElement.setAttribute('data-theme', 'gundam-ntd');
+```
+
+Then read user override from `~/.gundam-halo/config.toml` and apply.
+
+### Layer stack (z-index convention from skill)
+
+| z | Element |
+|---|---|
+| 9999 | Theme switcher button |
+| 9997 | Scanline overlay |
+| 9996 | Glitch overlay |
+| 9995 | Toast notifications (Sonner) |
+| 8888–8889 | HUD corners + emblem badge |
+| 100 | Burst corner effects |
+| 50 | Warp speed streaks |
+| 10 | Floating holo panels |
+| 5 | Background effects (hex grid) |
+| 1 | MS silhouette (faint, optional) |
+| 0 | Normal content |
+
+---
+
+## 7. Asset integration
+
+### Source asset library
+
+**Path**: `/Users/kencheng/hermes-workspace/assets/gundam-assets/` (363 files across 24 categories — see `SKILL.md` for full manifest).
+
+### What we need for v1
+
+The cockpit UI works **without any image assets** — it's all CSS-driven (radar, gauges, reticles, holo panels are pure CSS). So image assets are **optional polish**, not required.
+
+If we add them, prioritize:
+- `02-ui-components/hud-frames/hud-corner-tl.png` + `hud-corner-br.png` — corner decorations
+- `01-icons/emblems/emblem-ntd.png` — top-left emblem (default theme)
+- `04-backgrounds/core-unicorn/bg-ntd-psychoframe-*.jpg` — dashboard background (random 1 of 4)
+
+### Copy pattern (if/when we add assets)
+
+```bash
+SRC="/Users/kencheng/hermes-workspace/assets/gundam-assets"
+DEST="frontend/public/gundam-assets"
+mkdir -p "$DEST"
+# Copy what's needed
+cp "$SRC/02-ui-components/hud-frames/hud-corner-tl.png" "$DEST/"
+cp "$SRC/02-ui-components/hud-frames/hud-corner-br.png" "$DEST/"
+cp "$SRC/01-icons/emblems/emblem-ntd.png" "$DEST/"
+# Then reference as /gundam-assets/hud-corner-tl.png in components
+```
+
+---
+
+## 8. Open decisions
+
+These need user input before implementation:
+
+1. **Should the theme be per-user or per-project?** Current plan: per-user (one theme at a time). Per-project would be cool but adds complexity.
+2. **Should the dashboard background use one of the 4 NT-D psychoframe JPGs**, or stick with pure CSS hex grid? Current plan: pure CSS, add JPGs later if desired.
+3. **Toast notifications (Sonner)** — should they follow the theme (cyan/pink) or stay neutral? Current plan: themed.
+4. **Mobile layout** — Tailscale access from phone will be on small screens. Cockpit layouts don't shrink well. Need a mobile-specific layout (probably stacked, not grid). **Open question.**
+5. **Tauri desktop app** — should the desktop app use the same React frontend in a Tauri shell, or have a separate "always-on-top floating panel" mode for quick agent invocation? **Open question.**
+
+---
+
+## 9. References
+
+| Path | What |
+|---|---|
+| `~/workspace/gundam-design/SKILL.md` | Main skill spec (1665 lines) — **read this first** |
+| `~/workspace/gundam-design/templates/gundam.css` | Quick-start CSS template (220 lines) — **copy this to `frontend/src/styles/gundam.css`** |
+| `~/workspace/gundam-design/references/static-site-integration.md` | Critical: do NOT manipulate React classes — use `data-theme` attribute only |
+| `~/workspace/gundam-design/references/hud-ui-prompts.md` | Asset generation prompts (only if we need more images) |
+| `~/workspace/gundam-design/references/cartoon-ui.md` | Cartoon kawaii assets (if user wants kawaii theme at some point) |
+| `~/workspace/gundam-design/references/manifest.md` | Full asset manifest (363 files) — for future reference |
+| `~/workspace/gundam-design/assets/` | Sample PNG/JPEG assets to look at |
+| `~/hermes-workspace/assets/gundam-assets/` | Production asset library (source for `cp` commands above) |
+| `../OpenJarvis/frontend/` | Reference: existing Vite + React 19 + shadcn + Tauri 2 stack (the same stack we're using) |
+| `../README.md` | This repo's README — overall project context |
+
+---
+
+## 10. Changelog
+
+| Date | Change |
+|---|---|
+| 2026-06-05 | Initial design spec. Default theme NT-D / Unicorn. First-person cockpit layout. 5 pages defined. Component inventory mapped. |
