@@ -51,9 +51,10 @@ class NativeReActAgent(BaseAgent):
         *,
         tools: Optional[List[BaseTool]] = None,
         max_turns: Optional[int] = None,
+        initial_messages: Optional[List[Message]] = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(engine, model, tools=tools)
+        super().__init__(engine, model, tools=tools, initial_messages=initial_messages)
         self._max_turns = max_turns or self._default_max_turns
         self._tool_by_name = {t.name: t for t in self._tools}
 
@@ -63,10 +64,17 @@ class NativeReActAgent(BaseAgent):
         context: Optional[AgentContext] = None,
         **kwargs: Any,
     ) -> AgentResult:
-        messages: List[Message] = [
-            Message(role=Role.SYSTEM, content=REACT_SYSTEM_PROMPT),
-            Message(role=Role.USER, content=input),
-        ]
+        # Seed message list: if resuming, use initial_messages + new user turn
+        # Otherwise, fresh start with system + user
+        if self._initial_messages:
+            messages: List[Message] = list(self._initial_messages) + [
+                Message(role=Role.USER, content=input)
+            ]
+        else:
+            messages: List[Message] = [
+                Message(role=Role.SYSTEM, content=REACT_SYSTEM_PROMPT),
+                Message(role=Role.USER, content=input),
+            ]
         all_messages: List[Message] = list(messages)
         tool_calls_made = 0
 

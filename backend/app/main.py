@@ -60,6 +60,10 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     manager = get_channel_manager()
     await manager.start_all()
 
+    # Index on-disk sessions for the API to know about
+    from app.api.sessions import init_persistence_on_startup
+    init_persistence_on_startup()
+
     yield
 
     # Shutdown

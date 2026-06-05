@@ -33,10 +33,15 @@ class SimpleAgent(BaseAgent):
         context: Optional[AgentContext] = None,
         **kwargs: Any,
     ) -> AgentResult:
-        messages = [
-            Message(role=Role.SYSTEM, content=SIMPLE_SYSTEM_PROMPT),
-            Message(role=Role.USER, content=input),
-        ]
+        if self._initial_messages:
+            messages = list(self._initial_messages) + [
+                Message(role=Role.USER, content=input)
+            ]
+        else:
+            messages = [
+                Message(role=Role.SYSTEM, content=SIMPLE_SYSTEM_PROMPT),
+                Message(role=Role.USER, content=input),
+            ]
 
         try:
             response = await self.engine.chat(messages)
