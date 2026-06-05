@@ -3,9 +3,15 @@
 Used when the agent needs to do something beyond simple shell execution:
 - Semantic commit messages
 - Multi-file refactors
-- Branching
+- Branching (Mavis uses a git worktree by default)
 - Complex conflict resolution
 - Anything that benefits from LLM-assisted coding judgment
+
+Protocol (real mode):
+    hermes chat -q "<task>" --worktree --checkpoints
+
+The bridge waits for Mavis to complete, then inspects git state to extract
+the commit SHA, files changed, branch name, and push status.
 """
 
 from __future__ import annotations
@@ -23,17 +29,22 @@ logger = logging.getLogger(__name__)
 class MavisDelegateTool(BaseTool):
     name = "mavis_delegate"
     description = (
-        "Delegate a coding sub-task to Mavis (Mavis) — the project's "
+        "Delegate a coding sub-task to Mavis (Hermes Agent) — the project's "
         "Mavis sub-agent. Mavis will read the relevant files, make "
         "changes, commit them with a semantic commit message, and "
         "(optionally) push. "
         "Use this when: a task is too complex for shell_exec, requires "
         "a meaningful commit message, involves multiple file changes, "
         "or needs branching. "
-        "Returns: success, summary, commit SHA, list of files changed, "
-        "and whether the change was pushed. "
-        "In DRY-RUN mode (no Mavis CLI available), returns a marker "
-        "result without actually doing anything."
+        "In REAL mode: invokes `hermes chat -q <task> --worktree --checkpoints` "
+        "as a subprocess, waits for completion (up to 30 min by default), then "
+        "inspects git state to extract commit SHA, branch, files changed, "
+        "and push status. Mavis works in a git worktree so changes don't "
+        "pollute main. "
+        "In DRY-RUN mode (no hermes/mavis CLI available, or mode=dry_run): "
+        "returns a marker result without actually doing anything. "
+        "Returns: success, summary (Mavis's reply), commit SHA, branch, "
+        "list of files changed, and whether the change was pushed."
     )
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -78,7 +89,7 @@ class MavisDelegateTool(BaseTool):
         if not result.success:
             return f"Error: {result.error or 'unknown failure'}"
 
-        parts = [f"OK: {result.summary}"]
+        parts = [f"OK [{result.mode}]: {result.summary}"]
         if result.commit_sha:
             parts.append(f"Commit: {result.commit_sha}")
         if result.branch:
