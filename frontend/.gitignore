@@ -1,0 +1,11 @@
+# Gundam Halo Frontend — built artifacts
+node_modules/
+dist/
+.vite/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store

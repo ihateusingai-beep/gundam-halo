@@ -1,0 +1,347 @@
+/* === GUNDAM CONSOLE UI — Gundam Halo flavor === */
+/* Source: ~/workspace/gundam-design/templates/gundam.css (MIT) */
+/* Adapted for [data-theme^="gundam-"] (8 switchable themes)        */
+
+/* === GUNDAM THEME CSS VARIABLES === */
+:root,
+[data-theme^="gundam-"] {
+  /* Base */
+  --bg-primary: #0a0f1a;
+  --bg-card: #121830;
+  --bg-input: #1a2540;
+  --bg-elevated: #1e2a45;
+
+  /* Text */
+  --text-primary: #E8F4F8;
+  --text-secondary: #6A8BA8;
+  --text-muted: #4A6178;
+
+  /* Accent */
+  --accent: #00D4FF;
+  --accent-secondary: #FF69B4;
+  --accent-hover: #00A8CC;
+  --accent-glow: rgba(0, 212, 255, 0.25);
+  --accent-glow-alt: rgba(255, 105, 180, 0.4);
+
+  /* Status */
+  --success: #00AA00;
+  --warning: #FF8C00;
+  --danger: #FF4444;
+
+  /* Border */
+  --border-color: #1E3A5F;
+  --border-glow: rgba(0, 212, 255, 0.3);
+
+  /* Effects */
+  --card-glow: 0 0 15px var(--accent-glow);
+  --card-glow-alt: 0 0 15px var(--accent-glow-alt);
+
+  /* Gundam-specific */
+  --psychoframe-pink: #FF69B4;
+  --prismatic-blue: #0066CC;
+  --gold-accent: #FFD700;
+}
+
+/* === PER-THEME OVERRIDES === */
+[data-theme="gundam-ntd"] {
+  --accent: #00D4FF;
+  --accent-secondary: #FF69B4;
+}
+[data-theme="gundam-seed"] {
+  --accent: #FFD700;
+  --accent-secondary: #0066CC;
+  --bg-primary: #080c14;
+  --bg-card: #0c1220;
+}
+[data-theme="gundam-crossbone"] {
+  --accent: #CC0000;
+  --accent-secondary: #F0F0E0;
+  --bg-primary: #0f0808;
+  --bg-card: #1a0808;
+}
+[data-theme="gundam-ntd-green"] {
+  --accent: #00FF88;
+  --accent-secondary: #00D4FF;
+  --bg-primary: #080f0a;
+  --bg-card: #091209;
+}
+[data-theme="gundam-00"] {
+  --accent: #00FF88;
+  --accent-secondary: #FF4466;
+  --bg-primary: #070a0f;
+  --bg-card: #0a1015;
+}
+[data-theme="gundam-destiny"] {
+  --accent: #CC0000;
+  --accent-secondary: #FFD700;
+  --bg-primary: #0f0808;
+  --bg-card: #1a0808;
+}
+[data-theme="gundam-god"] {
+  --accent: #FF6600;
+  --accent-secondary: #FFD700;
+  --bg-primary: #0f0a07;
+  --bg-card: #1a1208;
+}
+[data-theme="gundam-cartoon"] {
+  --accent: #FF9ECF;
+  --accent-secondary: #7EE8C8;
+  --bg-primary: #FFF5F8;
+  --bg-card: #FFFFFF;
+  --text-primary: #4A3040;
+  --border-color: #E8D0E0;
+}
+
+/* === KEYFRAMES === */
+@keyframes psychoframePulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(255,105,180,0.3), 0 0 20px rgba(255,105,180,0.2); }
+  50% { box-shadow: 0 0 25px rgba(255,105,180,0.6), 0 0 50px rgba(255,105,180,0.3); }
+}
+@keyframes radarSweep {
+  0% { transform: rotate(0deg); opacity: 0.8; }
+  100% { transform: rotate(360deg); opacity: 0.3; }
+}
+@keyframes radarPing {
+  0% { transform: scale(0.5); opacity: 0.8; }
+  100% { transform: scale(2); opacity: 0; }
+}
+@keyframes energyFill {
+  0% { width: 0%; }
+  50% { box-shadow: 0 0 15px var(--accent); }
+  100% { box-shadow: 0 0 5px var(--accent); }
+}
+@keyframes statusBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+@keyframes statusGlow {
+  0%, 100% { box-shadow: 0 0 5px currentColor; }
+  50% { box-shadow: 0 0 15px currentColor, 0 0 25px currentColor; }
+}
+@keyframes glitchText {
+  0%, 100% { text-shadow: 2px 0 var(--accent), -2px 0 var(--warning); transform: translate(0); }
+  20% { text-shadow: -2px 0 var(--accent), 2px 0 var(--warning); transform: translate(-2px, 1px); }
+  40% { text-shadow: 2px 2px var(--accent), -2px -2px var(--warning); transform: translate(2px, -1px); }
+  60% { transform: translate(-1px, 2px); }
+  80% { transform: translate(1px, -2px); }
+}
+@keyframes glitchFlicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
+  75% { opacity: 0.95; }
+}
+@keyframes scanlineMove {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 100%; }
+}
+@keyframes scanningLine {
+  0% { transform: translateY(-100%); opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { transform: translateY(100vh); opacity: 0; }
+}
+@keyframes targetLock {
+  0% { transform: scale(0.5); opacity: 0; box-shadow: 0 0 0 var(--accent); }
+  50% { transform: scale(1.1); opacity: 1; box-shadow: 0 0 20px var(--accent); }
+  100% { transform: scale(1); opacity: 0.9; box-shadow: 0 0 8px var(--accent); }
+}
+@keyframes holoFlicker {
+  0%, 100% { opacity: 0.9; }
+  5% { opacity: 0.3; }
+  10% { opacity: 0.9; }
+  15% { opacity: 0.5; }
+  20% { opacity: 0.9; }
+}
+
+/* === FONT STACK === */
+[data-theme^="gundam-"] body {
+  font-family: 'Orbitron', 'Rajdhani', 'Exo 2', 'Courier New', 'Consolas', monospace;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* === COMPONENT CLASSES === */
+[data-theme^="gundam-"] .gundam-hud-card {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--card-glow);
+  padding: 16px;
+}
+[data-theme^="gundam-"] .gundam-hud-card::before,
+[data-theme^="gundam-"] .gundam-hud-card::after {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--accent);
+  opacity: 0.6;
+}
+[data-theme^="gundam-"] .gundam-hud-card::before {
+  top: -1px; left: -1px;
+  border-right: none; border-bottom: none;
+}
+[data-theme^="gundam-"] .gundam-hud-card::after {
+  bottom: -1px; right: -1px;
+  border-left: none; border-top: none;
+}
+
+[data-theme^="gundam-"] .gundam-pulse {
+  animation: psychoframePulse 2s ease-in-out infinite;
+}
+
+[data-theme^="gundam-"] .gundam-radar {
+  position: relative;
+  overflow: hidden;
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(circle at center, transparent 0px, transparent 18px, rgba(0,212,255,0.15) 18px, rgba(0,212,255,0.15) 19px),
+    conic-gradient(from 0deg at 50% 50%, transparent 0deg, rgba(0,212,255,0.4) 30deg, transparent 60deg);
+  animation: radarSweep 3s linear infinite;
+}
+[data-theme^="gundam-"] .gundam-radar::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 8px; height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+  animation: radarPing 1.5s ease-out infinite;
+}
+
+[data-theme^="gundam-"] .gundam-energy-bar {
+  height: 6px;
+  background: var(--bg-input);
+  border-radius: 3px;
+  overflow: hidden;
+}
+[data-theme^="gundam-"] .gundam-energy-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #00ffaa);
+  animation: energyFill 1.5s ease-out forwards;
+  transition: width 0.5s ease-out;
+}
+
+[data-theme^="gundam-"] .gundam-gauge-v {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 40px;
+}
+[data-theme^="gundam-"] .gundam-gauge-label {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+[data-theme^="gundam-"] .gundam-gauge-track {
+  width: 16px;
+  height: 100px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column-reverse;
+}
+[data-theme^="gundam-"] .gundam-gauge-fill {
+  background: linear-gradient(to top, var(--accent), var(--accent-secondary));
+  box-shadow: 0 0 8px var(--accent-glow);
+  transition: height 0.5s ease-out;
+}
+[data-theme^="gundam-"] .gundam-gauge-value {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+[data-theme^="gundam-"] .gundam-status-ok { color: var(--success); animation: statusBlink 2s ease-in-out infinite; }
+[data-theme^="gundam-"] .gundam-status-warn { color: var(--warning); animation: statusGlow 1s ease-in-out infinite; }
+[data-theme^="gundam-"] .gundam-status-alert { color: var(--danger); animation: statusGlow 0.5s ease-in-out infinite; }
+
+[data-theme^="gundam-"] .gundam-text-neon {
+  color: var(--accent);
+  text-shadow: 0 0 5px var(--accent), 0 0 10px var(--accent), 0 0 20px var(--accent), 0 0 40px var(--accent-secondary);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+[data-theme^="gundam-"] .gundam-text-data {
+  font-family: 'Courier New', monospace;
+  color: var(--text-secondary);
+  text-shadow: 0 0 4px rgba(0, 212, 255, 0.3);
+  letter-spacing: 1px;
+}
+[data-theme^="gundam-"] .gundam-glitch-text {
+  animation: glitchText 0.3s ease-in-out infinite, glitchFlicker 0.1s linear infinite;
+}
+[data-theme^="gundam-"] .gundam-data-stream {
+  font-family: 'Courier New', monospace;
+  animation: glitchText 0.5s ease-in-out infinite;
+}
+
+[data-theme^="gundam-"] .gundam-scanlines {
+  position: relative;
+  overflow: hidden;
+}
+[data-theme^="gundam-"] .gundam-scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.1) 2px, rgba(0, 0, 0, 0.1) 4px);
+  pointer-events: none;
+  animation: scanlineMove 8s linear infinite;
+}
+
+[data-theme^="gundam-"] .gundam-holo {
+  animation: holoFlicker 3s ease-in-out infinite;
+  backdrop-filter: blur(2px);
+}
+
+[data-theme^="gundam-"] .gundam-target {
+  animation: targetLock 2s ease-in-out infinite;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+}
+
+/* Hex grid background */
+[data-theme^="gundam-"] .gundam-hex-bg {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='49' viewBox='0 0 28 49'%3E%3Cg fill-rule='evenodd'%3E%3Cg fill='%2300F5FF' fill-opacity='0.05'%3E%3Cpath d='M13.99 9.25l13 7.5v15l-13 7.5L1 31.75v-15l12.99-7.5zM3 17.9v12.7l10.99 6.34 11-6.35V17.9l-11-6.34L3 17.9zM0 15l12.98-7.5V0h-2v6.35L0 12.69v2.3zm0 18.5L12.98 41v8h-2v-6.85L0 35.81v-2.3zM15 0v7.5L27.99 15H28v-2.31h-.01L17 6.35V0h-2zm0 49v-8l12.99-7.5H28v2.31h-.01L17 42.15V49h-2z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  background-size: 28px 49px;
+}
+
+/* Grid background (faint) */
+[data-theme^="gundam-"] .gundam-grid-bg {
+  background-image:
+    linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* === REDUCED MOTION === */
+@media (prefers-reduced-motion: reduce) {
+  [data-theme^="gundam-"] .gundam-pulse,
+  [data-theme^="gundam-"] .gundam-radar,
+  [data-theme^="gundam-"] .gundam-status-ok,
+  [data-theme^="gundam-"] .gundam-status-warn,
+  [data-theme^="gundam-"] .gundam-status-alert,
+  [data-theme^="gundam-"] .gundam-glitch-text,
+  [data-theme^="gundam-"] .gundam-data-stream,
+  [data-theme^="gundam-"] .gundam-scanlines::after,
+  [data-theme^="gundam-"] .gundam-holo,
+  [data-theme^="gundam-"] .gundam-target {
+    animation: none;
+  }
+  [data-theme^="gundam-"] .gundam-glitch-text {
+    text-shadow: none;
+    transform: none;
+    opacity: 1;
+  }
+}

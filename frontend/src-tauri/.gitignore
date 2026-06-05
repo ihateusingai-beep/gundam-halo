@@ -1,0 +1,11 @@
+# Tauri 2 build artifacts
+target/
+gen/
+WixTools/
+
+# Tauri icons (binary)
+# Note: we don't commit icons — run `npx tauri icon` to generate them
+# or place your own icon.png in icons/ before building
+
+# macOS
+.DS_Store
