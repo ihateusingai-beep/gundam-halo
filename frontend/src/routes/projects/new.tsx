@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
+import { toast } from "sonner";
+
 import { HudCard } from "@/components/gundam/HudCard";
 import { CommandInput } from "@/components/gundam/CommandInput";
 import { useProjectsStore } from "@/stores/projects";
+import { ApiError } from "@/lib/api";
 
-/** New project wizard — minimal: name + description. */
+/** New project wizard — minimal: name + description. With toast feedback. */
 export function NewProjectPage() {
   const navigate = useNavigate();
   const { createProject } = useProjectsStore();
@@ -14,23 +17,29 @@ export function NewProjectPage() {
   const [busy, setBusy] = useState(false);
 
   const handleSubmit = async (text: string) => {
-    // Simple: text is the project name
     setName(text);
     await doCreate(text, description);
   };
 
   const doCreate = async (projectName: string, desc: string) => {
     if (!projectName.match(/^[a-z0-9-]+$/)) {
-      setError("Project name must be lowercase letters, numbers, and hyphens only.");
+      const msg = "Project name must be lowercase letters, numbers, and hyphens only.";
+      setError(msg);
+      toast.error("Invalid name", { description: msg });
       return;
     }
     setError(null);
     setBusy(true);
     try {
       await createProject(projectName, desc);
+      toast.success("Project created", {
+        description: `Welcome to ${projectName}`,
+      });
       navigate(`/projects/${projectName}`);
     } catch (e) {
-      setError((e as Error).message);
+      const msg = e instanceof ApiError ? e.message : String(e);
+      setError(msg);
+      toast.error("Failed to create project", { description: msg });
     } finally {
       setBusy(false);
     }

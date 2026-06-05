@@ -1,6 +1,7 @@
 import { HudCard } from "@/components/gundam/HudCard";
 import { useThemeStore } from "@/stores/theme";
 import { THEMES } from "@/components/gundam/ThemeSwitcher";
+import { toast } from "sonner";
 
 /** Settings page — theme picker + (future) other settings. */
 export function SettingsPage() {
@@ -13,7 +14,8 @@ export function SettingsPage() {
           Settings
         </h2>
         <p className="text-sm text-[var(--text-secondary)]">
-          Configuration for Gundam Halo. Most settings come from <code className="text-[var(--accent)]">~/.gundam-halo/config.toml</code>.
+          Configuration for Gundam Halo. Most settings come from{" "}
+          <code className="text-[var(--accent)]">~/.gundam-halo/config.toml</code>.
         </p>
       </HudCard>
 
@@ -25,7 +27,10 @@ export function SettingsPage() {
           {THEMES.map((t) => (
             <button
               key={t.id}
-              onClick={() => setTheme(t.id)}
+              onClick={() => {
+                setTheme(t.id);
+                toast.success(`Theme → ${t.name}`, { description: t.description });
+              }}
               className={`p-3 rounded border text-left transition-all hover:border-[var(--accent)] ${
                 theme === t.id
                   ? "border-[var(--accent)] bg-[var(--bg-elevated)]"

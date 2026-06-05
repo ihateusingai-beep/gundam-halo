@@ -3,7 +3,7 @@ import { useThemeStore } from "@/stores/theme";
 import type { GundamTheme, ThemeInfo } from "@/types/api";
 import { cn } from "@/lib/utils";
 
-const THEMES: ThemeInfo[] = [
+export const THEMES: ThemeInfo[] = [
   { id: "gundam-ntd", name: "NT-D", emoji: "🦄", description: "Unicorn psychoframe" },
   { id: "gundam-seed", name: "SEED", emoji: "⚡", description: "Freedom prismatic" },
   { id: "gundam-crossbone", name: "CROSS", emoji: "💀", description: "X-1 skull" },

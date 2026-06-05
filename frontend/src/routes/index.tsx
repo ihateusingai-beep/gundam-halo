@@ -4,6 +4,7 @@ import { Radar } from "@/components/gundam/Radar";
 import { useProjectsStore } from "@/stores/projects";
 import { useEffect } from "react";
 import { Link } from "react-router";
+import { toast } from "sonner";
 
 /** Cockpit overview — landing page. */
 export function OverviewPage() {
@@ -32,13 +33,19 @@ export function OverviewPage() {
         <h2 className="text-sm font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
           Recent Projects
         </h2>
-        {loading && <p className="text-xs text-[var(--text-muted)]">Loading...</p>}
+        {loading && (
+          <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+            <div className="gundam-radar w-4 h-4" />
+            <span>Loading...</span>
+          </div>
+        )}
         {!loading && projects.length === 0 && (
           <div className="text-center py-8">
             <Radar size={80} className="mx-auto mb-3" />
             <p className="text-sm text-[var(--text-secondary)] mb-3">No projects yet</p>
             <Link
               to="/projects/new"
+              onClick={() => toast("Let's start a new project", { icon: "🚀" })}
               className="inline-block px-4 py-2 border border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors text-sm font-[Rajdhani] uppercase tracking-wider"
             >
               + New Project

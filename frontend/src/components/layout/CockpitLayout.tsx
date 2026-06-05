@@ -1,9 +1,12 @@
 import { type ReactNode } from "react";
+import { Link, useLocation } from "react-router";
+import { Toaster } from "sonner";
+
 import { HudCard } from "@/components/gundam/HudCard";
+import { Gauge } from "@/components/gundam/Gauge";
 import { useProjectsStore } from "@/stores/projects";
 import { useSystemStore } from "@/stores/system";
 import { useEffect } from "react";
-import { Link, useLocation } from "react-router";
 
 interface CockpitLayoutProps {
   children: ReactNode;
@@ -33,6 +36,21 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
 
   return (
     <div className="gundam-hex-bg gundam-scanlines min-h-screen flex flex-col">
+      {/* Toaster (Sonner) — global */}
+      <Toaster
+        theme="dark"
+        position="top-right"
+        richColors
+        toastOptions={{
+          classNames: {
+            toast:
+              "!bg-[var(--bg-card)] !border !border-[var(--accent)] !text-[var(--text-primary)]",
+            title: "!text-[var(--accent)] !font-[Orbitron] !tracking-wider",
+            description: "!text-[var(--text-secondary)]",
+          },
+        }}
+      />
+
       {/* Top bar — project nav */}
       <header className="border-b border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 py-3 flex items-center justify-between">
         <Link to="/" className="flex items-center gap-3">
@@ -63,7 +81,7 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
         </nav>
       </header>
 
-      <div className="flex-1 grid grid-cols-[200px_1fr_220px] gap-3 p-3 min-h-0">
+      <div className="flex-1 grid grid-cols-[200px_1fr_240px] gap-3 p-3 min-h-0">
         {/* Left panel — projects / tools */}
         <aside className="overflow-y-auto space-y-3">
           <HudCard>
@@ -78,13 +96,24 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
                 <li key={p.name}>
                   <Link
                     to={`/projects/${p.name}`}
-                    className={`block px-2 py-1 rounded hover:bg-[var(--bg-elevated)] ${
+                    className={`flex items-center justify-between px-2 py-1 rounded hover:bg-[var(--bg-elevated)] ${
                       location.pathname === `/projects/${p.name}`
                         ? "text-[var(--accent)]"
                         : "text-[var(--text-secondary)]"
                     }`}
                   >
-                    {p.name}
+                    <span>{p.name}</span>
+                    <span
+                      className={`text-[10px] uppercase ${
+                        p.status === "active"
+                          ? "text-[var(--success)]"
+                          : p.status === "archived"
+                          ? "text-[var(--text-muted)]"
+                          : "text-[var(--warning)]"
+                      }`}
+                    >
+                      {p.status === "active" ? "●" : p.status}
+                    </span>
                   </Link>
                 </li>
               ))}
@@ -101,28 +130,14 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
             <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
               System
             </h2>
-            <div className="flex justify-around">
-              <div className="text-center">
-                <div className="text-xs text-[var(--text-muted)] uppercase font-[Rajdhani]">CPU</div>
-                <div className="text-2xl font-[Orbitron] text-[var(--accent)]">
-                  {gauges?.cpu_percent.toFixed(0) ?? "—"}
-                </div>
-                <div className="text-[10px] text-[var(--text-muted)]">%</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xs text-[var(--text-muted)] uppercase font-[Rajdhani]">RAM</div>
-                <div className="text-2xl font-[Orbitron] text-[var(--accent)]">
-                  {gauges?.memory_percent.toFixed(0) ?? "—"}
-                </div>
-                <div className="text-[10px] text-[var(--text-muted)]">%</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xs text-[var(--text-muted)] uppercase font-[Rajdhani]">DISK</div>
-                <div className="text-2xl font-[Orbitron] text-[var(--accent)]">
-                  {gauges?.disk_percent.toFixed(0) ?? "—"}
-                </div>
-                <div className="text-[10px] text-[var(--text-muted)]">%</div>
-              </div>
+            <div className="flex justify-around items-end h-32">
+              <Gauge label="CPU" value={gauges?.cpu_percent ?? 0} />
+              <Gauge label="RAM" value={gauges?.memory_percent ?? 0} />
+              <Gauge label="DSK" value={gauges?.disk_percent ?? 0} />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-1 text-[10px] font-mono text-[var(--text-muted)]">
+              <div>↑ {(gauges?.network_sent_mb ?? 0).toFixed(1)} MB</div>
+              <div>↓ {(gauges?.network_recv_mb ?? 0).toFixed(1)} MB</div>
             </div>
           </HudCard>
         </aside>

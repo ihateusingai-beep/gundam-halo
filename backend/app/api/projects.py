@@ -173,3 +173,68 @@ async def archive_project(name: str) -> ProjectSummary:
         created_at="",
         agent_type="native_react",
     )
+
+
+# ---------------------------------------------------------------------------
+# Memory: list sessions for a project
+# ---------------------------------------------------------------------------
+
+
+class SessionListItem(BaseModel):
+    id: str
+    agent_type: str
+    created_at: str
+    updated_at: str
+    message_count: int
+
+
+@router.get("/{name}/memory", response_model=List[SessionListItem])
+async def list_project_memory(name: str) -> List[SessionListItem]:
+    """List all persisted sessions (conversations) for a project.
+
+    Reads from `~/.gundam-halo/projects/<name>/conversations/*.json`.
+    Useful for the Memory page in the UI to show past conversations.
+    """
+    from app.projects import persistence
+
+    summaries = persistence.scan_project_sessions(name)
+    return [
+        SessionListItem(
+            id=s.session_id,
+            agent_type=s.agent_type,
+            created_at=s.created_at,
+            updated_at=s.updated_at,
+            message_count=s.message_count,
+        )
+        for s in summaries
+    ]
+
+
+@router.get("/{name}/memory/{session_id}")
+async def get_session_messages(name: str, session_id: str) -> dict:
+    """Return the full message history of a persisted session."""
+    from app.projects import persistence
+    from app.projects.persistence import _dict_to_message
+
+    messages = persistence.load_messages(name, session_id)
+    if messages is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found in project '{name}'")
+
+    return {
+        "session_id": session_id,
+        "project_name": name,
+        "message_count": len(messages),
+        "messages": [
+            {
+                "role": m.role.value,
+                "content": m.content,
+                "tool_calls": [
+                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                    for tc in m.tool_calls
+                ],
+                "tool_call_id": m.tool_call_id,
+                "name": m.name,
+            }
+            for m in messages
+        ],
+    }

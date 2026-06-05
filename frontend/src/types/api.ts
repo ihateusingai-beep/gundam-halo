@@ -81,6 +81,36 @@ export interface FileWriteResponse {
   status: string;
 }
 
+export interface MessageResponse {
+  session_id: string;
+  user_message: string;
+  agent_response: string;
+  tool_calls_made: number;
+  success: boolean;
+  error?: string;
+}
+
+export interface SessionListItem {
+  id: string;
+  agent_type: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface SessionMessagesResponse {
+  session_id: string;
+  project_name: string;
+  message_count: number;
+  messages: Array<{
+    role: "system" | "user" | "assistant" | "tool";
+    content: string;
+    tool_calls: Array<{ id: string; name: string; arguments: Record<string, any> }>;
+    tool_call_id?: string;
+    name?: string;
+  }>;
+}
+
 // Theme
 export type GundamTheme =
   | "gundam-ntd"
