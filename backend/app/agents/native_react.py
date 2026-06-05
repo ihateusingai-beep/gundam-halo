@@ -1,80 +1,61 @@
-"""NativeReAct agent — Thought → Action → Observation loop.
+"""NativeReAct agent — OpenAI function-calling loop.
 
-The default agent for most projects. Iterates: ask LLM, parse response for
-thought/action, execute tool if action, append observation, repeat until
-LLM gives a final answer or max turns reached.
+Uses the LLM's native tool_calls field (not text-based Action/Action Input parsing).
+Each turn: call LLM with messages + tool specs → LLM returns tool_calls →
+execute each tool → append tool results as Tool messages → loop.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from app.agents._stubs import BaseAgent
 from app.core.registry import AgentRegistry
-from app.core.types import AgentContext, AgentResult, Message, Role, ToolCall, ToolResult
+from app.core.types import (
+    AgentContext,
+    AgentResult,
+    Message,
+    Role,
+    ToolCall,
+    ToolResult,
+)
+from app.tools._stubs import BaseTool
 
 logger = logging.getLogger(__name__)
 
 REACT_SYSTEM_PROMPT = """You are Gundam Halo, a personal AI agent on the user's Mac.
-Use the ReAct pattern: Thought → Action → Observation → ... → Final Answer.
+You help with file operations, shell commands, and app launching on their machine.
 
-For each step, respond with:
-Thought: <your reasoning>
-Action: <tool_name>
-Action Input: <json arguments>
+You have access to tools. Use them when the user asks for actions you can't do from
+text alone (reading a file, running a command, launching an app).
 
-When you have the final answer:
-Thought: <your reasoning>
-Final Answer: <your answer>
+When you've gathered enough information, give a final answer. Don't keep calling
+tools if you have what you need.
 
-Available tools:
-{tools}
-"""
+Be concise. Cite file paths and command outputs. Don't make up file contents —
+use file_read to actually read files."""
 
 
 @AgentRegistry.register("native_react")
 class NativeReActAgent(BaseAgent):
-    """ReAct-style loop agent with tool use."""
+    """ReAct-style agent using OpenAI function calling."""
 
     agent_id = "native_react"
     _default_max_turns = 10
 
-    def __init__(self, *args: Any, max_turns: Optional[int] = None, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        engine: Any,
+        model: str,
+        *,
+        tools: Optional[List[BaseTool]] = None,
+        max_turns: Optional[int] = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(engine, model, tools=tools)
         self._max_turns = max_turns or self._default_max_turns
-
-    def _parse_response(self, text: str) -> dict:
-        """Parse ReAct structured output."""
-        result = {"thought": "", "action": "", "action_input": "", "final_answer": ""}
-
-        thought_match = re.search(
-            r"Thought:\s*(.+?)(?=\nAction:|\nFinal Answer:|\Z)",
-            text, re.DOTALL | re.IGNORECASE,
-        )
-        if thought_match:
-            result["thought"] = thought_match.group(1).strip()
-
-        final_match = re.search(
-            r"Final Answer:\s*(.+)", text, re.DOTALL | re.IGNORECASE
-        )
-        if final_match:
-            result["final_answer"] = final_match.group(1).strip()
-            return result
-
-        action_match = re.search(r"Action:\s*(.+)", re.IGNORECASE)
-        if action_match:
-            result["action"] = action_match.group(1).strip()
-
-        input_match = re.search(
-            r"Action Input:\s*(.+?)(?=\n\n|\nThought:|\Z)",
-            text, re.DOTALL | re.IGNORECASE,
-        )
-        if input_match:
-            result["action_input"] = input_match.group(1).strip()
-
-        return result
+        self._tool_by_name = {t.name: t for t in self._tools}
 
     async def run(
         self,
@@ -82,74 +63,63 @@ class NativeReActAgent(BaseAgent):
         context: Optional[AgentContext] = None,
         **kwargs: Any,
     ) -> AgentResult:
-        # Build tool descriptions
-        tool_desc = "\n".join(
-            f"- {t['name']}: {t.get('description', 'no description')}"
-            for t in self._tool_specs
-        )
-        system_prompt = REACT_SYSTEM_PROMPT.format(tools=tool_desc or "(no tools available)")
-
-        messages = [
-            Message(role=Role.SYSTEM, content=system_prompt),
+        messages: List[Message] = [
+            Message(role=Role.SYSTEM, content=REACT_SYSTEM_PROMPT),
             Message(role=Role.USER, content=input),
         ]
-        all_messages: list[Message] = list(messages)
+        all_messages: List[Message] = list(messages)
         tool_calls_made = 0
-        tool_by_name = {t.name: t for t in self._tools if hasattr(t, "name")}
 
         for turn in range(self._max_turns):
-            response = await self.engine.chat(messages)
+            try:
+                response = await self.engine.chat(
+                    messages,
+                    tools=self._tool_specs,
+                )
+            except Exception as e:
+                logger.error(f"native_react LLM error: {e}")
+                return AgentResult(
+                    success=False,
+                    output="",
+                    messages=all_messages,
+                    tool_calls_made=tool_calls_made,
+                    error=f"LLM error: {e}",
+                )
+
             all_messages.append(response)
 
-            parsed = self._parse_response(response.content)
-
-            if parsed["final_answer"]:
+            # If no tool calls → final answer
+            if not response.tool_calls:
                 return AgentResult(
                     success=True,
-                    output=parsed["final_answer"],
+                    output=response.content or "",
                     messages=all_messages,
                     tool_calls_made=tool_calls_made,
                 )
 
-            if not parsed["action"]:
-                # No action, no final answer — treat the response as the final answer
-                return AgentResult(
-                    success=True,
-                    output=response.content,
-                    messages=all_messages,
-                    tool_calls_made=tool_calls_made,
+            # Execute each tool call
+            for tc in response.tool_calls:
+                tool_calls_made += 1  # LLM attempted to call this tool
+                tool = self._tool_by_name.get(tc.name)
+                if not tool:
+                    observation = f"Error: tool '{tc.name}' not found"
+                else:
+                    try:
+                        observation = await tool.run(**tc.arguments)
+                    except Exception as e:
+                        logger.error(f"Tool {tc.name} error: {e}")
+                        observation = f"Error executing {tc.name}: {e}"
+
+                # Append as Tool message (OpenAI function-calling format)
+                messages.append(
+                    Message(
+                        role=Role.TOOL,
+                        content=observation,
+                        tool_call_id=tc.id,
+                        name=tc.name,
+                    )
                 )
-
-            # Execute tool
-            action = parsed["action"].strip()
-            tool = tool_by_name.get(action)
-            if not tool:
-                observation = f"Error: tool '{action}' not found."
-            else:
-                import json
-                try:
-                    action_input = json.loads(parsed["action_input"]) if parsed["action_input"] else {}
-                except json.JSONDecodeError:
-                    action_input = {"raw": parsed["action_input"]}
-
-                try:
-                    result = await tool.run(**action_input) if hasattr(tool, "run") else tool(**action_input)
-                    observation = str(result)
-                except Exception as e:
-                    observation = f"Error executing tool: {e}"
-
-                tool_calls_made += 1
-
-            # Append observation as a tool message (using the chat format)
-            messages.append(
-                Message(
-                    role=Role.TOOL,
-                    content=f"Observation: {observation}",
-                    tool_call_id=f"tool_call_{turn}",
-                    name=action,
-                )
-            )
-            all_messages.append(messages[-1])
+                all_messages.append(messages[-1])
 
         # Hit max turns without final answer
         return AgentResult(

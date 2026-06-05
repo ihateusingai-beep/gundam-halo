@@ -34,14 +34,14 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """App startup/shutdown."""
     cfg = get_config()
     configure_logging(level=cfg.log_level)
     logger.info(
         "Gundam Halo starting",
         extra={
-            "version": app.version,
+            "version": application.version,
             "log_level": cfg.log_level,
             "minimax_model": cfg.llm.default_model,
         },
@@ -63,10 +63,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    """Application factory."""
+    """Application factory.
+
+    Note: we name the local variable `halo_app` (not `app`) to avoid a
+    subtle Python scoping issue where the module-level `app` package
+    shadowed the function-local FastAPI instance.
+    """
     cfg = get_config()
 
-    app = FastAPI(
+    halo_app = FastAPI(
         title="Gundam Halo",
         description="Personal AI agent on Mac. Hermes-like feel, MiniMax brain, deep Mac control.",
         version="0.1.0",
@@ -74,7 +79,7 @@ def create_app() -> FastAPI:
     )
 
     # CORS — open for local dev, restrict in production
-    app.add_middleware(
+    halo_app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://localhost:8765"],
         allow_credentials=True,
@@ -84,15 +89,29 @@ def create_app() -> FastAPI:
 
     # Mount routes
     from app.api import health, projects, sessions, mac, system
+    from app.tools.builder import default_tools
 
-    app.include_router(health.router, prefix="/health", tags=["health"])
-    app.include_router(system.router, prefix="/api/system", tags=["system"])
-    app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
-    app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
-    app.include_router(mac.router, prefix="/api/mac", tags=["mac"])
+    # Import agents so they register themselves (side-effect of @register decorator)
+    import app.agents.simple  # noqa: F401
+    import app.agents.native_react  # noqa: F401
+    logger.debug(f"Registered agents: {list(AgentRegistry.keys())}")
 
-    return app
+    # Register default tools in the ToolRegistry (so they're discoverable
+    # even though we typically pass them explicitly to agents)
+    for tool in default_tools():
+        ToolRegistry.register_value(tool.name, tool)
+    logger.debug(f"Registered {len(default_tools())} default tools")
+
+    halo_app.include_router(health.router, prefix="/health", tags=["health"])
+    halo_app.include_router(system.router, prefix="/api/system", tags=["system"])
+    halo_app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
+    halo_app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+    halo_app.include_router(mac.router, prefix="/api/mac", tags=["mac"])
+
+    return halo_app
 
 
-# Module-level app for `uvicorn app.main:app`
-app = create_app()
+# Module-level instance for `uvicorn app.main:app`
+halo_app = create_app()
+# Compatibility alias for `uvicorn app.main:app`
+app = halo_app

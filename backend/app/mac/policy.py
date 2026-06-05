@@ -17,18 +17,25 @@ from typing import List
 
 from app.core.config import get_config, expand_home
 
-# Paths that are NEVER readable or writable (defense-in-depth)
-_NEVER_PATHS = [
-    Path.home() / ".ssh",
-    Path.home() / ".gnupg",
-    Path.home() / ".aws",
-    Path.home() / ".kube",
-    Path("/etc"),
-    Path("/System"),
-    Path("/var/private"),
-    Path("/private/etc"),
-    Path("/private/var"),
-]
+
+def _never_paths() -> List[Path]:
+    """Paths that are NEVER readable or writable (defense-in-depth).
+
+    Computed at call time so that tests can change HOME / cwd
+    without affecting the never-list semantics.
+    """
+    home = Path.home()
+    return [
+        home / ".ssh",
+        home / ".gnupg",
+        home / ".aws",
+        home / ".kube",
+        Path("/etc"),
+        Path("/System"),
+        Path("/var/private"),
+        Path("/private/etc"),
+        Path("/private/var"),
+    ]
 
 
 def _resolve(path: str) -> Path:
@@ -36,7 +43,7 @@ def _resolve(path: str) -> Path:
 
 
 def _is_in_never_paths(p: Path) -> bool:
-    for never in _NEVER_PATHS:
+    for never in _never_paths():
         try:
             if p == never or never in p.parents:
                 return True
@@ -93,7 +100,8 @@ def check_shell_command(command: str) -> bool:
     """Returns True if the command is in the allowlist.
 
     Splits the command into the executable (first token) and checks that
-    against cfg.mac.shell_allowlist.
+    against cfg.mac.shell_allowlist. The wildcard `*` allows all commands
+    (intended for test/dev environments only — never use in production).
     """
     if not command or not command.strip():
         return False
@@ -102,6 +110,8 @@ def check_shell_command(command: str) -> bool:
         return False
     executable = parts[0]
     cfg = get_config()
+    if "*" in cfg.mac.shell_allowlist:
+        return True
     return executable in cfg.mac.shell_allowlist
 
 

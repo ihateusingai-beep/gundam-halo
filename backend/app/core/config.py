@@ -160,50 +160,56 @@ def _env_bool(name: str, default: bool) -> bool:
 
 def _load_user_config(toml_data: dict) -> UserConfig:
     d = toml_data.get("user", {})
+    defaults = UserConfig()
     return UserConfig(
-        name=d.get("name", UserConfig.name),
-        default_theme=d.get("default_theme", UserConfig.default_theme),
+        name=d.get("name", defaults.name),
+        default_theme=d.get("default_theme", defaults.default_theme),
     )
 
 
 def _load_llm_config(toml_data: dict) -> LLMConfig:
     d = toml_data.get("llm", {})
     api_key_env = d.get("api_key_env", "MINIMAX_API_KEY")
+    defaults = LLMConfig()
     return LLMConfig(
-        provider=d.get("provider", LLMConfig.provider),
+        provider=d.get("provider", defaults.provider),
         api_key=_env(api_key_env, ""),  # NEVER store in TOML, always env
-        base_url=_env("MINIMAX_BASE_URL", d.get("base_url", LLMConfig.base_url)),
-        default_model=_env("MINIMAX_MODEL", d.get("default_model", LLMConfig.default_model)),
-        fallback_model=d.get("fallback_model", LLMConfig.fallback_model),
+        base_url=_env("MINIMAX_BASE_URL", d.get("base_url", defaults.base_url)),
+        default_model=_env("MINIMAX_MODEL", d.get("default_model", defaults.default_model)),
+        fallback_model=d.get("fallback_model", defaults.fallback_model),
     )
 
 
 def _load_server_config(toml_data: dict) -> ServerConfig:
     d = toml_data.get("server", {})
+    defaults = ServerConfig()
     return ServerConfig(
-        host=_env("HALO_HOST", d.get("host", ServerConfig.host)),
-        port=_env_int("HALO_PORT", d.get("port", ServerConfig.port)),
-        log_level=_env("HALO_LOG_LEVEL", d.get("log_level", ServerConfig.log_level)),
+        host=_env("HALO_HOST", d.get("host", defaults.host)),
+        port=_env_int("HALO_PORT", d.get("port", defaults.port)),
+        log_level=_env("HALO_LOG_LEVEL", d.get("log_level", defaults.log_level)),
         require_tailscale=_env_bool(
-            "HALO_REQUIRE_TAILSCALE", d.get("require_tailscale", ServerConfig.require_tailscale)
+            "HALO_REQUIRE_TAILSCALE", d.get("require_tailscale", defaults.require_tailscale)
         ),
         tailscale_hostname=_env(
-            "HALO_TAILSCALE_HOSTNAME", d.get("tailscale_hostname", ServerConfig.tailscale_hostname)
+            "HALO_TAILSCALE_HOSTNAME", d.get("tailscale_hostname", defaults.tailscale_hostname)
         ),
     )
 
 
 def _load_mac_config(toml_data: dict) -> MacControlConfig:
     d = toml_data.get("mac_control", {})
+    # `default_factory` defaults aren't accessible as class attributes;
+    # instantiate once to extract the defaults.
+    defaults = MacControlConfig()
     return MacControlConfig(
-        default_path_policy=d.get("default_path_policy", MacControlConfig.default_path_policy),
-        shell_allowlist=d.get("shell_allowlist", MacControlConfig.shell_allowlist),
-        file_read_paths=d.get("file_read_paths", MacControlConfig.file_read_paths),
-        file_write_paths=d.get("file_write_paths", MacControlConfig.file_write_paths),
-        a11y_enabled=d.get("a11y_enabled", MacControlConfig.a11y_enabled),
-        apple_script_enabled=d.get("apple_script_enabled", MacControlConfig.apple_script_enabled),
+        default_path_policy=d.get("default_path_policy", defaults.default_path_policy),
+        shell_allowlist=d.get("shell_allowlist", defaults.shell_allowlist),
+        file_read_paths=d.get("file_read_paths", defaults.file_read_paths),
+        file_write_paths=d.get("file_write_paths", defaults.file_write_paths),
+        a11y_enabled=d.get("a11y_enabled", defaults.a11y_enabled),
+        apple_script_enabled=d.get("apple_script_enabled", defaults.apple_script_enabled),
         notifications_enabled=d.get(
-            "notifications_enabled", MacControlConfig.notifications_enabled
+            "notifications_enabled", defaults.notifications_enabled
         ),
     )
 
@@ -212,22 +218,24 @@ def _load_telegram_config(toml_data: dict) -> TelegramConfig:
     d = toml_data.get("channels", {}).get("telegram", {})
     chat_ids_env = _env("GUNDAM_HALO_TG_ALLOWED_CHAT_IDS", "")
     chat_ids = [int(x) for x in chat_ids_env.split(",") if x.strip().isdigit()]
+    defaults = TelegramConfig()
     return TelegramConfig(
-        enabled=d.get("enabled", False),
+        enabled=d.get("enabled", defaults.enabled),
         bot_token=_env("GUNDAM_HALO_TG_TOKEN", ""),
-        allowed_chat_ids=chat_ids or d.get("allowed_chat_ids", []),
-        command_prefix=d.get("command_prefix", "/"),
+        allowed_chat_ids=chat_ids or d.get("allowed_chat_ids", defaults.allowed_chat_ids),
+        command_prefix=d.get("command_prefix", defaults.command_prefix),
     )
 
 
 def _load_security_config(toml_data: dict) -> SecurityConfig:
     d = toml_data.get("security", {})
+    defaults = SecurityConfig()
     return SecurityConfig(
-        audit_log=d.get("audit_log", SecurityConfig.audit_log),
-        audit_max_size_mb=d.get("audit_max_size_mb", SecurityConfig.audit_max_size_mb),
-        injection_scan=d.get("injection_scan", SecurityConfig.injection_scan),
+        audit_log=d.get("audit_log", defaults.audit_log),
+        audit_max_size_mb=d.get("audit_max_size_mb", defaults.audit_max_size_mb),
+        injection_scan=d.get("injection_scan", defaults.injection_scan),
         require_confirm_for=d.get(
-            "require_confirm_for", SecurityConfig.require_confirm_for
+            "require_confirm_for", defaults.require_confirm_for
         ),
     )
 

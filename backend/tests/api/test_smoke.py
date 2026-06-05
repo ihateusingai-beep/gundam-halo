@@ -10,6 +10,10 @@ def client():
     return TestClient(app)
 
 
+# API tests need permissive policy to create real projects / sessions
+pytestmark = pytest.mark.usefixtures("permissive_test_config")
+
+
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
@@ -65,4 +69,5 @@ def test_start_session(client, tmp_path, monkeypatch):
                 f"/api/sessions/{sid}/message",
                 json={"content": "hello"},
             )
-            assert mr.status_code == 202
+            # 200 = synchronous response (agent replied)
+            assert mr.status_code == 200
