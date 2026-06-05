@@ -8,6 +8,7 @@ from __future__ import annotations
 from app.tools._stubs import BaseTool
 from app.tools.file_read import FileReadTool
 from app.tools.file_write import FileWriteTool
+from app.tools.mavis_delegate import MavisDelegateTool
 from app.tools.open_app import OpenAppTool
 from app.tools.shell_exec import ShellExecTool
 
@@ -19,7 +20,9 @@ def default_tools() -> list[BaseTool]:
         FileWriteTool(),
         ShellExecTool(),
         OpenAppTool(),
+        MavisDelegateTool(),
     ]
 
 
 __all__ = ["default_tools"]
+

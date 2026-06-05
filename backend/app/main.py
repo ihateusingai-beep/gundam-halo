@@ -55,10 +55,16 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     for reg in [AgentRegistry, ChannelRegistry, EngineRegistry, ToolRegistry]:
         logger.debug(f"Registry ready: {reg.__name__}")
 
+    # Start all enabled channels (Telegram in dry-run if no token)
+    from app.channels.manager import get_channel_manager
+    manager = get_channel_manager()
+    await manager.start_all()
+
     yield
 
     # Shutdown
     logger.info("Gundam Halo shutting down")
+    await manager.stop_all()
     reset_event_bus()
 
 
@@ -88,13 +94,17 @@ def create_app() -> FastAPI:
     )
 
     # Mount routes
-    from app.api import health, projects, sessions, mac, system
+    from app.api import health, projects, sessions, mac, system, channels as channels_api
     from app.tools.builder import default_tools
 
     # Import agents so they register themselves (side-effect of @register decorator)
     import app.agents.simple  # noqa: F401
     import app.agents.native_react  # noqa: F401
     logger.debug(f"Registered agents: {list(AgentRegistry.keys())}")
+
+    # Import channels so they register themselves
+    import app.channels.telegram  # noqa: F401
+    logger.debug(f"Registered channels: {list(ChannelRegistry.keys())}")
 
     # Register default tools in the ToolRegistry (so they're discoverable
     # even though we typically pass them explicitly to agents)
@@ -107,6 +117,7 @@ def create_app() -> FastAPI:
     halo_app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
     halo_app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
     halo_app.include_router(mac.router, prefix="/api/mac", tags=["mac"])
+    halo_app.include_router(channels_api.router, prefix="/api/channels", tags=["channels"])
 
     return halo_app
 
