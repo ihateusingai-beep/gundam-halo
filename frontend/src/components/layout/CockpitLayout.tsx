@@ -4,8 +4,11 @@ import { Toaster } from "sonner";
 
 import { HudCard } from "@/components/gundam/HudCard";
 import { Gauge } from "@/components/gundam/Gauge";
+import { ConnectionStatus } from "@/components/gundam/ConnectionStatus";
+import { ActivityTicker } from "@/components/gundam/ActivityTicker";
 import { useProjectsStore } from "@/stores/projects";
 import { useSystemStore } from "@/stores/system";
+import { useWsEvent, useWsStatus } from "@/lib/ws";
 import { useEffect } from "react";
 
 interface CockpitLayoutProps {
@@ -25,14 +28,25 @@ interface CockpitLayoutProps {
  */
 export function CockpitLayout({ children }: CockpitLayoutProps) {
   const { projects, fetchProjects } = useProjectsStore();
-  const { gauges, startPolling } = useSystemStore();
+  const { gauges, setGauges, startPolling } = useSystemStore();
+  const { connected } = useWsStatus();
   const location = useLocation();
 
   useEffect(() => {
     fetchProjects();
+  }, [fetchProjects]);
+
+  // Push live gauges from WS into the store.
+  useWsEvent("system_gauges", (event) => {
+    setGauges(event.data);
+  });
+
+  // Fallback to REST polling if WS isn't connected (e.g. server restart).
+  useEffect(() => {
+    if (connected) return; // WS will handle it
     const stop = startPolling();
     return stop;
-  }, [fetchProjects, startPolling]);
+  }, [connected, startPolling]);
 
   return (
     <div className="gundam-hex-bg gundam-scanlines min-h-screen flex flex-col">
@@ -139,14 +153,22 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
               <div>↑ {(gauges?.network_sent_mb ?? 0).toFixed(1)} MB</div>
               <div>↓ {(gauges?.network_recv_mb ?? 0).toFixed(1)} MB</div>
             </div>
+            <div className="mt-2 pt-2 border-t border-[var(--border-color)]">
+              <ConnectionStatus />
+            </div>
           </HudCard>
         </aside>
       </div>
 
       {/* Bottom bar — status / activity */}
-      <footer className="border-t border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 py-2 text-xs text-[var(--text-muted)] font-mono flex items-center justify-between">
-        <span>GUNDAM HALO v0.1.0 · COCKPIT ONLINE</span>
-        <span>{location.pathname}</span>
+      <footer className="border-t border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 py-2 text-xs text-[var(--text-muted)] font-mono flex items-center justify-between gap-4">
+        <div className="flex items-center gap-4 shrink-0">
+          <span>GUNDAM HALO v0.1.0 · COCKPIT ONLINE</span>
+        </div>
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <ActivityTicker />
+        </div>
+        <span className="shrink-0">{location.pathname}</span>
       </footer>
     </div>
   );

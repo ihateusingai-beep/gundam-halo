@@ -237,10 +237,24 @@ async def send_message(session_id: str, payload: MessageSend) -> MessageResponse
         logger.error(f"Failed to create agent for session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Agent init failed: {e}")
 
+    # Publish "agent thinking" so WebSocket subscribers see activity immediately
+    get_event_bus().publish(
+        EventType.AGENT_TURN_START,
+        {
+            "session_id": session_id,
+            "project": info.project_name,
+            "user_message": payload.content,
+        },
+    )
+
     try:
         result = await agent.run(payload.content)
     except Exception as e:
         logger.error(f"Agent run error in session {session_id}: {e}")
+        get_event_bus().publish(
+            EventType.AGENT_TURN_END,
+            {"session_id": session_id, "success": False, "error": str(e)},
+        )
         return MessageResponse(
             session_id=session_id,
             user_message=payload.content,
@@ -249,6 +263,18 @@ async def send_message(session_id: str, payload: MessageSend) -> MessageResponse
             success=False,
             error=str(e),
         )
+
+    # Publish "agent message" with the result
+    get_event_bus().publish(
+        EventType.AGENT_TURN_END,
+        {
+            "session_id": session_id,
+            "project": info.project_name,
+            "tool_calls_made": result.tool_calls_made,
+            "output_length": len(result.output),
+            "success": result.success,
+        },
+    )
 
     # Persist the full message history to disk (atomic write)
     try:

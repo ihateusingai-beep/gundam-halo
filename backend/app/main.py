@@ -98,7 +98,7 @@ def create_app() -> FastAPI:
     )
 
     # Mount routes
-    from app.api import health, projects, sessions, mac, system, channels as channels_api
+    from app.api import health, projects, sessions, mac, system, channels as channels_api, ws as ws_api
     from app.tools.builder import default_tools
 
     # Import agents so they register themselves (side-effect of @register decorator)
@@ -122,6 +122,7 @@ def create_app() -> FastAPI:
     halo_app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
     halo_app.include_router(mac.router, prefix="/api/mac", tags=["mac"])
     halo_app.include_router(channels_api.router, prefix="/api/channels", tags=["channels"])
+    halo_app.include_router(ws_api.router, tags=["websocket"])
 
     return halo_app
 

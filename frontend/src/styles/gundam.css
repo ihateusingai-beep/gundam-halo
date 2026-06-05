@@ -134,6 +134,10 @@
   0% { background-position: 0 0; }
   100% { background-position: 0 100%; }
 }
+@keyframes gundam-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
 @keyframes scanningLine {
   0% { transform: translateY(-100%); opacity: 0; }
   10% { opacity: 1; }

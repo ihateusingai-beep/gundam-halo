@@ -7,6 +7,8 @@ interface SystemState {
   loading: boolean;
   error: string | null;
   fetchGauges: () => Promise<void>;
+  setGauges: (g: Gauges) => void;
+  /** Fallback polling for environments where WS isn't available. */
   startPolling: () => () => void;
 }
 
@@ -24,12 +26,14 @@ export const useSystemStore = create<SystemState>((set) => ({
     }
   },
 
+  setGauges: (gauges) => set({ gauges }),
+
   startPolling: () => {
     const tick = () => {
       useSystemStore.getState().fetchGauges();
     };
-    tick(); // immediate
-    const id = setInterval(tick, 2000);
+    tick();
+    const id = setInterval(tick, 5000);
     return () => clearInterval(id);
   },
 }));
