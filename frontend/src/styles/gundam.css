@@ -580,3 +580,119 @@
 .tool-trace-list > .tool-trace:nth-child(2) { animation-delay: 60ms; }
 .tool-trace-list > .tool-trace:nth-child(3) { animation-delay: 120ms; }
 .tool-trace-list > .tool-trace:nth-child(n+4) { animation-delay: 180ms; }
+
+/* ===========================================================================
+ * Memory Timeline — vertical data stream for the memory browser
+ *
+ *  ┃ (vertical accent line)
+ *  ● (node — circle on the line)
+ *  ┃
+ *  ● (node)
+ *  ┃
+ *  ● (node)
+ *
+ *  Hover a node: it brightens, the rest dims.
+ * ========================================================================== */
+
+.gundam-timeline {
+  position: relative;
+  padding-left: 32px;
+}
+.gundam-timeline::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 12px;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--accent) 8%,
+    var(--accent) 92%,
+    transparent 100%
+  );
+  opacity: 0.45;
+}
+.gundam-timeline-node {
+  position: relative;
+  padding: 0 0 20px 0;
+}
+.gundam-timeline-node::before {
+  content: '';
+  position: absolute;
+  top: 14px;
+  left: -25px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  transition: all 0.2s ease;
+}
+.gundam-timeline-node:hover::before {
+  background: var(--accent);
+  box-shadow: 0 0 14px var(--accent);
+  transform: scale(1.2);
+}
+.gundam-timeline-group-header {
+  position: relative;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin: 24px 0 12px -32px;
+  padding-left: 32px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 6px;
+}
+.gundam-timeline-group-header::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  background: var(--accent-secondary);
+  border-radius: 1px;
+  box-shadow: 0 0 4px var(--accent-secondary);
+}
+
+.gundam-memory-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: linear-gradient(135deg,
+    rgba(0, 212, 255, 0.04) 0%,
+    rgba(0, 0, 0, 0.2) 100%);
+  backdrop-filter: blur(4px);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+.gundam-memory-card:hover {
+  border-color: var(--accent);
+  background: linear-gradient(135deg,
+    rgba(0, 212, 255, 0.1) 0%,
+    rgba(0, 0, 0, 0.2) 100%);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.2);
+}
+.gundam-memory-card-expanded {
+  border-color: var(--accent);
+  box-shadow: 0 0 16px rgba(0, 212, 255, 0.25);
+}
+
+.gundam-memory-msg {
+  padding: 8px 10px;
+  margin: 4px 0;
+  border-left: 2px solid var(--border-color);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 0 3px 3px 0;
+}
+.gundam-memory-msg-user { border-left-color: var(--accent); }
+.gundam-memory-msg-assistant { border-left-color: var(--success); }
+.gundam-memory-msg-tool { border-left-color: var(--warning); }
+.gundam-memory-msg-system { border-left-color: var(--text-muted); opacity: 0.7; }
