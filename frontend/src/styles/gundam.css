@@ -348,4 +348,180 @@
     transform: none;
     opacity: 1;
   }
+  [data-theme^="gundam-"] .gundam-cockpit-bg {
+    background-image: none !important;
+  }
+  [data-theme^="gundam-"] .gundam-scan,
+  [data-theme^="gundam-"] .gundam-cockpit-vignette::before {
+    animation: none;
+  }
+}
+
+/* ===========================================================================
+ * Cockpit Frame — outer chrome for the dashboard
+ *
+ * Layered structure (bottom to top):
+ *   1. Background image (psychoframe JPGs) — controlled by [data-bg="..."] on <html>
+ *   2. Hex grid overlay (from .gundam-hex-bg)
+ *   3. Vignette (CRT edge darkening) — .gundam-cockpit-vignette::before
+ *   4. Top scan line — .gundam-scan
+ *   5. 4 corner brackets — .gundam-frame-corner-{tl,tr,bl,br}
+ *   6. Content
+ *
+ * Backgrounds are purely opt-in: default to the hex grid (no JPG).
+ * ========================================================================== */
+
+.gundam-cockpit-frame {
+  position: relative;
+  min-height: 100vh;
+  background: linear-gradient(
+    135deg,
+    rgba(0, 212, 255, 0.08) 0%,
+    rgba(0, 0, 0, 0.3) 50%,
+    rgba(255, 105, 180, 0.05) 100%
+  );
+  border: 1px solid var(--border-color);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.05),
+    inset 0 -1px 3px rgba(0, 0, 0, 0.4),
+    0 0 20px var(--accent-glow);
+  overflow: hidden;
+}
+/* Lift children above the background image and vignette */
+.gundam-cockpit-frame > * { position: relative; z-index: 1; }
+
+/* Optional background image layer — sits behind everything */
+.gundam-cockpit-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0.35;
+  z-index: 0;
+  pointer-events: none;
+  filter: hue-rotate(-5deg) saturate(1.1);
+  transition: opacity 0.6s ease-in-out;
+}
+[data-bg="core-01"] .gundam-cockpit-bg { background-image: url('/gundam-assets/backgrounds/bg-unicorn-core-01.jpg'); }
+[data-bg="core-02"] .gundam-cockpit-bg { background-image: url('/gundam-assets/backgrounds/bg-unicorn-core-02.jpg'); }
+[data-bg="core-03"] .gundam-cockpit-bg { background-image: url('/gundam-assets/backgrounds/bg-unicorn-core-03.jpg'); opacity: 0.45; }
+[data-bg="core-04"] .gundam-cockpit-bg { background-image: url('/gundam-assets/backgrounds/bg-unicorn-core-04.jpg'); opacity: 0.4; }
+
+/* CRT vignette — radial darkening at edges */
+.gundam-cockpit-vignette {
+  position: relative;
+}
+.gundam-cockpit-vignette::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 50%,
+    rgba(0, 0, 0, 0.4) 100%
+  );
+  pointer-events: none;
+  z-index: 5;
+  animation: gundamVignetteBreath 8s ease-in-out infinite;
+}
+@keyframes gundamVignetteBreath {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+
+/* Top scan line — moves vertically down across the screen */
+.gundam-scan {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: scanningLine 4s linear infinite;
+  pointer-events: none;
+  z-index: 9997;
+  opacity: 0.7;
+}
+@keyframes scanningLine {
+  0%   { transform: translateY(-10vh); opacity: 0; }
+  10%  { opacity: 0.9; }
+  90%  { opacity: 0.9; }
+  100% { transform: translateY(110vh); opacity: 0; }
+}
+
+/* Corner brackets — 4 L-shaped accents on the cockpit frame */
+.gundam-frame-corner {
+  position: fixed;
+  width: 48px;
+  height: 48px;
+  pointer-events: none;
+  z-index: 9996;
+  opacity: 0.85;
+}
+.gundam-frame-corner::before,
+.gundam-frame-corner::after {
+  content: '';
+  position: absolute;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+.gundam-frame-corner-tl { top: 8px; left: 8px; }
+.gundam-frame-corner-tl::before { top: 0; left: 0; width: 24px; height: 2px; }
+.gundam-frame-corner-tl::after  { top: 0; left: 0; width: 2px; height: 24px; }
+.gundam-frame-corner-tr { top: 8px; right: 8px; }
+.gundam-frame-corner-tr::before { top: 0; right: 0; width: 24px; height: 2px; }
+.gundam-frame-corner-tr::after  { top: 0; right: 0; width: 2px; height: 24px; }
+.gundam-frame-corner-bl { bottom: 8px; left: 8px; }
+.gundam-frame-corner-bl::before { bottom: 0; left: 0; width: 24px; height: 2px; }
+.gundam-frame-corner-bl::after  { bottom: 0; left: 0; width: 2px; height: 24px; }
+.gundam-frame-corner-br { bottom: 8px; right: 8px; }
+.gundam-frame-corner-br::before { bottom: 0; right: 0; width: 24px; height: 2px; }
+.gundam-frame-corner-br::after  { bottom: 0; right: 0; width: 2px; height: 24px; }
+
+/* "GUNDAM HALO" wordmark in top-left of frame */
+.gundam-frame-brand {
+  position: fixed;
+  top: 14px;
+  left: 70px;
+  z-index: 9996;
+  pointer-events: none;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  color: var(--accent);
+  text-shadow: 0 0 8px var(--accent);
+  opacity: 0.75;
+}
+.gundam-frame-brand::before {
+  content: '◢ ';
+  color: var(--accent-secondary);
+  margin-right: 4px;
+}
+
+/* "SYSTEMS ONLINE" indicator in top-right of frame */
+.gundam-frame-status {
+  position: fixed;
+  top: 14px;
+  right: 70px;
+  z-index: 9996;
+  pointer-events: none;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.gundam-frame-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+  animation: gundam-pulse-dot 1.5s ease-in-out infinite;
 }

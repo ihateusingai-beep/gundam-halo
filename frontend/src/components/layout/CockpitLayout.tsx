@@ -17,14 +17,24 @@ interface CockpitLayoutProps {
 
 /** First-person cockpit layout for desktop (≥768px).
  *
- *  ┌─────────────────────────────────────────┐
- *  │ TopBar (project nav)                    │
- *  ├──────────┬─────────────────┬───────────┤
- *  │ Left     │  Center         │  Right    │
- *  │ (Tools)  │  (children)     │  (Gauges) │
- *  ├──────────┴─────────────────┴───────────┤
- *  │ Bottom (audit log / activity)           │
- *  └─────────────────────────────────────────┘
+ *  Frame layers (z-index, bottom → top):
+ *   0  background image (optional, [data-bg="core-XX"])
+ *   1  hex grid overlay
+ *   1  content
+ *   5  CRT vignette (fixed, pointer-events: none)
+ *   9996 corner brackets + brand/status (fixed)
+ *   9997 top scan line (fixed)
+ *
+ *   ┌──⌐  ◢ GUNDAM HALO                              SYSTEMS ●  ⌐──┐
+ *   │                                                          │
+ *   │  [TopBar — project nav]                                  │
+ *   │  ┌──────────┬─────────────────┬───────────┐             │
+ *   │  │ Left     │  Center         │  Right    │             │
+ *   │  │ (Tools)  │  (children)     │  (Gauges) │             │
+ *   │  ├──────────┴─────────────────┴───────────┤             │
+ *   │  │ Bottom — ticker / status                │             │
+ *   │  └──────────────────────────────────────────┘             │
+ *   └──⌐                                                  ¬──┘
  */
 export function CockpitLayout({ children }: CockpitLayoutProps) {
   const { projects, fetchProjects } = useProjectsStore();
@@ -49,7 +59,10 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   }, [connected, startPolling]);
 
   return (
-    <div className="gundam-hex-bg gundam-scanlines min-h-screen flex flex-col">
+    <div className="gundam-cockpit-frame gundam-cockpit-vignette gundam-hex-bg min-h-screen flex flex-col">
+      {/* Background image layer (visible only when [data-bg] is set on <html>) */}
+      <div className="gundam-cockpit-bg" aria-hidden="true" />
+
       {/* Toaster (Sonner) — global */}
       <Toaster
         theme="dark"
@@ -65,8 +78,17 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
         }}
       />
 
+      {/* Frame chrome (fixed) — corner brackets, brand, status */}
+      <div className="gundam-frame-corner gundam-frame-corner-tl" aria-hidden="true" />
+      <div className="gundam-frame-corner gundam-frame-corner-tr" aria-hidden="true" />
+      <div className="gundam-frame-corner gundam-frame-corner-bl" aria-hidden="true" />
+      <div className="gundam-frame-corner gundam-frame-corner-br" aria-hidden="true" />
+      <div className="gundam-frame-brand" aria-hidden="true">GUNDAM HALO // COCKPIT</div>
+      <div className="gundam-frame-status" aria-hidden="true">SYSTEMS ONLINE · v0.1.0</div>
+      <div className="gundam-scan" aria-hidden="true" />
+
       {/* Top bar — project nav */}
-      <header className="border-b border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 py-3 flex items-center justify-between">
+      <header className="border-b border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 py-3 mt-2 flex items-center justify-between">
         <Link to="/" className="flex items-center gap-3">
           <h1 className="text-xl font-[Orbitron] text-[var(--accent)] tracking-widest uppercase">
             Gundam Halo
@@ -161,9 +183,9 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
       </div>
 
       {/* Bottom bar — status / activity */}
-      <footer className="border-t border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 py-2 text-xs text-[var(--text-muted)] font-mono flex items-center justify-between gap-4">
+      <footer className="border-t border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 py-2 mb-2 mx-2 text-xs text-[var(--text-muted)] font-mono flex items-center justify-between gap-4">
         <div className="flex items-center gap-4 shrink-0">
-          <span>GUNDAM HALO v0.1.0 · COCKPIT ONLINE</span>
+          <span>RX-0 // UNICORN</span>
         </div>
         <div className="flex-1 min-w-0 overflow-hidden">
           <ActivityTicker />
