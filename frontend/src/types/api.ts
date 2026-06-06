@@ -132,3 +132,72 @@ export interface ThemeInfo {
   emoji: string;
   description: string;
 }
+
+// Settings
+export interface SettingsMac {
+  default_path_policy: string;
+  file_read_paths: string[];
+  file_write_paths: string[];
+  shell_allowlist: string[];
+  a11y_enabled: boolean;
+  apple_script_enabled: boolean;
+  notifications_enabled: boolean;
+}
+
+export interface SettingsLLM {
+  provider: string;
+  base_url: string;
+  default_model: string;
+  fallback_model: string;
+  api_key_configured: boolean;
+}
+
+export interface SettingsTelegram {
+  enabled: boolean;
+  allowed_chat_ids: number[];
+  command_prefix: string;
+  bot_token_configured: boolean;
+}
+
+export interface SettingsSecurity {
+  audit_log: string;
+  audit_max_size_mb: number;
+  injection_scan: boolean;
+  require_confirm_for: string[];
+}
+
+export interface SettingsServer {
+  host: string;
+  port: number;
+  log_level: string;
+  require_tailscale: boolean;
+  tailscale_hostname: string;
+}
+
+export interface SettingsUser {
+  name: string;
+  default_theme: string;
+}
+
+export interface SettingsApp {
+  version: string;
+  home: string;
+  config_path: string;
+}
+
+export interface Settings {
+  app: SettingsApp;
+  user: SettingsUser;
+  llm: SettingsLLM;
+  server: SettingsServer;
+  mac: SettingsMac;
+  telegram: SettingsTelegram;
+  security: SettingsSecurity;
+}
+
+export interface AuditEntry {
+  id: string;
+  ts: string;
+  event_type: string;
+  data: Record<string, any>;
+}

@@ -17,7 +17,7 @@ from threading import Lock
 from typing import Any, Optional
 
 from app.core.config import get_config
-from app.core.events import Event, EventBus, EventType
+from app.core.events import Event, EventBus, EventType, get_event_bus
 
 logger = logging.getLogger(__name__)
 
