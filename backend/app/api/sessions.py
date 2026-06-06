@@ -248,7 +248,14 @@ async def send_message(session_id: str, payload: MessageSend) -> MessageResponse
     )
 
     try:
-        result = await agent.run(payload.content)
+        # Build context for the agent (lets it include session_id in tool events)
+        from app.core.types import AgentContext
+        agent_context = AgentContext(
+            project_id=info.project_name,
+            session_id=session_id,
+            channel="web",
+        )
+        result = await agent.run(payload.content, context=agent_context)
     except Exception as e:
         logger.error(f"Agent run error in session {session_id}: {e}")
         get_event_bus().publish(

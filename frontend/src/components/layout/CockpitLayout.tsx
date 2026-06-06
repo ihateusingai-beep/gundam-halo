@@ -5,7 +5,7 @@ import { Toaster } from "sonner";
 import { HudCard } from "@/components/gundam/HudCard";
 import { Gauge } from "@/components/gundam/Gauge";
 import { ConnectionStatus } from "@/components/gundam/ConnectionStatus";
-import { ActivityTicker } from "@/components/gundam/ActivityTicker";
+import { MissionLog } from "@/components/gundam/MissionLog";
 import { useProjectsStore } from "@/stores/projects";
 import { useSystemStore } from "@/stores/system";
 import { useWsEvent, useWsStatus } from "@/lib/ws";
@@ -118,7 +118,7 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
       </header>
 
       <div className="flex-1 grid grid-cols-[200px_1fr_240px] gap-3 p-3 min-h-0">
-        {/* Left panel — projects / tools */}
+        {/* Left panel — projects + mission log */}
         <aside className="overflow-y-auto space-y-3">
           <HudCard>
             <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
@@ -155,6 +155,18 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
               ))}
             </ul>
           </HudCard>
+
+          <HudCard>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+                Mission Log
+              </h2>
+              <span className="text-[9px] text-[var(--text-muted)] font-mono">
+                LIVE FEED
+              </span>
+            </div>
+            <MissionLog maxEntries={30} />
+          </HudCard>
         </aside>
 
         {/* Center — main content */}
@@ -182,14 +194,9 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
         </aside>
       </div>
 
-      {/* Bottom bar — status / activity */}
+      {/* Bottom bar — status */}
       <footer className="border-t border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 py-2 mb-2 mx-2 text-xs text-[var(--text-muted)] font-mono flex items-center justify-between gap-4">
-        <div className="flex items-center gap-4 shrink-0">
-          <span>RX-0 // UNICORN</span>
-        </div>
-        <div className="flex-1 min-w-0 overflow-hidden">
-          <ActivityTicker />
-        </div>
+        <span>RX-0 // UNICORN</span>
         <span className="shrink-0">{location.pathname}</span>
       </footer>
     </div>

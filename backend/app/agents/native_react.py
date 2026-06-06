@@ -8,9 +8,11 @@ execute each tool → append tool results as Tool messages → loop.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, List, Optional
 
 from app.agents._stubs import BaseAgent
+from app.core.events import EventType, get_event_bus
 from app.core.registry import AgentRegistry
 from app.core.types import (
     AgentContext,
@@ -109,14 +111,48 @@ class NativeReActAgent(BaseAgent):
             for tc in response.tool_calls:
                 tool_calls_made += 1  # LLM attempted to call this tool
                 tool = self._tool_by_name.get(tc.name)
+                call_id = tc.id or f"call-{tool_calls_made}"
+                started_at = time.time()
+
+                # Publish TOOL_CALL_START — let the dashboard animate the panel in
+                get_event_bus().publish(
+                    EventType.TOOL_CALL_START,
+                    {
+                        "call_id": call_id,
+                        "tool": tc.name,
+                        "args": tc.arguments,
+                        "session_id": context.session_id if context else None,
+                        "project": context.project_id if context else None,
+                    },
+                )
+
                 if not tool:
                     observation = f"Error: tool '{tc.name}' not found"
+                    ok = False
                 else:
                     try:
                         observation = await tool.run(**tc.arguments)
+                        ok = True
                     except Exception as e:
                         logger.error(f"Tool {tc.name} error: {e}")
                         observation = f"Error executing {tc.name}: {e}"
+                        ok = False
+
+                duration_ms = int((time.time() - started_at) * 1000)
+
+                # Publish TOOL_CALL_END — match on call_id
+                get_event_bus().publish(
+                    EventType.TOOL_CALL_END,
+                    {
+                        "call_id": call_id,
+                        "tool": tc.name,
+                        "ok": ok,
+                        "duration_ms": duration_ms,
+                        "result_preview": observation[:200] if observation else "",
+                        "session_id": context.session_id if context else None,
+                        "project": context.project_id if context else None,
+                    },
+                )
 
                 # Append as Tool message (OpenAI function-calling format)
                 messages.append(

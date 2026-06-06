@@ -6,6 +6,7 @@ import { HudCard } from "@/components/gundam/HudCard";
 import { CommandInput } from "@/components/gundam/CommandInput";
 import { StatusDot } from "@/components/gundam/StatusDot";
 import { Reticle } from "@/components/gundam/Reticle";
+import { ToolCallTraceList } from "@/components/gundam/ToolCallTraceList";
 import { api, ApiError } from "@/lib/api";
 import type { ProjectSummary } from "@/types/api";
 
@@ -137,6 +138,8 @@ export function ProjectDetailPage() {
 
       {/* Chat / agent output (center, primary focus) */}
       <HudCard className="flex-1 overflow-y-auto">
+        {/* Live tool call traces (fly in from the right when agent invokes tools) */}
+        <ToolCallTraceList sessionId={sessionId ?? undefined} />
         {messages.length === 0 ? (
           <Reticle>
             <h3 className="text-lg font-[Orbitron] text-[var(--accent)] tracking-widest uppercase mb-2">

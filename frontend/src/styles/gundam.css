@@ -525,3 +525,58 @@
   box-shadow: 0 0 6px var(--success);
   animation: gundam-pulse-dot 1.5s ease-in-out infinite;
 }
+
+/* ===========================================================================
+ * Tool Call Trace — fly-in holographic panels for live agent activity
+ *
+ * The panel:
+ *   - Enters from the right (translateX(60vw) → 0, opacity 0 → 1, 250ms)
+ *   - Has a rotating spinner ring while the tool is running
+ *   - Switches color + label on completion
+ *   - Collapses (height + opacity → 0) 1.5s after completion
+ * ========================================================================== */
+
+.tool-trace {
+  position: relative;
+  padding: 8px 10px;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 4px;
+  background: rgba(0, 20, 30, 0.6);
+  backdrop-filter: blur(4px);
+  font-size: 10px;
+  animation: toolTraceFlyIn 0.25s cubic-bezier(0.4, 0, 0.2, 1) both;
+  overflow: hidden;
+}
+.tool-trace-collapsed {
+  animation: toolTraceCollapse 0.4s ease-in forwards;
+}
+.tool-trace-spinner {
+  animation: toolTraceSpinner 0.8s linear infinite;
+}
+@keyframes toolTraceFlyIn {
+  0% {
+    opacity: 0;
+    transform: translateX(60vw);
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes toolTraceSpinner {
+  to { transform: rotate(360deg); }
+}
+@keyframes toolTraceCollapse {
+  0%   { opacity: 1; max-height: 80px; padding: 8px 10px; margin-top: 0; }
+  100% { opacity: 0; max-height: 0;   padding: 0 10px;   margin-top: -8px; }
+}
+
+/* Stagger list children slightly so multiple tools "cascade" in */
+.tool-trace-list > .tool-trace:nth-child(1) { animation-delay: 0ms; }
+.tool-trace-list > .tool-trace:nth-child(2) { animation-delay: 60ms; }
+.tool-trace-list > .tool-trace:nth-child(3) { animation-delay: 120ms; }
+.tool-trace-list > .tool-trace:nth-child(n+4) { animation-delay: 180ms; }
