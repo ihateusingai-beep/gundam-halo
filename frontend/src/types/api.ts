@@ -22,6 +22,9 @@ export interface ProjectSummary {
   status: "active" | "paused" | "archived";
   created_at: string;
   agent_type: string;
+  message_count: number;
+  session_count: number;
+  last_activity_at: string;
 }
 
 export interface ProjectCreate {

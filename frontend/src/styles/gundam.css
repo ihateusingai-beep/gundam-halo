@@ -696,3 +696,102 @@
 .gundam-memory-msg-assistant { border-left-color: var(--success); }
 .gundam-memory-msg-tool { border-left-color: var(--warning); }
 .gundam-memory-msg-system { border-left-color: var(--text-muted); opacity: 0.7; }
+
+/* ===========================================================================
+ * Project Card — mobile-suit-style status panel for the project list
+ *
+ *  ┌─⌐                                               ¬─┐
+ *  │ project-name                       [●] ACTIVE   │  <- corner brackets
+ *  │ native_react · 3 sess                             │
+ *  │ last: 3m ago                          12 msg     │  <- meta row
+ *  │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  <- energy bar
+ *  └─────────────────────────────────────────────────┘
+ * ========================================================================== */
+
+.gundam-project-card {
+  position: relative;
+  display: block;
+  padding: 8px 12px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: linear-gradient(135deg,
+    rgba(0, 212, 255, 0.04) 0%,
+    rgba(0, 0, 0, 0.25) 100%);
+  backdrop-filter: blur(4px);
+  text-decoration: none;
+  transition: all 0.2s ease;
+  overflow: hidden;
+}
+/* Corner brackets — top-left and bottom-right */
+.gundam-project-card::before,
+.gundam-project-card::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--border-color);
+  opacity: 0.6;
+  transition: all 0.2s ease;
+}
+.gundam-project-card::before {
+  top: -1px;
+  left: -1px;
+  border-right: none;
+  border-bottom: none;
+}
+.gundam-project-card::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: none;
+  border-top: none;
+}
+
+.gundam-project-card:hover {
+  border-color: var(--accent);
+  background: linear-gradient(135deg,
+    rgba(0, 212, 255, 0.1) 0%,
+    rgba(0, 0, 0, 0.25) 100%);
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.2);
+  transform: translateY(-1px);
+}
+.gundam-project-card:hover::before,
+.gundam-project-card:hover::after {
+  border-color: var(--accent);
+  opacity: 1;
+  width: 16px;
+  height: 16px;
+}
+
+.gundam-project-card-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.15);
+  animation: projectCardPulse 3s ease-in-out infinite;
+}
+@keyframes projectCardPulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(0, 212, 255, 0.12); }
+  50%      { box-shadow: 0 0 14px rgba(0, 212, 255, 0.28); }
+}
+
+.gundam-project-card-archived {
+  opacity: 0.55;
+  filter: saturate(0.4);
+}
+
+.gundam-project-card-current {
+  border-color: var(--accent);
+  background: linear-gradient(135deg,
+    rgba(0, 212, 255, 0.12) 0%,
+    rgba(0, 0, 0, 0.3) 100%);
+  box-shadow: 0 0 14px rgba(0, 212, 255, 0.3);
+}
+.gundam-project-card-current::before,
+.gundam-project-card-current::after {
+  border-color: var(--accent);
+  opacity: 1;
+  width: 18px;
+  height: 18px;
+}
+
+.gundam-status-pulse {
+  animation: gundam-pulse-dot 1.8s ease-in-out infinite;
+}

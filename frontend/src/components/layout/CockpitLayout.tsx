@@ -6,6 +6,7 @@ import { HudCard } from "@/components/gundam/HudCard";
 import { Gauge } from "@/components/gundam/Gauge";
 import { ConnectionStatus } from "@/components/gundam/ConnectionStatus";
 import { MissionLog } from "@/components/gundam/MissionLog";
+import { ProjectCard } from "@/components/gundam/ProjectCard";
 import { useProjectsStore } from "@/stores/projects";
 import { useSystemStore } from "@/stores/system";
 import { useWsEvent, useWsStatus } from "@/lib/ws";
@@ -124,36 +125,16 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
             <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
               Projects
             </h2>
-            <ul className="space-y-2 text-sm">
+            <div className="space-y-2">
               {projects.length === 0 && (
-                <li className="text-[var(--text-muted)] text-xs">No projects yet</li>
+                <div className="text-[var(--text-muted)] text-xs text-center py-3">
+                  No projects yet
+                </div>
               )}
               {projects.map((p) => (
-                <li key={p.name}>
-                  <Link
-                    to={`/projects/${p.name}`}
-                    className={`flex items-center justify-between px-2 py-1 rounded hover:bg-[var(--bg-elevated)] ${
-                      location.pathname === `/projects/${p.name}`
-                        ? "text-[var(--accent)]"
-                        : "text-[var(--text-secondary)]"
-                    }`}
-                  >
-                    <span>{p.name}</span>
-                    <span
-                      className={`text-[10px] uppercase ${
-                        p.status === "active"
-                          ? "text-[var(--success)]"
-                          : p.status === "archived"
-                          ? "text-[var(--text-muted)]"
-                          : "text-[var(--warning)]"
-                      }`}
-                    >
-                      {p.status === "active" ? "●" : p.status}
-                    </span>
-                  </Link>
-                </li>
+                <ProjectCard key={p.name} project={p} />
               ))}
-            </ul>
+            </div>
           </HudCard>
 
           <HudCard>

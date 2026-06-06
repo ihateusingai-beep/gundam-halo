@@ -22,6 +22,10 @@ class ProjectSummary(BaseModel):
     status: str  # active | paused | archived
     created_at: str
     agent_type: str = "native_react"
+    # Aggregated from on-disk session files (conversations/*.json)
+    message_count: int = 0
+    session_count: int = 0
+    last_activity_at: str = ""
 
 
 class ProjectCreate(BaseModel):
@@ -41,6 +45,9 @@ def _list_projects() -> List[ProjectSummary]:
     if not projects_dir.exists():
         return []
 
+    # Lazy import to avoid circular at module load
+    from app.projects import persistence
+
     out: List[ProjectSummary] = []
     for entry in sorted(projects_dir.iterdir()):
         if not entry.is_dir():
@@ -54,12 +61,25 @@ def _list_projects() -> List[ProjectSummary]:
             with open(project_toml, "rb") as f:
                 data = tomllib.load(f)
             proj = data.get("project", {})
+
+            # Aggregate session stats from disk (cheap — just reads the summary files)
+            sessions = persistence.scan_project_sessions(proj.get("name", entry.name))
+            message_count = sum(s.message_count for s in sessions)
+            last_activity = ""
+            for s in sessions:
+                ts = s.updated_at or s.created_at
+                if ts and ts > last_activity:
+                    last_activity = ts
+
             out.append(
                 ProjectSummary(
                     name=proj.get("name", entry.name),
                     status=proj.get("status", "active"),
                     created_at=proj.get("created_at", ""),
                     agent_type=proj.get("agent_type", "native_react"),
+                    message_count=message_count,
+                    session_count=len(sessions),
+                    last_activity_at=last_activity,
                 )
             )
         except Exception as e:
@@ -108,6 +128,9 @@ description = "{payload.description}"
         status="active",
         created_at=now,
         agent_type=payload.agent_type,
+        message_count=0,
+        session_count=0,
+        last_activity_at="",
     )
 
 
@@ -125,11 +148,24 @@ async def get_project(name: str) -> ProjectSummary:
         data = tomllib.load(f)
     proj = data.get("project", {})
 
+    # Aggregate session stats (same logic as list)
+    from app.projects import persistence
+    sessions = persistence.scan_project_sessions(name)
+    message_count = sum(s.message_count for s in sessions)
+    last_activity = ""
+    for s in sessions:
+        ts = s.updated_at or s.created_at
+        if ts and ts > last_activity:
+            last_activity = ts
+
     return ProjectSummary(
         name=proj.get("name", name),
         status=proj.get("status", "active"),
         created_at=proj.get("created_at", ""),
         agent_type=proj.get("agent_type", "native_react"),
+        message_count=message_count,
+        session_count=len(sessions),
+        last_activity_at=last_activity,
     )
 
 
@@ -172,6 +208,9 @@ async def archive_project(name: str) -> ProjectSummary:
         status="archived",
         created_at="",
         agent_type="native_react",
+        message_count=0,
+        session_count=0,
+        last_activity_at="",
     )
 
 
