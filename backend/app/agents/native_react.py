@@ -103,6 +103,13 @@ class NativeReActAgent(BaseAgent):
                 )
 
             all_messages.append(response)
+            # The assistant's tool-calling message MUST also be appended to
+            # `messages` so the next turn's payload includes the
+            # assistant+tool pair (OpenAI / MiniMax require each tool
+            # result to be preceded by the assistant message that requested
+            # the tool). Without this, the next chat.completions call
+            # returns 400 "tool result's tool id not found".
+            messages.append(response)
 
             # If no tool calls → final answer
             if not response.tool_calls:

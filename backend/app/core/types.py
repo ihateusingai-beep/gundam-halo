@@ -51,7 +51,11 @@ class Message:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to OpenAI-compatible message dict."""
-        d: Dict[str, Any] = {"role": self.role.value, "content": self.content}
+        # `role` may be a Role enum (preferred) OR a raw str that snuck in
+        # via `_parse_assistant_message` (which forwards msg.role as-is
+        # from the OpenAI SDK). Normalize both to a plain str.
+        role_str = self.role.value if hasattr(self.role, "value") else str(self.role)
+        d: Dict[str, Any] = {"role": role_str, "content": self.content}
         if self.tool_calls:
             d["tool_calls"] = [
                 {

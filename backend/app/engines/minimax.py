@@ -46,8 +46,12 @@ def _parse_assistant_message(response: ChatCompletion) -> Message:
                 )
             )
 
+    # Normalize role to the Role enum (msg.role is a raw str from the
+    # OpenAI SDK; downstream Message.to_dict() assumes an enum value).
+    from app.core.types import Role
+
     return Message(
-        role=msg.role,
+        role=Role(msg.role),
         content=msg.content or "",
         tool_calls=tool_calls,
     )
