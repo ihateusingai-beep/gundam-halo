@@ -44,6 +44,17 @@ dev = [
     "ruff>=0.4",
     "respx>=0.22",                   # for mocking httpx in tests
 ]
+voice = [
+    # M1: VAD + ASR
+    "onnxruntime>=1.17",             # Silero VAD inference
+    "numpy>=1.26,<3",                # Audio array processing
+    "openai-whisper>=20231117",      # Local Whisper ASR
+    # M2: TTS (sentence splitting + Edge TTS)
+    "edge-tts>=7.0",                 # Microsoft Edge TTS (free, no API key)
+    "pysbd>=0.3.4",                  # Sentence boundary detection
+    # ffmpeg must be installed system-wide for whisper to decode WAV
+    # (run: brew install ffmpeg)
+]
 signal = [
     # signal-cli daemon client (TBD — v2)
 ]

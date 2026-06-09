@@ -73,8 +73,14 @@ class NativeReActAgent(BaseAgent):
                 Message(role=Role.USER, content=input)
             ]
         else:
+            # M7-Phase-2: augment the system prompt with identity + memory
+            # recall so the agent knows who it's talking to and what it
+            # remembers about them.
+            from app.agents.system_prompt import build_system_prompt
+
+            system = build_system_prompt(REACT_SYSTEM_PROMPT, context=context)
             messages: List[Message] = [
-                Message(role=Role.SYSTEM, content=REACT_SYSTEM_PROMPT),
+                Message(role=Role.SYSTEM, content=system),
                 Message(role=Role.USER, content=input),
             ]
         all_messages: List[Message] = list(messages)
@@ -131,7 +137,17 @@ class NativeReActAgent(BaseAgent):
                     ok = False
                 else:
                     try:
-                        observation = await tool.run(**tc.arguments)
+                        # M7-Phase-2: thread the user context into the tool
+                        # call so tools like memory_read/write can resolve
+                        # which user this is. We pass display_name /
+                        # transport_id; tools that don't care ignore them.
+                        call_kwargs = dict(tc.arguments or {})
+                        if context is not None:
+                            if context.user_display_name and "display_name" not in call_kwargs:
+                                call_kwargs["display_name"] = context.user_display_name
+                            if context.user_id and "transport_id" not in call_kwargs:
+                                call_kwargs["transport_id"] = context.user_id
+                        observation = await tool.run(**call_kwargs)
                         ok = True
                     except Exception as e:
                         logger.error(f"Tool {tc.name} error: {e}")

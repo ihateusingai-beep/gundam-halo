@@ -9,8 +9,11 @@ from app.tools._stubs import BaseTool
 from app.tools.file_read import FileReadTool
 from app.tools.file_write import FileWriteTool
 from app.tools.mavis_delegate import MavisDelegateTool
+from app.tools.memory import MemoryReadTool, MemoryWriteTool
 from app.tools.open_app import OpenAppTool
 from app.tools.shell_exec import ShellExecTool
+from app.tools.weather import WeatherTool
+from app.tools.web_fetch import WebFetchTool
 
 
 def default_tools() -> list[BaseTool]:
@@ -21,6 +24,12 @@ def default_tools() -> list[BaseTool]:
         ShellExecTool(),
         OpenAppTool(),
         MavisDelegateTool(),
+        # M7-Phase-1: web tools
+        WebFetchTool(),
+        WeatherTool(),
+        # M7-Phase-2: per-user memory
+        MemoryReadTool(),
+        MemoryWriteTool(),
     ]
 
 

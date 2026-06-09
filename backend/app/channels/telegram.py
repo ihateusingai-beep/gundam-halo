@@ -5,6 +5,14 @@ Two modes:
 - **dry-run**: simulates message receipt (for development / tests / no token)
 
 Configured via `cfg.telegram.bot_token`. If empty → dry-run mode.
+
+Message flow (M4+):
+1. Inbound message → auth check (whitelisted chat_ids)
+2. If it starts with `cfg.telegram.command_prefix` (`/` by default) →
+   strip the prefix and run `handle_command()`.
+3. Otherwise → dispatch to the channel handler (set via
+   `ChannelManager.set_handler("telegram", telegram_handler)`).
+4. If a reply is produced, send it back to the user.
 """
 
 from __future__ import annotations
@@ -13,6 +21,7 @@ import logging
 from typing import Any, Optional
 
 from app.channels.base import BaseChannel, ChannelHandler
+from app.channels.telegram_handler import handle_command
 from app.core.config import get_config
 from app.core.registry import ChannelRegistry
 from app.core.events import EventType, get_event_bus
@@ -157,7 +166,16 @@ class TelegramChannel(BaseChannel):
     async def _handle_incoming(
         self, chat_id: str, text: str, sender_name: str = ""
     ) -> None:
-        """Authenticate + dispatch an incoming message."""
+        """Authenticate + dispatch an incoming message.
+
+        Order:
+        1. Auth: chat_id must be in `allowed_chat_ids` (if set).
+        2. Ensure a session exists for this chat (so `/status`,
+           `/new`, etc. work even on the very first message).
+        3. If text starts with the command prefix, run a command.
+        4. Otherwise dispatch to the registered handler.
+        5. Send any reply back to the user.
+        """
         # Auth: check chat_id is in allowed list
         if self._allowed_chat_ids and int(chat_id) not in self._allowed_chat_ids:
             logger.warning(
@@ -169,6 +187,29 @@ class TelegramChannel(BaseChannel):
             EventType.CHANNEL_MESSAGE_RECEIVED,
             {"channel": "telegram", "sender": chat_id, "length": len(text)},
         )
+
+        # Ensure a session exists for this chat BEFORE command dispatch
+        # — so `/status` works on first contact, `/new` always
+        # succeeds, and downstream tools that look up the session by
+        # chat_id see a real entry.
+        from app.channels.telegram_session import get_telegram_session_manager
+        try:
+            get_telegram_session_manager().get_or_create(chat_id)
+        except Exception as e:
+            logger.warning(f"Could not ensure session for {chat_id}: {e}")
+
+        # Command interception (M4+)
+        prefix = self._command_prefix or "/"
+        stripped = text.strip()
+        if stripped.startswith(prefix):
+            command_word = stripped[len(prefix):].split()[0] if stripped[len(prefix):] else ""
+            command_response = await handle_command(command_word, chat_id)
+            if command_response is not None:
+                await self.send(chat_id, command_response)
+                return
+            # Unrecognized command — fall through to handler so the
+            # agent can decide what to do (e.g. tell the user the
+            # command doesn't exist).
 
         # Dispatch to handler (which routes to the agent)
         response = await self._dispatch_message(chat_id, text)

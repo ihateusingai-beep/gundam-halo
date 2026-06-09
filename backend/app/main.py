@@ -55,9 +55,22 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     for reg in [AgentRegistry, ChannelRegistry, EngineRegistry, ToolRegistry]:
         logger.debug(f"Registry ready: {reg.__name__}")
 
+    # Tool → Live2D motion mapper (M3-B4). Translates TOOL_CALL_START/END
+    # into LIVE2D_TOOL_TRIGGER so the cockpit avatar reacts to agent actions
+    # in real time, even when the user isn't speaking.
+    from app.voice.live2d.tool_motion_mapper import ToolMotionMapper
+    tool_motion_mapper = ToolMotionMapper(bus=bus)
+    tool_motion_mapper.start()
+
     # Start all enabled channels (Telegram in dry-run if no token)
     from app.channels.manager import get_channel_manager
+    from app.channels.telegram_handler import telegram_handler
     manager = get_channel_manager()
+
+    # Wire the Telegram handler BEFORE start_all so the channel has
+    # a callback to route messages through. If the channel is
+    # disabled in config, the handler is unused but harmlessly set.
+    manager.set_handler("telegram", telegram_handler)
     await manager.start_all()
 
     # Index on-disk sessions for the API to know about
@@ -68,6 +81,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     # Shutdown
     logger.info("Gundam Halo shutting down")
+    tool_motion_mapper.stop()
     await manager.stop_all()
     reset_event_bus()
 
@@ -98,7 +112,7 @@ def create_app() -> FastAPI:
     )
 
     # Mount routes
-    from app.api import health, projects, sessions, mac, system, channels as channels_api, ws as ws_api, settings as settings_api
+    from app.api import health, projects, sessions, mac, system, channels as channels_api, ws as ws_api, settings as settings_api, secrets as secrets_api, memory as memory_api
     from app.tools.builder import default_tools
 
     # Import agents so they register themselves (side-effect of @register decorator)
@@ -111,9 +125,12 @@ def create_app() -> FastAPI:
     logger.debug(f"Registered channels: {list(ChannelRegistry.keys())}")
 
     # Register default tools in the ToolRegistry (so they're discoverable
-    # even though we typically pass them explicitly to agents)
+    # even though we typically pass them explicitly to agents). Guarded
+    # against duplicate registration because tests call create_app()
+    # multiple times.
     for tool in default_tools():
-        ToolRegistry.register_value(tool.name, tool)
+        if not ToolRegistry.contains(tool.name):
+            ToolRegistry.register_value(tool.name, tool)
     logger.debug(f"Registered {len(default_tools())} default tools")
 
     halo_app.include_router(health.router, prefix="/health", tags=["health"])
@@ -124,6 +141,17 @@ def create_app() -> FastAPI:
     halo_app.include_router(channels_api.router, prefix="/api/channels", tags=["channels"])
     halo_app.include_router(ws_api.router, tags=["websocket"])
     halo_app.include_router(settings_api.router, prefix="/api", tags=["settings"])
+    halo_app.include_router(secrets_api.router, prefix="/api/secrets", tags=["secrets"])
+    halo_app.include_router(memory_api.router, prefix="/api/memory", tags=["memory"])
+
+    # Voice layer (M1) — only mount if enabled in config
+    if get_config().voice.enabled:
+        from app.api import voice_ws
+
+        halo_app.include_router(voice_ws.router, tags=["voice"])
+        logger.info("Voice layer mounted at /ws/voice")
+    else:
+        logger.info("Voice layer disabled (set voice.enabled=true in config.toml)")
 
     return halo_app
 

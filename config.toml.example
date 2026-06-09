@@ -1,0 +1,101 @@
+# Gundam Halo — config.toml example
+#
+# Copy to ~/.gundam-halo/config.toml and edit. The backend reads this
+# at startup. Environment variables (HALO_HOME, MINIMAX_API_KEY, etc.)
+# override individual fields.
+
+# ---------------------------------------------------------------------------
+# User
+# ---------------------------------------------------------------------------
+[user]
+name = "Ken"
+default_theme = "gundam-ntd"   # 8 themes available; see docs/ARCHITECTURE.md
+
+# ---------------------------------------------------------------------------
+# LLM (brain)
+# ---------------------------------------------------------------------------
+[llm]
+provider = "minimax"
+api_key_env = "MINIMAX_API_KEY"     # read from env, NEVER stored in TOML
+base_url = "https://api.MiniMax.chat/v1"
+default_model = "MiniMax-M3"
+fallback_model = "MiniMax-M2"
+
+# ---------------------------------------------------------------------------
+# Server
+# ---------------------------------------------------------------------------
+[server]
+host = "0.0.0.0"
+port = 8765                        # bound, but only reachable via Tailscale
+log_level = "INFO"                  # DEBUG / INFO / WARNING / ERROR
+require_tailscale = true            # reject non-Tailscale connections
+tailscale_hostname = "gundam-halo"
+
+# ---------------------------------------------------------------------------
+# Mac control pane (security-sensitive — default-deny)
+# ---------------------------------------------------------------------------
+[mac]
+default_path_policy = "project_only"   # project_only | user_home | allowlist
+shell_allowlist = [
+    "git", "ls", "cat", "head", "tail",
+    "grep", "rg", "find", "fd",
+    "pwd", "cd", "echo", "date",
+    "open",                            # `open <app>`
+]
+file_read_paths = ["~/Documents", "~/Downloads", "~/workspace", "/tmp"]
+file_write_paths = ["~/workspace", "~/.gundam-halo/projects"]
+a11y_enabled = false
+apple_script_enabled = true
+notifications_enabled = true
+
+# ---------------------------------------------------------------------------
+# Channels
+# ---------------------------------------------------------------------------
+[channels.telegram]
+enabled = false                      # set true to enable
+bot_token = ""                        # or set GUNDAM_HALO_TG_TOKEN env var
+# Whitelist chat_ids that can message the bot. Get yours by
+# messaging @userinfobot on Telegram. Empty = accept any (NOT for prod).
+allowed_chat_ids = [123456789]
+command_prefix = "/"                  # default
+
+# ---------------------------------------------------------------------------
+# Voice layer (M1-M3 — see docs/ARCHITECTURE.md §15)
+# ---------------------------------------------------------------------------
+[voice]
+enabled = false                       # set true to enable voice
+sample_rate = 16000
+frame_duration_ms = 250
+
+[voice.vad]
+backend = "silero"                    # silero v5
+speech_threshold_start = 0.5
+speech_threshold_end = 0.35
+min_speech_ms = 250
+min_silence_ms = 700
+
+[voice.asr]
+backend = "faster_whisper"            # local Whisper
+model_size = "base"                   # tiny/base/small/medium/large
+device = "auto"                       # auto | cpu | mps (Apple Silicon)
+
+[voice.tts]
+backend = "edge"                      # edge (free) | pyttsx3 (offline)
+voice = "zh-HK-HiuMaanNeural"         # Cantonese-leaning
+# See: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support
+# Common voices: zh-CN-XiaoxiaoNeural, en-US-JennyNeural, ja-JP-NanamiNeural
+
+[voice.live2d]
+enabled = true
+theme = "ntd"                         # ntd | seedfreedom | ... (more later)
+default_emotion = "calm"
+# Path to a Cubism .model3.json (leave empty to use the CSS avatar fallback)
+model_path = ""
+
+# ---------------------------------------------------------------------------
+# Security
+# ---------------------------------------------------------------------------
+[security]
+audit_log = "~/.gundam-halo/logs/audit.log"
+audit_max_size_mb = 100
+injection_scan = true                 # scan inbound text for prompt injection

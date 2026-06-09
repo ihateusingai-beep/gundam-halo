@@ -79,6 +79,11 @@ class AgentContext:
     session_id: str
     user_id: Optional[str] = None
     channel: Optional[str] = None  # "telegram" | "web" | None
+    # Human-readable name (M7-Phase-2). Used in the system prompt so the
+    # agent knows who it's talking to. For Telegram this comes from
+    # `channels.telegram.display_names[chat_id]` if set, else the
+    # sender's first_name / chat title. For other channels TBD.
+    user_display_name: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
 

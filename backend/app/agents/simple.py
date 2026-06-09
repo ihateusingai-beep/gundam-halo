@@ -38,8 +38,14 @@ class SimpleAgent(BaseAgent):
                 Message(role=Role.USER, content=input)
             ]
         else:
+            # M7-Phase-2: augment the system prompt with identity + memory
+            # recall so the agent knows who it's talking to and what it
+            # remembers about them.
+            from app.agents.system_prompt import build_system_prompt
+
+            system = build_system_prompt(SIMPLE_SYSTEM_PROMPT, context=context)
             messages = [
-                Message(role=Role.SYSTEM, content=SIMPLE_SYSTEM_PROMPT),
+                Message(role=Role.SYSTEM, content=system),
                 Message(role=Role.USER, content=input),
             ]
 

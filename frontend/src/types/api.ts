@@ -195,6 +195,23 @@ export interface Settings {
   security: SettingsSecurity;
 }
 
+// M7-Phase-2: user memory API types
+export interface MemoryEntry {
+  key: string;
+  value: string;
+  updated_at: number;
+  created_at: number;
+}
+
+export interface MemoryUserList {
+  users: string[];
+}
+
+export interface MemoryUserEntries {
+  user: string;
+  entries: MemoryEntry[];
+}
+
 export interface AuditEntry {
   id: string;
   ts: string;

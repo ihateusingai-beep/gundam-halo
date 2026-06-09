@@ -231,6 +231,57 @@
   transition: width 0.5s ease-out;
 }
 
+/* === GUNDAM SLIDER (range input) === */
+[data-theme^="gundam-"] .gundam-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--gundam-slider-fill, 25%),
+    var(--bg-input) var(--gundam-slider-fill, 25%),
+    var(--bg-input) 100%
+  );
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  transition: background 0.15s ease-out;
+}
+[data-theme^="gundam-"] .gundam-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-card);
+  box-shadow: 0 0 8px var(--accent-glow);
+  cursor: pointer;
+  transition: transform 0.1s ease-out, box-shadow 0.15s ease-out;
+}
+[data-theme^="gundam-"] .gundam-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 14px var(--accent);
+}
+[data-theme^="gundam-"] .gundam-slider::-webkit-slider-thumb:active {
+  transform: scale(1.1);
+}
+[data-theme^="gundam-"] .gundam-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-card);
+  box-shadow: 0 0 8px var(--accent-glow);
+  cursor: pointer;
+}
+[data-theme^="gundam-"] .gundam-slider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 [data-theme^="gundam-"] .gundam-gauge-v {
   display: flex;
   flex-direction: column;
@@ -355,175 +406,6 @@
   [data-theme^="gundam-"] .gundam-cockpit-vignette::before {
     animation: none;
   }
-}
-
-/* ===========================================================================
- * Cockpit Frame — outer chrome for the dashboard
- *
- * Layered structure (bottom to top):
- *   1. Background image (psychoframe JPGs) — controlled by [data-bg="..."] on <html>
- *   2. Hex grid overlay (from .gundam-hex-bg)
- *   3. Vignette (CRT edge darkening) — .gundam-cockpit-vignette::before
- *   4. Top scan line — .gundam-scan
- *   5. 4 corner brackets — .gundam-frame-corner-{tl,tr,bl,br}
- *   6. Content
- *
- * Backgrounds are purely opt-in: default to the hex grid (no JPG).
- * ========================================================================== */
-
-.gundam-cockpit-frame {
-  position: relative;
-  min-height: 100vh;
-  background: linear-gradient(
-    135deg,
-    rgba(0, 212, 255, 0.08) 0%,
-    rgba(0, 0, 0, 0.3) 50%,
-    rgba(255, 105, 180, 0.05) 100%
-  );
-  border: 1px solid var(--border-color);
-  box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.05),
-    inset 0 -1px 3px rgba(0, 0, 0, 0.4),
-    0 0 20px var(--accent-glow);
-  overflow: hidden;
-}
-/* Lift children above the background image and vignette */
-.gundam-cockpit-frame > * { position: relative; z-index: 1; }
-
-/* Optional background image layer — sits behind everything */
-.gundam-cockpit-bg {
-  position: absolute;
-  inset: 0;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  opacity: 0.35;
-  z-index: 0;
-  pointer-events: none;
-  filter: hue-rotate(-5deg) saturate(1.1);
-  transition: opacity 0.6s ease-in-out;
-}
-[data-bg="core-01"] .gundam-cockpit-bg { background-image: url('/gundam-assets/backgrounds/bg-unicorn-core-01.jpg'); }
-[data-bg="core-02"] .gundam-cockpit-bg { background-image: url('/gundam-assets/backgrounds/bg-unicorn-core-02.jpg'); }
-[data-bg="core-03"] .gundam-cockpit-bg { background-image: url('/gundam-assets/backgrounds/bg-unicorn-core-03.jpg'); opacity: 0.45; }
-[data-bg="core-04"] .gundam-cockpit-bg { background-image: url('/gundam-assets/backgrounds/bg-unicorn-core-04.jpg'); opacity: 0.4; }
-
-/* CRT vignette — radial darkening at edges */
-.gundam-cockpit-vignette {
-  position: relative;
-}
-.gundam-cockpit-vignette::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: radial-gradient(
-    ellipse at center,
-    transparent 50%,
-    rgba(0, 0, 0, 0.4) 100%
-  );
-  pointer-events: none;
-  z-index: 5;
-  animation: gundamVignetteBreath 8s ease-in-out infinite;
-}
-@keyframes gundamVignetteBreath {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.85; }
-}
-
-/* Top scan line — moves vertically down across the screen */
-.gundam-scan {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  box-shadow: 0 0 8px var(--accent);
-  animation: scanningLine 4s linear infinite;
-  pointer-events: none;
-  z-index: 9997;
-  opacity: 0.7;
-}
-@keyframes scanningLine {
-  0%   { transform: translateY(-10vh); opacity: 0; }
-  10%  { opacity: 0.9; }
-  90%  { opacity: 0.9; }
-  100% { transform: translateY(110vh); opacity: 0; }
-}
-
-/* Corner brackets — 4 L-shaped accents on the cockpit frame */
-.gundam-frame-corner {
-  position: fixed;
-  width: 48px;
-  height: 48px;
-  pointer-events: none;
-  z-index: 9996;
-  opacity: 0.85;
-}
-.gundam-frame-corner::before,
-.gundam-frame-corner::after {
-  content: '';
-  position: absolute;
-  background: var(--accent);
-  box-shadow: 0 0 6px var(--accent);
-}
-.gundam-frame-corner-tl { top: 8px; left: 8px; }
-.gundam-frame-corner-tl::before { top: 0; left: 0; width: 24px; height: 2px; }
-.gundam-frame-corner-tl::after  { top: 0; left: 0; width: 2px; height: 24px; }
-.gundam-frame-corner-tr { top: 8px; right: 8px; }
-.gundam-frame-corner-tr::before { top: 0; right: 0; width: 24px; height: 2px; }
-.gundam-frame-corner-tr::after  { top: 0; right: 0; width: 2px; height: 24px; }
-.gundam-frame-corner-bl { bottom: 8px; left: 8px; }
-.gundam-frame-corner-bl::before { bottom: 0; left: 0; width: 24px; height: 2px; }
-.gundam-frame-corner-bl::after  { bottom: 0; left: 0; width: 2px; height: 24px; }
-.gundam-frame-corner-br { bottom: 8px; right: 8px; }
-.gundam-frame-corner-br::before { bottom: 0; right: 0; width: 24px; height: 2px; }
-.gundam-frame-corner-br::after  { bottom: 0; right: 0; width: 2px; height: 24px; }
-
-/* "GUNDAM HALO" wordmark in top-left of frame */
-.gundam-frame-brand {
-  position: fixed;
-  top: 14px;
-  left: 70px;
-  z-index: 9996;
-  pointer-events: none;
-  font-family: 'Orbitron', sans-serif;
-  font-size: 11px;
-  letter-spacing: 0.3em;
-  color: var(--accent);
-  text-shadow: 0 0 8px var(--accent);
-  opacity: 0.75;
-}
-.gundam-frame-brand::before {
-  content: '◢ ';
-  color: var(--accent-secondary);
-  margin-right: 4px;
-}
-
-/* "SYSTEMS ONLINE" indicator in top-right of frame */
-.gundam-frame-status {
-  position: fixed;
-  top: 14px;
-  right: 70px;
-  z-index: 9996;
-  pointer-events: none;
-  font-family: 'Rajdhani', sans-serif;
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.gundam-frame-status::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  box-shadow: 0 0 6px var(--success);
-  animation: gundam-pulse-dot 1.5s ease-in-out infinite;
 }
 
 /* ===========================================================================
@@ -794,4 +676,580 @@
 
 .gundam-status-pulse {
   animation: gundam-pulse-dot 1.8s ease-in-out infinite;
+}
+/* === NT-D CSS AVATAR === */
+/* Pure CSS/SVG avatar — replaces Live2D canvas when no model loaded */
+
+@keyframes psychoframe-pulse {
+  0%, 100% { opacity: 0.4; filter: blur(0px); }
+  50% { opacity: 1; filter: blur(1px); }
+}
+
+@keyframes eye-blink {
+  0%, 90%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
+
+@keyframes eye-glow {
+  0%, 100% { box-shadow: 0 0 4px 1px var(--accent); }
+  50% { box-shadow: 0 0 12px 4px var(--accent); }
+}
+
+@keyframes scan-sweep {
+  0% { transform: translateY(-100%); opacity: 0; }
+  10% { opacity: 0.8; }
+  90% { opacity: 0.8; }
+  100% { transform: translateY(200%); opacity: 0; }
+}
+
+@keyframes antenna-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@keyframes face-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-2px); }
+  40% { transform: translateX(2px); }
+  60% { transform: translateX(-1px); }
+  80% { transform: translateX(1px); }
+}
+
+@keyframes face-shake-heavy {
+  0%, 100% { transform: translateX(0) translateY(0); }
+  15% { transform: translateX(-4px) translateY(1px); }
+  30% { transform: translateX(4px) translateY(-1px); }
+  45% { transform: translateX(-3px) translateY(2px); }
+  60% { transform: translateX(3px) translateY(-2px); }
+  75% { transform: translateX(-2px) translateY(1px); }
+  90% { transform: translateX(2px); }
+}
+
+@keyframes resolve-glow {
+  0%, 100% { box-shadow: 0 0 8px 2px rgba(0, 212, 255, 0.5); }
+  50% { box-shadow: 0 0 20px 6px rgba(0, 212, 255, 0.9), 0 0 40px 10px rgba(0, 212, 255, 0.3); }
+}
+
+@keyframes stealth-flicker {
+  0%, 70%, 100% { opacity: 1; }
+  75% { opacity: 0.2; }
+  80% { opacity: 0.8; }
+  85% { opacity: 0.3; }
+  90% { opacity: 1; }
+}
+
+@keyframes jubilant-bounce {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-6px); }
+  50% { transform: translateY(-2px); }
+  70% { transform: translateY(-4px); }
+}
+
+@keyframes alert-scan {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(180deg); }
+}
+
+/* ---- Base Avatar ---- */
+.avatar {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: all 0.3s ease;
+}
+
+/* === IDLE ANIMATIONS (M7-Phase-0) ===
+ * Subtle motion when no emotion is active — breath, scan-sweep,
+ * and intermittent eye double-blink so the avatar feels alive
+ * even in the "calm" / default state. Intensity is low so it
+ * doesn't compete with active tool-call animations.
+ */
+@keyframes avatar-idle-breath {
+  0%, 100% { transform: scale(1) translateY(0); }
+  50%      { transform: scale(1.008) translateY(-1px); }
+}
+@keyframes avatar-idle-scan {
+  0%   { transform: translateX(-100%); opacity: 0; }
+  10%  { opacity: 0.5; }
+  90%  { opacity: 0.5; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+@keyframes avatar-idle-blink {
+  0%, 92%, 96%, 100% { transform: scaleY(1); }
+  94%                 { transform: scaleY(0.05); }
+}
+@keyframes avatar-idle-glow {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 0.7; }
+}
+
+/* Apply idle motion only when the avatar is in "calm" (no other
+ * emotion is active — those states have their own animations
+ * and overriding them would conflict). */
+.avatar--calm {
+  animation: avatar-idle-breath 4.2s ease-in-out infinite,
+             avatar-idle-glow 3s ease-in-out infinite;
+}
+.avatar--calm .avatar__head {
+  /* Slight Y-axis bob from the breath is inherited; we add a faint
+   * random-feeling scan line that drifts across the face plate. */
+  position: relative;
+  overflow: hidden;
+}
+.avatar--calm .avatar__head::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 212, 255, 0.0) 30%,
+    rgba(0, 212, 255, 0.25) 50%,
+    rgba(0, 212, 255, 0.0) 70%,
+    transparent 100%
+  );
+  pointer-events: none;
+  animation: avatar-idle-scan 7s linear infinite;
+}
+.avatar--calm .avatar__eye {
+  /* Overrides the base eye-blink with a double-blink pattern
+   * (quick + quick), giving the avatar more "personality". */
+  animation: avatar-idle-blink 5.5s steps(1) infinite;
+}
+
+.avatar__frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Corner brackets */
+.avatar__bracket {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-color: var(--accent);
+  border-style: solid;
+  border-width: 0;
+  opacity: 0.7;
+  transition: border-color 0.4s, opacity 0.4s;
+}
+.avatar__bracket--tl { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; }
+.avatar__bracket--tr { top: 0; right: 0; border-top-width: 2px; border-right-width: 2px; }
+.avatar__bracket--bl { bottom: 0; left: 0; border-bottom-width: 2px; border-left-width: 2px; }
+.avatar__bracket--br { bottom: 0; right: 0; border-bottom-width: 2px; border-right-width: 2px; }
+
+/* Scan line overlay */
+.avatar__scan {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 212, 255, 0.08) 50%,
+    transparent 100%
+  );
+  height: 40%;
+  animation: scan-sweep 2.5s linear infinite;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Main face container */
+.avatar__face {
+  position: relative;
+  width: 70px;
+  height: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.3s ease;
+}
+
+/* Head silhouette */
+.avatar__head {
+  position: relative;
+  width: 60px;
+  height: 70px;
+  background: linear-gradient(
+    135deg,
+    rgba(0, 212, 255, 0.12) 0%,
+    rgba(20, 35, 60, 0.9) 50%,
+    rgba(0, 212, 255, 0.08) 100%
+  );
+  border: 1.5px solid rgba(0, 212, 255, 0.4);
+  border-radius: 12px 12px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 8px;
+  gap: 6px;
+  transition: all 0.4s ease;
+  animation: psychoframe-pulse 3s ease-in-out infinite;
+}
+
+/* VFin antenna */
+.avatar__antenna {
+  position: absolute;
+  top: -6px;
+  width: 2px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0.7;
+}
+.avatar__antenna::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: -2px;
+  width: 6px;
+  height: 4px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+.avatar__antenna--left { left: 8px; }
+.avatar__antenna--left::after { left: -2px; }
+.avatar__antenna--right { right: 8px; }
+.avatar__antenna--right::after { right: -2px; }
+
+/* Visor (eyes area) */
+.avatar__visor {
+  display: flex;
+  gap: 10px;
+  width: 46px;
+  justify-content: center;
+}
+
+.avatar__eye {
+  width: 18px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 3px;
+  animation: eye-blink 4s ease-in-out infinite, eye-glow 2s ease-in-out infinite;
+  transition: background 0.3s, width 0.3s, height 0.3s;
+}
+.avatar__eye--left { animation-delay: 0s, 0.3s; }
+.avatar__eye--right { animation-delay: 0.1s, 0.4s; }
+
+/* Mouth */
+.avatar__mouth {
+  width: 20px;
+  height: 3px;
+  background: rgba(0, 212, 255, 0.5);
+  border-radius: 2px;
+  transition: all 0.3s;
+}
+
+/* Psychoframe glow border */
+.avatar__glow {
+  position: absolute;
+  inset: -3px;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  pointer-events: none;
+  transition: all 0.4s;
+}
+
+/* Status label */
+.avatar__status {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: "Orbitron", monospace;
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: rgba(0, 212, 255, 0.4);
+  text-transform: uppercase;
+}
+
+/* ---- Emotion States ---- */
+
+/* CALM — default, slow pulse */
+.avatar--calm .avatar__head {
+  animation: psychoframe-pulse 4s ease-in-out infinite;
+}
+.avatar--calm .avatar__eye {
+  animation: eye-blink 5s ease-in-out infinite, eye-glow 3s ease-in-out infinite;
+}
+.avatar--calm .avatar__antenna {
+  animation: antenna-pulse 3s ease-in-out infinite;
+}
+
+/* FOCUSED — eyes sharpen, slight lean */
+.avatar--focused .avatar__head {
+  animation: none;
+  border-color: rgba(0, 212, 255, 0.7);
+}
+.avatar--focused .avatar__face {
+  transform: translateX(2px) scale(1.05);
+}
+.avatar--focused .avatar__eye {
+  animation: none;
+  width: 20px;
+  height: 8px;
+  background: var(--accent);
+  box-shadow: 0 0 8px 2px var(--accent);
+}
+.avatar--focused .avatar__glow {
+  box-shadow: 0 0 10px 2px rgba(0, 212, 255, 0.3);
+}
+
+/* PSYCHOFRAME (awakening) — pink glow, fast pulse, heavy animation */
+.avatar--psychoframe .avatar__head {
+  animation: psychoframe-pulse 0.8s ease-in-out infinite;
+  border-color: rgba(255, 0, 255, 0.8);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 0, 255, 0.2) 0%,
+    rgba(20, 35, 60, 0.9) 50%,
+    rgba(255, 0, 255, 0.15) 100%
+  );
+}
+.avatar--psychoframe .avatar__eye {
+  animation: eye-blink 1.5s ease-in-out infinite, eye-glow 0.8s ease-in-out infinite;
+  background: #FF00FF;
+  box-shadow: 0 0 8px 2px #FF00FF;
+}
+.avatar--psychoframe .avatar__antenna {
+  background: #FF00FF;
+  animation: antenna-pulse 0.6s ease-in-out infinite;
+}
+.avatar--psychoframe .avatar__antenna::after {
+  background: #FF00FF;
+}
+.avatar--psychoframe .avatar__glow {
+  border-color: rgba(255, 0, 255, 0.5);
+  box-shadow: 0 0 15px 4px rgba(255, 0, 255, 0.3);
+}
+.avatar--psychoframe .avatar__status {
+  color: rgba(255, 0, 255, 0.6);
+}
+.avatar--psychoframe .avatar__bracket {
+  border-color: #FF00FF;
+  opacity: 1;
+}
+
+/* ALERT — fast blink, scan mode */
+.avatar--alert .avatar__head {
+  animation: psychoframe-pulse 1s ease-in-out infinite;
+  border-color: rgba(255, 140, 0, 0.8);
+}
+.avatar--alert .avatar__eye {
+  animation: eye-blink 0.8s ease-in-out infinite, eye-glow 1s ease-in-out infinite;
+  background: #FF8C00;
+  box-shadow: 0 0 6px 2px #FF8C00;
+  width: 14px;
+  height: 10px;
+}
+.avatar--alert .avatar__mouth {
+  width: 12px;
+  height: 6px;
+  background: rgba(255, 140, 0, 0.7);
+  border-radius: 3px;
+}
+.avatar--alert .avatar__antenna {
+  background: #FF8C00;
+  animation: antenna-pulse 0.8s ease-in-out infinite;
+}
+.avatar--alert .avatar__antenna::after { background: #FF8C00; }
+.avatar--alert .avatar__bracket { border-color: #FF8C00; opacity: 0.9; }
+
+/* DAMAGE — shake, glitch, red tint */
+.avatar--damage .avatar__head {
+  animation: face-shake-heavy 0.4s ease-in-out infinite;
+  border-color: rgba(255, 68, 68, 0.9);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 68, 68, 0.15) 0%,
+    rgba(40, 10, 10, 0.9) 50%,
+    rgba(255, 68, 68, 0.1) 100%
+  );
+}
+.avatar--damage .avatar__eye {
+  animation: none;
+  background: #FF4444;
+  box-shadow: 0 0 10px 3px #FF4444;
+  width: 16px;
+  height: 12px;
+  border-radius: 2px;
+}
+.avatar--damage .avatar__mouth {
+  width: 16px;
+  height: 4px;
+  background: rgba(255, 68, 68, 0.6);
+}
+.avatar--damage .avatar__glow {
+  border-color: rgba(255, 68, 68, 0.4);
+  box-shadow: 0 0 12px 3px rgba(255, 68, 68, 0.3);
+}
+.avatar--damage .avatar__bracket { border-color: #FF4444; opacity: 1; }
+.avatar--damage .avatar__status { color: rgba(255, 68, 68, 0.6); }
+
+/* RESOLVE — steady cyan glow, wider eyes */
+.avatar--resolve .avatar__head {
+  animation: resolve-glow 2s ease-in-out infinite;
+  border-color: rgba(0, 212, 255, 0.9);
+}
+.avatar--resolve .avatar__eye {
+  animation: none;
+  background: var(--accent);
+  box-shadow: 0 0 10px 3px var(--accent);
+  width: 22px;
+  height: 12px;
+}
+.avatar--resolve .avatar__mouth {
+  width: 14px;
+  height: 2px;
+  background: rgba(0, 212, 255, 0.6);
+}
+
+/* JUBILANT — bounce, wide smile */
+.avatar--jubilant .avatar__head {
+  animation: jubilant-bounce 1.2s ease-in-out infinite;
+  border-color: rgba(0, 255, 136, 0.8);
+  background: linear-gradient(
+    135deg,
+    rgba(0, 255, 136, 0.15) 0%,
+    rgba(20, 35, 60, 0.9) 50%,
+    rgba(0, 255, 136, 0.1) 100%
+  );
+}
+.avatar--jubilant .avatar__eye {
+  animation: none;
+  background: #00FF88;
+  box-shadow: 0 0 8px 2px #00FF88;
+  width: 20px;
+  height: 8px;
+  border-radius: 4px;
+}
+.avatar--jubilant .avatar__mouth {
+  width: 24px;
+  height: 8px;
+  background: rgba(0, 255, 136, 0.7);
+  border-radius: 4px 4px 8px 8px;
+}
+.avatar--jubilant .avatar__bracket { border-color: #00FF88; }
+
+/* STEALTH — flicker, low opacity */
+.avatar--stealth .avatar__head {
+  animation: stealth-flicker 2s ease-in-out infinite;
+  border-color: rgba(100, 100, 120, 0.4);
+  background: rgba(20, 30, 50, 0.5);
+}
+.avatar--stealth .avatar__eye {
+  animation: none;
+  background: rgba(100, 120, 140, 0.6);
+  box-shadow: none;
+  width: 14px;
+  height: 6px;
+}
+.avatar--stealth .avatar__mouth {
+  width: 8px;
+  height: 2px;
+  background: rgba(100, 120, 140, 0.4);
+}
+.avatar--stealth .avatar__glow { opacity: 0.3; }
+.avatar--stealth .avatar__bracket { border-color: rgba(100, 120, 140, 0.4); opacity: 0.4; }
+.avatar--stealth .avatar__status { color: rgba(100, 120, 140, 0.4); }
+
+/* Active state — scan line always on */
+.avatar--active .avatar__scan {
+  animation: scan-sweep 2s linear infinite;
+}
+.avatar--active .avatar__bracket { opacity: 1; }
+
+/* === VOICE PANEL (M7-Phase-0) ===
+ * Animations for the push-to-talk button: ambient hover pulse, press
+ * glow, listening ring (concentric radar expanding outward), thinking
+ * shimmer, and speaking audio-bars (driven by the same color tokens
+ * as the avatar).
+ */
+@keyframes voice-mic-breath {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 212, 255, 0.4); }
+  50%      { box-shadow: 0 0 12px 4px rgba(0, 212, 255, 0.0); }
+}
+@keyframes voice-mic-press {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.18); box-shadow: 0 0 24px 8px rgba(0, 212, 255, 0.55); }
+  100% { transform: scale(1.10); box-shadow: 0 0 18px 6px rgba(0, 212, 255, 0.45); }
+}
+@keyframes voice-mic-ring {
+  0%   { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+@keyframes voice-mic-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes voice-audio-bars {
+  0%, 100% { transform: scaleY(0.3); }
+  25%      { transform: scaleY(1.0); }
+  50%      { transform: scaleY(0.5); }
+  75%      { transform: scaleY(0.8); }
+}
+
+[data-theme^="gundam-"] .voice-mic {
+  position: relative;
+  /* Ambient breath — runs whenever the mic is in "ready" state */
+  animation: voice-mic-breath 2.4s ease-in-out infinite;
+}
+[data-theme^="gundam-"] .voice-mic--listening {
+  animation: voice-mic-press 0.25s ease-out forwards,
+             voice-mic-breath 2.4s ease-in-out 0.3s infinite;
+}
+[data-theme^="gundam-"] .voice-mic--listening::before,
+[data-theme^="gundam-"] .voice-mic--listening::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  animation: voice-mic-ring 1.4s ease-out infinite;
+  pointer-events: none;
+}
+[data-theme^="gundam-"] .voice-mic--listening::after {
+  animation-delay: 0.7s;
+}
+[data-theme^="gundam-"] .voice-mic--thinking {
+  /* Subtle shimmer sweep — the agent is "thinking" */
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 140, 0, 0.25) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: voice-mic-shimmer 1.5s linear infinite;
+}
+[data-theme^="gundam-"] .voice-mic--speaking {
+  /* Audio-bar effect — pseudo-element acts as a level meter. */
+  position: relative;
+}
+[data-theme^="gundam-"] .voice-mic--speaking::before {
+  content: "";
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    var(--accent-secondary) 50%,
+    var(--accent) 100%
+  );
+  border-radius: 2px;
+  animation: voice-audio-bars 0.6s ease-in-out infinite;
+  box-shadow: 0 0 8px var(--accent);
 }

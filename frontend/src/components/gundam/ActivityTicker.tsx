@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 
+import {
+  getEmotionDisplay,
+  getPhaseIcon,
+} from "@/lib/emotion-display";
 import { subscribe, type WsEvent } from "@/lib/ws";
 
 interface ActivityTickerProps {
@@ -60,6 +64,12 @@ function EventChip({ event }: { event: WsEvent }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Emotion → icon + color is now in `@/lib/emotion-display` so it can be
+// shared with other components (tool trace tooltips, future HUD overlays)
+// and unit-tested in isolation.
+// ---------------------------------------------------------------------------
+
 function formatEvent(event: WsEvent): {
   icon: string;
   color: string;
@@ -88,6 +98,39 @@ function formatEvent(event: WsEvent): {
         color: "var(--text-muted)",
         summary: data.tool ? `${data.tool} ${data.ok ? "ok" : "fail"}` : "",
       };
+    case "live2d_tool_trigger": {
+      // The avatar reacted to a tool call. Display the emotion + tool +
+      // phase so the user can read "agent is doing X with feeling Y".
+      const emotion = data.emotion as string | undefined;
+      const phase = data.phase as string | undefined;
+      const tool = (data.tool as string) || "?";
+      const display = getEmotionDisplay(emotion);
+      const phaseGlyph = getPhaseIcon(phase);
+      return {
+        icon: display.icon,
+        color: display.color,
+        summary: `${phaseGlyph} ${tool} · ${display.label}`,
+      };
+    }
+    case "backend_log": {
+      // M7-Phase-0: render backend log lines as slim chips. Trim the
+      // logger name to the trailing 16 chars to keep the chip short.
+      const level = (data.level as string) || "INFO";
+      const msg = (data.msg as string) || "";
+      const logger = (data.logger as string) || "app";
+      const short = logger.length > 16 ? logger.slice(-16) : logger;
+      const color =
+        level === "ERROR" || level === "CRITICAL"
+          ? "var(--danger)"
+          : level === "WARNING"
+          ? "var(--warning)"
+          : "var(--text-muted)";
+      return {
+        icon: "·",
+        color,
+        summary: `[${level}] ${short}: ${msg.length > 60 ? msg.slice(0, 57) + "..." : msg}`,
+      };
+    }
     case "session_start":
       return {
         icon: "▶",

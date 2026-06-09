@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable, Optional
 
+from app.channels.base import ChannelHandler
 from app.core.config import get_config
 from app.core.registry import ChannelRegistry
 
@@ -12,10 +13,30 @@ logger = logging.getLogger(__name__)
 
 
 class ChannelManager:
-    """Manages the lifecycle of all registered channels."""
+    """Manages the lifecycle of all registered channels.
+
+    Callbacks are registered with `set_handler(channel_id, handler)` BEFORE
+    `start(channel_id)` is called. The handler is what routes an incoming
+    message into the agent pipeline; without one, messages are received
+    but no response is generated.
+    """
 
     def __init__(self) -> None:
         self._channels: dict[str, Any] = {}
+        self._handlers: dict[str, ChannelHandler] = {}
+
+    def set_handler(self, channel_id: str, handler: ChannelHandler) -> None:
+        """Register the callback that turns an incoming message into a reply.
+
+        Must be called before `start(channel_id)`. If the channel is
+        already running, the new handler takes effect on the next
+        received message.
+        """
+        self._handlers[channel_id] = handler
+        logger.debug(f"Handler registered for channel: {channel_id}")
+
+    def get_handler(self, channel_id: str) -> Optional[ChannelHandler]:
+        return self._handlers.get(channel_id)
 
     async def start_all(self) -> None:
         """Start all enabled channels."""
@@ -50,10 +71,14 @@ class ChannelManager:
             return
 
         channel_cls = ChannelRegistry.get(channel_id)
-        channel = channel_cls()
+        handler = self._handlers.get(channel_id)
+        channel = channel_cls(handler=handler)
         await channel.start()
         self._channels[channel_id] = channel
-        logger.info(f"Started channel: {channel_id} (mode={channel.mode})")
+        logger.info(
+            f"Started channel: {channel_id} (mode={channel.mode}, "
+            f"handler={'yes' if handler else 'no'})"
+        )
 
     async def stop(self, channel_id: str) -> None:
         """Stop a specific channel."""
@@ -72,6 +97,7 @@ class ChannelManager:
                 "running": channel.is_running,
                 "mode": channel.mode,
                 "channel_id": channel_id,
+                "handler": self._handlers.get(channel_id) is not None,
             }
             for channel_id, channel in self._channels.items()
         }

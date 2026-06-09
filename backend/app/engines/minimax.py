@@ -59,8 +59,8 @@ class MiniMaxEngine(InferenceEngine):
     def __init__(
         self,
         api_key: str,
-        base_url: str = "https://api.MiniMax.chat/v1",
-        model: str = "MiniMax-M3",
+        base_url: str = "https://api.minimax.io/v1",
+        model: str = "MiniMax-M2",
     ) -> None:
         if not api_key:
             raise ValueError("MiniMax API key is required")

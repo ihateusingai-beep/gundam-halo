@@ -4,11 +4,15 @@ import { toast } from "sonner";
 import { HudCard } from "@/components/gundam/HudCard";
 import { StatusDot } from "@/components/gundam/StatusDot";
 import { api, ApiError } from "@/lib/api";
+import {
+  getAnimationSpeed,
+  setAnimationSpeed,
+} from "@/services/halo-tray-controls";
 import { useThemeStore, type CockpitBackground } from "@/stores/theme";
 import { THEMES } from "@/components/gundam/ThemeSwitcher";
-import type { AuditEntry, Settings } from "@/types/api";
+import type { AuditEntry, MemoryEntry, Settings } from "@/types/api";
 
-type Tab = "general" | "mac" | "channels" | "themes" | "security";
+type Tab = "general" | "mac" | "channels" | "themes" | "security" | "secrets" | "memory";
 
 const TABS: Array<{ id: Tab; label: string; icon: string }> = [
   { id: "general", label: "General", icon: "◈" },
@@ -16,6 +20,8 @@ const TABS: Array<{ id: Tab; label: string; icon: string }> = [
   { id: "channels", label: "Channels", icon: "◉" },
   { id: "themes", label: "Themes", icon: "◐" },
   { id: "security", label: "Security", icon: "⛨" },
+  { id: "secrets", label: "Secrets", icon: "⚿" },
+  { id: "memory", label: "User Memory", icon: "▣" },
 ];
 
 interface BgOption {
@@ -101,6 +107,8 @@ export function SettingsPage() {
       {activeTab === "channels" && <ChannelsTab settings={settings} />}
       {activeTab === "themes" && <ThemesTab />}
       {activeTab === "security" && <SecurityTab />}
+      {activeTab === "secrets" && <SecretsTab />}
+      {activeTab === "memory" && <MemoryTab />}
     </div>
   );
 }
@@ -155,7 +163,120 @@ function GeneralTab({ settings }: { settings: Settings }) {
         />
         <KV label="Version" value={settings.app.version} mono />
       </Section>
+
+      <Section title="Tray Icon Animation">
+        <TraySpeedControl />
+      </Section>
     </HudCard>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Tray animation speed (M3-B8)
+// ──────────────────────────────────────────────────────────────────────
+
+const SPEED_PRESETS: Array<{
+  fps: number;
+  label: string;
+  description: string;
+}> = [
+  { fps: 8, label: "Battery Saver", description: "8 FPS — minimal visual noise" },
+  { fps: 15, label: "Default", description: "15 FPS — smooth, low CPU" },
+  { fps: 24, label: "Cinema", description: "24 FPS — animation feels alive" },
+];
+
+function TraySpeedControl() {
+  const [fps, setFps] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Read current FPS on mount
+  useEffect(() => {
+    getAnimationSpeed().then(setFps).catch(() => setFps(15));
+  }, []);
+
+  const applyFps = async (next: number, presetLabel?: string) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const effective = await setAnimationSpeed(next);
+      setFps(effective);
+      if (presetLabel) {
+        toast.success(`Tray → ${presetLabel}`, {
+          description: `${effective} FPS · effective value`,
+        });
+      }
+    } catch (e) {
+      toast.error("Failed to set tray speed", { description: String(e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Map 1..60 to 0..100 for the slider fill gradient
+  const fillPct = fps == null ? 25 : ((fps - 1) / 59) * 100;
+
+  return (
+    <div className="space-y-3">
+      {/* Current value + slider */}
+      <div className="grid grid-cols-[140px_1fr_60px] gap-3 items-center">
+        <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-[Rajdhani]">
+          Speed
+        </span>
+        <input
+          type="range"
+          min={1}
+          max={60}
+          step={1}
+          value={fps ?? 15}
+          disabled={fps == null || saving}
+          onChange={(e) => applyFps(parseInt(e.target.value, 10))}
+          className="gundam-slider"
+          style={{ ["--gundam-slider-fill" as any]: `${fillPct}%` }}
+          aria-label="Tray animation FPS"
+        />
+        <div className="text-right">
+          <span
+            className="text-lg font-[Orbitron] tabular-nums"
+            style={{ color: "var(--accent)" }}
+          >
+            {fps ?? "—"}
+          </span>
+          <span className="text-[10px] text-[var(--text-muted)] ml-1 font-mono">
+            fps
+          </span>
+        </div>
+      </div>
+
+      {/* Preset chips */}
+      <div className="grid grid-cols-3 gap-2">
+        {SPEED_PRESETS.map((p) => {
+          const isActive = fps === p.fps;
+          return (
+            <button
+              key={p.fps}
+              onClick={() => applyFps(p.fps, p.label)}
+              disabled={saving}
+              className={`p-2 rounded border text-left transition-all hover:border-[var(--accent)] ${
+                isActive
+                  ? "border-[var(--accent)] bg-[var(--bg-elevated)]"
+                  : "border-[var(--border-color)] bg-[var(--bg-card)]"
+              }`}
+            >
+              <div className="text-xs font-[Rajdhani] uppercase tracking-wider text-[var(--text-primary)]">
+                {p.label}
+              </div>
+              <div className="text-[10px] text-[var(--text-muted)] font-mono">
+                {p.description}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="text-[10px] text-[var(--text-muted)] font-mono">
+        Runtime-tunable · resets to 15 FPS on app restart · persistence in v1.1
+      </p>
+    </div>
   );
 }
 
@@ -583,6 +704,503 @@ function Toggle({
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Secrets (M6+) — runtime secret management
+// ──────────────────────────────────────────────────────────────────────
+
+type SecretStatus = {
+  label: string;
+  configured: boolean;
+  source: "override" | "env" | "none";
+};
+
+type SecretMap = Record<string, SecretStatus>;
+
+const SECRET_INPUT_CLASS =
+  "w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-xs font-mono " +
+  "text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] " +
+  "placeholder:text-[var(--text-muted)]/50";
+
+/** Secrets tab — manage MiniMax API key + Telegram bot token from the UI.
+ *
+ * Security properties:
+ * - Server NEVER returns the secret value in any response
+ * - We only render the configured/source status from GET
+ * - Password inputs use autocomplete="new-password" + autoComplete="off"
+ *   to discourage browser autofill / saved-password manager capture
+ * - Local component state is wiped on unmount (no React DevTools
+ *   persistence of the value beyond the lifetime of the form)
+ * - onSave success → reset the input field to "" (so the value
+ *   isn't lingering in the DOM)
+ */
+function SecretsTab() {
+  const [status, setStatus] = useState<SecretMap | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  // Two parallel string states. We deliberately never combine into
+  // a single object so React can't share memoisation between them.
+  const [minimax, setMinimax] = useState("");
+  const [telegram, setTelegram] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const refresh = async () => {
+    try {
+      setError(null);
+      const data = await api.getSecrets();
+      setStatus(data);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const handleSave = async () => {
+    const items: Array<{ name: string; value: string }> = [];
+    if (minimax.trim()) items.push({ name: "MINIMAX_API_KEY", value: minimax });
+    if (telegram.trim()) items.push({ name: "GUNDAM_HALO_TG_TOKEN", value: telegram });
+    if (items.length === 0) {
+      toast.error("Nothing to save", { description: "Type a value first." });
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await api.setSecrets(items);
+      setStatus(updated);
+      setMinimax("");
+      setTelegram("");
+      toast.success("Secrets saved", {
+        description:
+          "Takes effect on the next LLM / Telegram request. No restart required.",
+      });
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      toast.error("Failed to save secrets", { description: msg });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClear = async (name: "MINIMAX_API_KEY" | "GUNDAM_HALO_TG_TOKEN") => {
+    setSaving(true);
+    try {
+      const updated = await api.deleteSecret(name);
+      setStatus(updated);
+      toast.success("Secret cleared");
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      toast.error("Failed to clear", { description: msg });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <HudCard>
+        <div className="flex items-center gap-3">
+          <div className="gundam-radar w-8 h-8" />
+          <p className="text-[var(--text-muted)] font-mono">Loading secrets…</p>
+        </div>
+      </HudCard>
+    );
+  }
+
+  if (error) {
+    return (
+      <HudCard>
+        <p className="text-[var(--danger)]">⚠ {error}</p>
+      </HudCard>
+    );
+  }
+
+  const minimaxStatus = status?.["MINIMAX_API_KEY"];
+  const telegramStatus = status?.["GUNDAM_HALO_TG_TOKEN"];
+
+  return (
+    <HudCard>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+          Secrets
+        </h3>
+        <span className="text-[10px] text-[var(--text-muted)] font-mono">
+          M6 · runtime-managed
+        </span>
+      </div>
+
+      <p className="text-xs text-[var(--text-muted)] font-mono mb-4">
+        Values are sent over your local / Tailscale network to the backend, persisted
+        to <code>~/.gundam-halo/.env</code> with <code>0600</code> permissions, and
+        mirrored into the running process. They take effect on the next LLM / Telegram
+        request — no server restart required. The server never returns values, only
+        whether each one is configured.
+      </p>
+
+      <div className="space-y-4">
+        <SecretInput
+          name="MINIMAX_API_KEY"
+          label={minimaxStatus?.label ?? "MiniMax API Key"}
+          value={minimax}
+          configured={!!minimaxStatus?.configured}
+          source={minimaxStatus?.source ?? "none"}
+          onChange={setMinimax}
+          onClear={() => handleClear("MINIMAX_API_KEY")}
+          disabled={saving}
+        />
+
+        <SecretInput
+          name="GUNDAM_HALO_TG_TOKEN"
+          label={telegramStatus?.label ?? "Telegram Bot Token"}
+          value={telegram}
+          configured={!!telegramStatus?.configured}
+          source={telegramStatus?.source ?? "none"}
+          onChange={setTelegram}
+          onClear={() => handleClear("GUNDAM_HALO_TG_TOKEN")}
+          disabled={saving}
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-2 mt-4 pt-4 border-t border-[var(--border-color)]">
+        <button
+          onClick={refresh}
+          disabled={saving}
+          className="px-3 py-1 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors disabled:opacity-40"
+        >
+          Refresh
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={saving || (!minimax.trim() && !telegram.trim())}
+          className="px-4 py-1 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40"
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </HudCard>
+  );
+}
+
+function SecretInput({
+  name,
+  label,
+  value,
+  configured,
+  source,
+  onChange,
+  onClear,
+  disabled,
+}: {
+  name: string;
+  label: string;
+  value: string;
+  configured: boolean;
+  source: "override" | "env" | "none";
+  onChange: (v: string) => void;
+  onClear: () => void;
+  disabled: boolean;
+}) {
+  const sourceLabel =
+    source === "override"
+      ? "stored in .env"
+      : source === "env"
+      ? "from environment"
+      : "not set";
+  const sourceColor =
+    source === "override"
+      ? "var(--accent)"
+      : source === "env"
+      ? "var(--warning)"
+      : "var(--text-muted)";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-[Rajdhani]">
+          {label}{" "}
+          <span className="text-[var(--text-muted)]/50 font-mono normal-case">
+            ({name})
+          </span>
+        </label>
+        <span
+          className="text-[10px] font-mono flex items-center gap-1.5"
+          style={{ color: sourceColor }}
+          title={
+            source === "none"
+              ? "Type a value below and click Save"
+              : `Active source: ${sourceLabel}`
+          }
+        >
+          <span
+            className="inline-block w-2 h-2 rounded-full"
+            style={{
+              background: configured ? sourceColor : "var(--text-muted)",
+              boxShadow: configured ? `0 0 6px ${sourceColor}` : "none",
+            }}
+          />
+          {configured ? sourceLabel : "not set"}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          data-1p-ignore
+          // Hint to password managers (1Password / Bitwarden) not to store
+          data-bwignore
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={
+            configured
+              ? "••••••••  (type to replace, leave blank to keep)"
+              : `Paste your ${name}…`
+          }
+          className={SECRET_INPUT_CLASS}
+          aria-label={label}
+        />
+        {configured && (
+          <button
+            onClick={onClear}
+            disabled={disabled}
+            className="px-2 py-1 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40"
+            title={`Clear ${name}`}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Memory (M7-Phase-2.5) — read-only viewer for the agent's per-user memory
+// ---------------------------------------------------------------------------
+
+function formatTimestamp(epoch: number): string {
+  if (!epoch) return "—";
+  try {
+    const d = new Date(epoch * 1000);
+    return d.toLocaleString();
+  } catch {
+    return String(epoch);
+  }
+}
+
+/** Memory tab — list all users, expand to see their memory entries, delete the wrong ones. */
+function MemoryTab() {
+  const [users, setUsers] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [entries, setEntries] = useState<MemoryEntry[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [loadingEntries, setLoadingEntries] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+
+  const refreshUsers = async () => {
+    try {
+      setError(null);
+      setLoadingUsers(true);
+      const data = await api.listMemoryUsers();
+      setUsers(data.users);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      setError(msg);
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  const refreshEntries = async (user: string) => {
+    try {
+      setError(null);
+      setLoadingEntries(true);
+      const data = await api.listMemoryEntries(user);
+      setEntries(data.entries);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      setError(msg);
+      setEntries([]);
+    } finally {
+      setLoadingEntries(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshUsers();
+  }, []);
+
+  useEffect(() => {
+    if (selected) {
+      refreshEntries(selected);
+    } else {
+      setEntries([]);
+    }
+  }, [selected]);
+
+  const handleDelete = async (user: string, key: string) => {
+    const ok = window.confirm(
+      `Delete memory[${key}] for user "${user}"? This cannot be undone.`,
+    );
+    if (!ok) return;
+    setDeletingKey(key);
+    try {
+      await api.deleteMemoryEntry(user, key);
+      toast.success("Memory entry deleted", {
+        description: `${user} / ${key}`,
+      });
+      await refreshEntries(user);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      toast.error("Failed to delete", { description: msg });
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  if (loadingUsers) {
+    return (
+      <HudCard>
+        <div className="flex items-center gap-3">
+          <div className="gundam-radar w-8 h-8" />
+          <p className="text-[var(--text-muted)] font-mono">Loading users…</p>
+        </div>
+      </HudCard>
+    );
+  }
+
+  if (error && users.length === 0) {
+    return (
+      <HudCard>
+        <p className="text-[var(--danger)]">⚠ {error}</p>
+      </HudCard>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <HudCard>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+            User Memory
+          </h3>
+          <span className="text-[10px] text-[var(--text-muted)] font-mono">
+            M7-Phase-2.5 · read-only viewer
+          </span>
+        </div>
+
+        <p className="text-xs text-[var(--text-muted)] font-mono mb-4">
+          The agent's per-user key/value memory (M7-Phase-2). When the agent
+          learns a fact about you (preferred name, timezone, favorite Gundam,
+          …) it appears here. Auto-injected into the system prompt on every
+          turn. You can{" "}
+          <span className="text-[var(--danger)]">delete</span> an entry the
+          agent got wrong — the next turn will not see it. The dashboard
+          never writes new entries; the agent does that via{" "}
+          <code>memory_write</code>.
+        </p>
+
+        {users.length === 0 ? (
+          <div className="p-4 border border-dashed border-[var(--border-color)] text-center">
+            <p className="text-xs text-[var(--text-muted)] font-mono">
+              No users yet. Start a conversation — when the agent calls{" "}
+              <code>memory_write</code>, you'll see the user here.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {users.map((u) => (
+              <button
+                key={u}
+                onClick={() => setSelected(u)}
+                className={`px-3 py-2 text-xs font-[Rajdhani] uppercase tracking-wider border transition-colors ${
+                  selected === u
+                    ? "border-[var(--accent)] text-[var(--accent)] bg-[var(--bg-elevated)]"
+                    : "border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                }`}
+              >
+                {u}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 mt-4 pt-4 border-t border-[var(--border-color)]">
+          <button
+            onClick={refreshUsers}
+            className="px-3 py-1 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
+          >
+            Refresh
+          </button>
+        </div>
+      </HudCard>
+
+      {selected && (
+        <HudCard>
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+              {selected}
+            </h4>
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              {loadingEntries
+                ? "loading…"
+                : `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`}
+            </span>
+          </div>
+
+          {loadingEntries ? (
+            <div className="flex items-center gap-3">
+              <div className="gundam-radar w-6 h-6" />
+              <p className="text-xs text-[var(--text-muted)] font-mono">
+                Loading entries…
+              </p>
+            </div>
+          ) : entries.length === 0 ? (
+            <p className="text-xs text-[var(--text-muted)] font-mono">
+              No entries yet for this user.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {entries.map((e) => (
+                <div
+                  key={e.key}
+                  className="border border-[var(--border-color)] bg-[var(--bg-elevated)] p-3"
+                >
+                  <div className="flex items-center justify-between mb-1 gap-2">
+                    <code className="text-[11px] text-[var(--accent)] font-mono break-all">
+                      {e.key}
+                    </code>
+                    <button
+                      onClick={() => handleDelete(selected, e.key)}
+                      disabled={deletingKey === e.key}
+                      className="px-2 py-0.5 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40 shrink-0"
+                    >
+                      {deletingKey === e.key ? "…" : "Delete"}
+                    </button>
+                  </div>
+                  <p className="text-xs text-[var(--text)] font-mono whitespace-pre-wrap break-words">
+                    {e.value}
+                  </p>
+                  <p className="text-[10px] text-[var(--text-muted)] font-mono mt-2">
+                    updated {formatTimestamp(e.updated_at)} · created{" "}
+                    {formatTimestamp(e.created_at)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </HudCard>
+      )}
     </div>
   );
 }

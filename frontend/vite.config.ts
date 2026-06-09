@@ -9,6 +9,7 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@cubismsdksamples": path.resolve(__dirname, "./WebSDK/src"),
     },
   },
   // Tauri expects a fixed port

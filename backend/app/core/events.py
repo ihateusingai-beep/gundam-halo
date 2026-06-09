@@ -60,6 +60,26 @@ class EventType(str, Enum):
     SYSTEM_GAUGES = "system_gauges"
     SYSTEM_ERROR = "system_error"
 
+    # Voice layer (ARCHITECTURE §15)
+    VOICE_VAD_SPEECH_START = "voice_vad_speech_start"
+    VOICE_VAD_SPEECH_END = "voice_vad_speech_end"
+    VOICE_ASR_RESULT = "voice_asr_result"
+    VOICE_TURN_START = "voice_turn_start"
+    VOICE_TURN_END = "voice_turn_end"
+    VOICE_TTS_START = "voice_tts_start"  # M2+
+    VOICE_TTS_END = "voice_tts_end"  # M2+
+    VOICE_LIVE2D_TRIGGER = "voice_live2d_trigger"  # M3+
+    # Live2D trigger fired by tool calls (mapped from TOOL_CALL_START/END).
+    # The voice WS still emits `live2d.trigger` as a custom payload; the main
+    # WS broadcasts the raw event-type value, which is what the avatar bridge
+    # listens for.
+    LIVE2D_TOOL_TRIGGER = "live2d_tool_trigger"  # M3-B4+
+
+    # Backend log lines (M7-Phase-0). The BackendLogHandler publishes
+    # every INFO+ log record to the bus; the main /ws channel broadcasts
+    # them so the dashboard's ActivityTicker can render them as chips.
+    BACKEND_LOG = "backend_log"
+
 
 @dataclass(slots=True)
 class Event:

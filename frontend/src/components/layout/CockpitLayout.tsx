@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { Link, useLocation } from "react-router";
 import { Toaster } from "sonner";
 
@@ -10,13 +10,37 @@ import { ProjectCard } from "@/components/gundam/ProjectCard";
 import { useProjectsStore } from "@/stores/projects";
 import { useSystemStore } from "@/stores/system";
 import { useWsEvent, useWsStatus } from "@/lib/ws";
-import { useEffect } from "react";
+import { Live2DCanvas } from "@/components/live2d/Live2DCanvas";
+import { CSSAvatar } from "@/components/live2d/CSSAvatar";
+import { VoicePanel } from "@/components/gundam/VoicePanel";
+import { useHaloLive2D } from "@/context/live2d-bridge-context";
 
 interface CockpitLayoutProps {
   children: ReactNode;
 }
 
+type CockpitMode = "select" | "active";
+
+/** Determine cockpit mode from the current route.
+ *  select = no project active (Overview, Settings, New)
+ *  active = a project page is showing
+ */
+function useCockpitMode(): { mode: CockpitMode; projectName: string | null } {
+  const location = useLocation();
+  const match = location.pathname.match(/^\/projects\/([^/]+)(?:\/.*)?$/);
+  if (match && match[1] !== "new") {
+    return { mode: "active", projectName: match[1] };
+  }
+  return { mode: "select", projectName: null };
+}
+
 /** First-person cockpit layout for desktop (≥768px).
+ *
+ *  Two modes:
+ *    select — Overview / Settings / New. Subdued accent, slow scan,
+ *             sidebar shows quick-switch (3 most recent projects).
+ *    active — Project page. Brighter accent, faster scan, frame glow,
+ *             sidebar shows full project list for navigation.
  *
  *  Frame layers (z-index, bottom → top):
  *   0  background image (optional, [data-bg="core-XX"])
@@ -25,23 +49,14 @@ interface CockpitLayoutProps {
  *   5  CRT vignette (fixed, pointer-events: none)
  *   9996 corner brackets + brand/status (fixed)
  *   9997 top scan line (fixed)
- *
- *   ┌──⌐  ◢ GUNDAM HALO                              SYSTEMS ●  ⌐──┐
- *   │                                                          │
- *   │  [TopBar — project nav]                                  │
- *   │  ┌──────────┬─────────────────┬───────────┐             │
- *   │  │ Left     │  Center         │  Right    │             │
- *   │  │ (Tools)  │  (children)     │  (Gauges) │             │
- *   │  ├──────────┴─────────────────┴───────────┤             │
- *   │  │ Bottom — ticker / status                │             │
- *   │  └──────────────────────────────────────────┘             │
- *   └──⌐                                                  ¬──┘
  */
 export function CockpitLayout({ children }: CockpitLayoutProps) {
   const { projects, fetchProjects } = useProjectsStore();
   const { gauges, setGauges, startPolling } = useSystemStore();
   const { connected } = useWsStatus();
+  const { mode, projectName } = useCockpitMode();
   const location = useLocation();
+  const { state: live2dState } = useHaloLive2D();
 
   useEffect(() => {
     fetchProjects();
@@ -59,8 +74,11 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
     return stop;
   }, [connected, startPolling]);
 
+  // Sidebar content depends on mode
+  const recentMissions = projects.slice(0, 3);
+
   return (
-    <div className="gundam-cockpit-frame gundam-cockpit-vignette gundam-hex-bg min-h-screen flex flex-col">
+    <div className={`gundam-cockpit-frame gundam-cockpit-vignette gundam-hex-bg gundam-mode-${mode} min-h-screen flex flex-col`}>
       {/* Background image layer (visible only when [data-bg] is set on <html>) */}
       <div className="gundam-cockpit-bg" aria-hidden="true" />
 
@@ -84,22 +102,34 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
       <div className="gundam-frame-corner gundam-frame-corner-tr" aria-hidden="true" />
       <div className="gundam-frame-corner gundam-frame-corner-bl" aria-hidden="true" />
       <div className="gundam-frame-corner gundam-frame-corner-br" aria-hidden="true" />
-      <div className="gundam-frame-brand" aria-hidden="true">GUNDAM HALO // COCKPIT</div>
-      <div className="gundam-frame-status" aria-hidden="true">SYSTEMS ONLINE · v0.1.0</div>
+      <div className="gundam-frame-brand" aria-hidden="true">
+        {mode === "active" && projectName
+          ? `GUNDAM HALO // MISSION: ${projectName}`
+          : "GUNDAM HALO // AWAITING ORDERS"}
+      </div>
+      <div className="gundam-frame-status" aria-hidden="true">
+        {mode === "active" ? "MISSION ACTIVE" : "STANDBY"} · v0.1.0
+      </div>
       <div className="gundam-scan" aria-hidden="true" />
 
-      {/* Top bar — project nav */}
-      <header className="border-b border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 py-3 mt-2 flex items-center justify-between">
+      {/* Top bar — project nav. Responsive padding for chrome. */}
+      <header className="border-b border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 md:pl-48 md:pr-44 py-3 mt-2 flex items-center justify-between">
         <Link to="/" className="flex items-center gap-3">
           <h1 className="text-xl font-[Orbitron] text-[var(--accent)] tracking-widest uppercase">
             Gundam Halo
           </h1>
-          <span className="text-xs text-[var(--text-muted)] font-mono">// COCKPIT</span>
+          <span className="text-xs text-[var(--text-muted)] font-mono hidden sm:inline">
+            {mode === "active" && projectName
+              ? `// MISSION: ${projectName}`
+              : "// COCKPIT"}
+          </span>
         </Link>
         <nav className="flex items-center gap-2 text-sm">
           <Link
             to="/"
-            className="px-2 py-1 hover:text-[var(--accent)] text-[var(--text-secondary)]"
+            className={`px-2 py-1 hover:text-[var(--accent)] ${
+              location.pathname === "/" ? "text-[var(--accent)]" : "text-[var(--text-secondary)]"
+            }`}
           >
             Overview
           </Link>
@@ -111,50 +141,116 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
           </Link>
           <Link
             to="/settings"
-            className="px-2 py-1 hover:text-[var(--accent)] text-[var(--text-secondary)]"
+            className={`px-2 py-1 hover:text-[var(--accent)] ${
+              location.pathname === "/settings" ? "text-[var(--accent)]" : "text-[var(--text-secondary)]"
+            }`}
           >
             Settings
           </Link>
         </nav>
       </header>
 
-      <div className="flex-1 grid grid-cols-[200px_1fr_240px] gap-3 p-3 min-h-0">
-        {/* Left panel — projects + mission log */}
+      <div className="flex-1 grid grid-cols-1 md:grid-cols-[200px_1fr_240px] gap-3 p-3 min-h-0">
+        {/* Left panel — adaptive by mode:
+            - select mode: Quick Switch (3 most recent + New)
+            - active mode: Full Projects list + Mission Log */}
         <aside className="overflow-y-auto space-y-3">
-          <HudCard>
-            <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
-              Projects
-            </h2>
-            <div className="space-y-2">
-              {projects.length === 0 && (
-                <div className="text-[var(--text-muted)] text-xs text-center py-3">
-                  No projects yet
-                </div>
-              )}
-              {projects.map((p) => (
-                <ProjectCard key={p.name} project={p} />
-              ))}
-            </div>
-          </HudCard>
-
-          <HudCard>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
-                Mission Log
+          {mode === "select" ? (
+            <HudCard>
+              <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
+                Quick Switch
               </h2>
-              <span className="text-[9px] text-[var(--text-muted)] font-mono">
-                LIVE FEED
-              </span>
-            </div>
-            <MissionLog maxEntries={30} />
-          </HudCard>
+              <div className="space-y-2">
+                {recentMissions.length === 0 ? (
+                  <div className="text-[var(--text-muted)] text-xs text-center py-3">
+                    No projects yet
+                  </div>
+                ) : (
+                  recentMissions.map((p) => (
+                    <ProjectCard key={p.name} project={p} />
+                  ))
+                )}
+                <Link
+                  to="/projects/new"
+                  className="block text-center text-[10px] font-[Rajdhani] uppercase tracking-widest py-2 border border-dashed border-[var(--border-color)] text-[var(--text-muted)] rounded hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
+                >
+                  + Initialize New
+                </Link>
+              </div>
+            </HudCard>
+          ) : (
+            <>
+              <HudCard>
+                <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
+                  Projects
+                </h2>
+                <div className="space-y-2">
+                  {projects.length === 0 && (
+                    <div className="text-[var(--text-muted)] text-xs text-center py-3">
+                      No projects yet
+                    </div>
+                  )}
+                  {projects.map((p) => (
+                    <ProjectCard key={p.name} project={p} />
+                  ))}
+                </div>
+              </HudCard>
+
+              <HudCard>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+                    Mission Log
+                  </h2>
+                  <span className="text-[9px] text-[var(--text-muted)] font-mono">
+                    LIVE FEED
+                  </span>
+                </div>
+                <MissionLog maxEntries={30} />
+              </HudCard>
+            </>
+          )}
         </aside>
 
         {/* Center — main content */}
         <main className="overflow-y-auto min-w-0">{children}</main>
 
-        {/* Right panel — Mac system gauges */}
+        {/* Right panel — CSS Avatar + Mac system gauges */}
         <aside className="overflow-y-auto space-y-3">
+          <HudCard>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+                Avatar
+              </h2>
+              {live2dState.lastEmotion && (
+                <span className="text-[9px] font-mono text-[var(--accent)] opacity-70">
+                  EMO: {live2dState.lastEmotion.toUpperCase()}
+                </span>
+              )}
+            </div>
+            {/* CSS Avatar — auto-responds to live2d.trigger WS events */}
+            <div
+              className="w-full rounded overflow-hidden border border-[var(--border-color)]"
+              style={{ height: "200px" }}
+            >
+              <CSSAvatar emotion={live2dState.lastEmotion ?? undefined} />
+            </div>
+            {/* Show live2d trigger state */}
+            {live2dState.lastTrigger && (
+              <div className="mt-2 space-y-1">
+                <div className="text-[9px] font-mono text-[var(--text-muted)] truncate">
+                  EXPR: {live2dState.lastTrigger.expression}
+                </div>
+                <div className="text-[9px] font-mono text-[var(--text-muted)] truncate">
+                  MOTION: {live2dState.lastTrigger.motion}
+                </div>
+              </div>
+            )}
+          </HudCard>
+
+          <HudCard>
+            <VoicePanel />
+          </HudCard>
+
           <HudCard>
             <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
               System

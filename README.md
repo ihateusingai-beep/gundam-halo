@@ -1,9 +1,23 @@
 # Gundam Halo
 
+![Banner](./docs/assets/readme-banner-1280x320.png)
+
 > **Personal AI agent on Mac.** Hermes-like feel, MiniMax brain, deep Mac control, per-project isolation. Cockpit-themed dashboard.
 
-![Status: Planning](https://img.shields.io/badge/status-planning-yellow)
+![Status: Active](https://img.shields.io/badge/status-active-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
+![Stack: Tauri 2 + React 19 + FastAPI](https://img.shields.io/badge/stack-Tauri%202%20%2B%20React%2019%20%2B%20FastAPI-00D4FF)
+
+<div align="center">
+
+**Visual identity**
+
+| Profile PFP | Open Graph card |
+|:---:|:---:|
+| ![PFP](./docs/assets/profile-pfp-400x400.png) | ![OG](./docs/assets/og-card-1280x640.png) |
+| `400×400` · `800×800` | `1280×640` — GitHub repo card, X/Twitter card |
+
+</div>
 
 ---
 
@@ -26,7 +40,7 @@
 
 ## Status
 
-🚧 **Planning phase.** Dashboard design pending — see [Design](#design) below. No code yet. Wait for ARCHITECTURE.md before scaffolding.
+🚧 **Active development — v0.1 milestone.** M1 (voice pipeline) ✅ · M2 (TTS) ✅ · M3 (Live2D + animated tray) ✅ · M3-B4..B8 (tool→motion, activity ticker feed, runtime FPS, settings UI) ✅. 194 backend tests passing, 0 TS errors, animated Unicorn Psycho-Frame tray icon live. See [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the full design spec and [changelog](./docs/ARCHITECTURE.md#14-changelog) for what's shipped.
 
 ---
 
@@ -155,35 +169,99 @@ gundam halo/
 
 ## Development
 
-Coming once ARCHITECTURE.md is written. Setup will likely be:
+### Quick install (one shot)
 
 ```bash
-# backend
-cd backend
-uv sync
-uv run fastapi dev
-
-# frontend
-cd frontend
-npm install
-npm run dev
-
-# desktop (optional)
-npm run tauri dev
+curl -fsSL https://raw.githubusercontent.com/ihateusingai-beep/gundam-halo/main/install.sh | bash
 ```
+
+Or clone + run locally:
+
+```bash
+git clone https://github.com/ihateusingai-beep/gundam-halo.git ~/workspace/gundam-halo
+cd ~/workspace/gundam-halo
+./install.sh                       # uv sync + config + .env
+# ./install.sh --with-tailscale    # also print Tailscale hints
+```
+
+Prerequisites:
+
+- **Python 3.11–3.13** (the backend uses tomllib / asyncio features)
+- **uv** (install from <https://docs.astral.sh/uv/> if missing)
+- **ffmpeg** (`brew install ffmpeg` on macOS — needed by Whisper ASR)
+- **Node 20+** (only if you want to build the frontend / Tauri app)
+
+### Day-to-day
+
+```bash
+# Backend
+cd ~/workspace/gundam-halo/backend
+.venv/bin/uvicorn app.main:app --reload --port 8765
+
+# Frontend (separate terminal)
+cd ~/workspace/gundam-halo/frontend
+npx vite --port 5173
+
+# Tauri desktop (the menu-bar tray app)
+cd ~/workspace/gundam-halo/frontend
+npx vite                              # in one terminal — Vite dev server
+npm run tauri dev                     # in another — Tauri shell
+
+# Smoke test (no LLM, no Telegram token needed)
+python3 scripts/smoke_test.py
+```
+
+### Configuring
+
+After install, edit:
+
+- `~/.gundam-halo/config.toml` — all settings (LLM, Telegram, voice, Mac control, security). A working example is at [`config.toml.example`](./config.toml.example) in the repo.
+- `~/.gundam-halo/.env` — secrets (MiniMax API key, optional Telegram bot token). **Never commit this file.**
+
+The backend reads `config.toml` at startup; env vars override individual
+fields (e.g. `MINIMAX_API_KEY` overrides `[llm] api_key_env`'s named
+variable).
+
+### Tailscale (for phone access)
+
+```bash
+brew install tailscale
+tailscale up
+# Then Tailscale ACL allows your phone to reach this Mac on port 8765
+```
+
+The dashboard runs on `http://<your-tailscale-hostname>:8765`. Open it
+from any Tailscale-connected device.
+
+### Telegram (optional — for chat-as-control-surface)
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram, create a bot, get the token.
+2. Set in `~/.gundam-halo/.env`:
+   ```
+   GUNDAM_HALO_TG_TOKEN=<your-token>
+   ```
+3. Add your `chat_id` to `config.toml [channels.telegram] allowed_chat_ids` (find it by messaging [@userinfobot](https://t.me/userinfobot)).
+4. Set `[channels.telegram] enabled = true` in `config.toml`.
+5. Restart the backend. Send `/start` then any text — the agent replies.
 
 ---
 
 ## Roadmap (rough)
 
-1. ⏸️ Wait for dashboard design from `~/workspace/gundam-design/`
-2. ⏸️ Write `ARCHITECTURE.md` (locks all design decisions)
-3. ⏸️ Scaffold `backend/` (fork OpenJarvis minimal subset, swap engine to MiniMax)
-4. ⏸️ Scaffold `frontend/` (Vite + React 19, cockpit theme baseline)
-5. ⏸️ Mac control pane (file I/O + shell allowlist first, then AppleScript, A11y)
-6. ⏸️ Per-project workspace isolation
-7. ⏸️ Telegram bot + Tailscale auth
-8. ⏸️ End-to-end test, deploy to user Mac
+- [x] Scaffold `backend/` (fork OpenJarvis minimal subset, swap engine to MiniMax) — done
+- [x] Scaffold `frontend/` (Vite + React 19, cockpit theme baseline) — done
+- [x] Per-project workspace isolation — done
+- [x] Mac control pane (file I/O + shell allowlist) — done
+- [x] Voice layer (VAD → ASR → TTS → Live2D) — done
+- [x] Animated NT-D tray icon — done
+- [x] Telegram bot + Tailscale auth — done (M4)
+- [x] End-to-end smoke test — done (M5)
+- [x] Visual identity (README banner, social card, PFP) — done
+- [ ] Real Live2D model (Hiyori MIT, blocked on licensing revisit)
+- [ ] Mobile voice input (v1.1 — Web Audio API / MediaRecorder)
+- [ ] Persist tray FPS across restarts (v1.1)
+- [ ] v0.5: confirm UX with real LLM + real Telegram, harden, ship
+- [ ] v1.0: Signal channel, multi-user, persistence layer for memory
 
 ---
 

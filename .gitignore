@@ -91,6 +91,33 @@ Icon
 # Tauri
 src-tauri/target/
 src-tauri/gen/
+src-tauri/Cargo.lock
+
+# Tauri frontend runtime assets (large WASM / ONNX files — should
+# download at install time, not live in the repo)
+frontend/libs/ort-wasm*.wasm
+frontend/libs/ort-wasm*.mjs
+frontend/libs/ort-wasm*.worker.js
+frontend/libs/silero_vad*.onnx
+
+# Matrix MCP image gen output (raw, large; the curated set lives in
+# frontend/src-tauri/icons/anim/ and docs/assets/)
+matrix-media-*.png
+matrix-media-*.mp4
+matrix-media-*.gif
+
+# Live2D sample models from Cubism SDK — license unclear / commercial use
+# may require attribution. Don't ship the binary assets; CSS avatar is the
+# default and a real model would be added via config.toml live2d.model_path.
+live2d-models/*/runtime/*.moc3
+live2d-models/*/runtime/**/*.png
+live2d-models/*/runtime/**/*.mtn
+live2d-models/*/runtime/**/*.physics.json
+live2d-models/*/runtime/**/*.pose.json
+live2d-models/*/runtime/*.model3.json
+# But keep README files so users know how to add a model
+!live2d-models/*/README.md
+!live2d-models/README.md
 
 # Logs
 *.log
