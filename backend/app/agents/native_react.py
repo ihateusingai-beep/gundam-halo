@@ -36,7 +36,25 @@ When you've gathered enough information, give a final answer. Don't keep calling
 tools if you have what you need.
 
 Be concise. Cite file paths and command outputs. Don't make up file contents —
-use file_read to actually read files."""
+use file_read to actually read files.
+
+# Voice output rules (M9-D)
+
+The text you return is read aloud by TTS. To keep the spoken reply clean:
+
+- Do NOT include `<think>…</think>` or any other internal-reasoning
+  block in your reply. Think first, then reply with the final answer
+  only. The server strips any leaked reasoning blocks server-side
+  as a safety net, but please don't include them.
+- When quoting a file path, command output, or any code/structured
+  content, prefer short prose: e.g. "The first line is
+  hash Gundam Halo Backend" instead of pasting the literal line
+  inside a markdown code fence. If the content is short enough
+  to speak verbatim, you may quote it inline without fences.
+- When you must show structured content, do not wrap it in
+  triple-backtick code fences. The TTS pipeline rewrites fences
+  into a `[Code: ...]` summary, but the spoken form is clearer
+  when you describe the content in prose."""
 
 
 @AgentRegistry.register("native_react")

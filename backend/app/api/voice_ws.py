@@ -181,7 +181,15 @@ async def voice_websocket(websocket: WebSocket) -> None:
         """Send `agent.message` + (if responder wired) tts + live2d frames."""
         if agent_text is None:
             return
-        clean_text, emotion = parse_emotion(agent_text)
+        # M9-D: strip LLM reasoning + rewrite markdown fences BEFORE
+        # parsing the emotion tag. The responder (TTS path) also
+        # sanitises, but the agent.message frame is sent straight
+        # from this handler, so we must sanitise here too — otherwise
+        # the user sees <think> in the cockpit transcript AND
+        # hears the TTS (which is double-bad).
+        from app.voice.tts.voice_sanitizer import sanitize_for_tts
+        sanitized = sanitize_for_tts(agent_text)
+        clean_text, emotion = parse_emotion(sanitized)
         await _send_json(websocket, {
             "type": "agent.message",
             "data": {

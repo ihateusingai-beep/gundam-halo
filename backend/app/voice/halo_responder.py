@@ -30,6 +30,7 @@ from app.core.events import EventType, get_event_bus
 from app.voice.live2d.live2d_interface import Live2DInterface, Live2DTrigger
 from app.voice.tts.splitter import split_sentences
 from app.voice.tts.tts_interface import TTSInterface, TTSResult
+from app.voice.tts.voice_sanitizer import sanitize_for_tts
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,12 @@ class HaloResponder:
 
         For streaming playback, use `respond_stream` instead.
         """
-        clean_text, emotion = parse_emotion(agent_text)
+        # M9-D: strip LLM reasoning + rewrite markdown fences BEFORE
+        # the emotion parser so the Live2D trigger sees the clean
+        # surface text. parse_emotion only looks at the leading tag,
+        # so the order is safe.
+        sanitized = sanitize_for_tts(agent_text)
+        clean_text, emotion = parse_emotion(sanitized)
         cfg = self._emotion_map.get(emotion, self._emotion_map[DEFAULT_EMOTION])
 
         # Fire Live2D trigger (if Live2D wired — M3 ships this for real)
@@ -195,7 +201,9 @@ class HaloResponder:
         This minimizes TTFB — the first chunk can be sent to the
         client before later sentences are even synthesized.
         """
-        clean_text, emotion = parse_emotion(agent_text)
+        # M9-D: same sanitisation as `respond` — see notes there.
+        sanitized = sanitize_for_tts(agent_text)
+        clean_text, emotion = parse_emotion(sanitized)
         cfg = self._emotion_map.get(emotion, self._emotion_map[DEFAULT_EMOTION])
 
         # Fire Live2D trigger up front
