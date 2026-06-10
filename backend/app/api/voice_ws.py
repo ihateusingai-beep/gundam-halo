@@ -349,12 +349,27 @@ async def voice_websocket(websocket: WebSocket) -> None:
                     if not text:
                         continue
                     if _agent_callback is not None:
+                        t_turn_start = time.time()
                         try:
                             reply = await _agent_callback(sid, text)
                         except Exception as e:
                             logger.error(f"Agent callback error: {e}")
                             reply = None
                         await _emit_agent_response(sid, reply)
+                        # M9-C follow-up: voice.text path was missing
+                        # voice.turn_ended, which left the frontend
+                        # badge stuck in "speaking"/"thinking" and
+                        # re-disabled the mic button. Mirror the
+                        # voice.end path's terminal frame.
+                        await _send_json(websocket, {
+                            "type": "voice.turn_ended",
+                            "data": {
+                                "session_id": sid,
+                                "discarded": False,
+                                "total_duration_ms":
+                                    int((time.time() - t_turn_start) * 1000),
+                            },
+                        })
                     else:
                         # No agent wired; echo the text back as ASR
                         await _send_json(websocket, {
@@ -363,6 +378,14 @@ async def voice_websocket(websocket: WebSocket) -> None:
                                 "session_id": sid,
                                 "text": text,
                                 "duration_ms": 0,
+                            },
+                        })
+                        await _send_json(websocket, {
+                            "type": "voice.turn_ended",
+                            "data": {
+                                "session_id": sid,
+                                "discarded": False,
+                                "total_duration_ms": 0,
                             },
                         })
 
