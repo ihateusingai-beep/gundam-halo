@@ -6,6 +6,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.2] — 2026-06-10
+
+Closes M9-D (voice quality follow-up from the v0.1.1 M9-C live run).
+
+### Added
+- **`backend/app/voice/tts/voice_sanitizer.py`** — server-side
+  sanitiser that runs between the agent callback and the
+  TTS pipeline.
+  - `strip_reasoning(text)` removes `<think>…</think>` and
+    `<tool_call>…</tool_call>` blocks, plus leading
+    "Reasoning: …" / "推理: …" prose. Case-insensitive,
+    handles both ASCII and full-width `:`.
+  - `sanitize_for_tts(text)` adds a markdown-fence rewrite on
+    top: triple-backtick and tilde code blocks become a single
+    `[Code: …]` summary (capped at 200 chars, internal
+    whitespace collapsed). Inline backticks are untouched.
+- **`backend/tests/voice/test_voice_sanitizer.py`** — 19 unit
+  tests covering both functions, the exact M9-C regression
+  fixture, idempotence, and emotion-tag preservation.
+
+### Changed
+- **`HaloResponder.respond` and `respond_stream`** now call
+  `sanitize_for_tts(agent_text)` before `parse_emotion`. The
+  responder's TTS input never contains leaked reasoning or
+  bare fence lines again.
+- **`voice_ws._emit_agent_response`** also calls
+  `sanitize_for_tts` before `parse_emotion` so the
+  `agent.message` WebSocket frame is clean for the cockpit
+  display too (the responder was not the only consumer).
+- **`REACT_SYSTEM_PROMPT`** in `app/agents/native_react.py`
+  carries a "Voice output rules" section: the model is told
+  to omit `<think>` blocks from its visible reply and to
+  prefer prose over fenced code blocks when speaking. The
+  server-side strip is the safety net.
+- **`frontend/package.json` `dev` script** now passes
+  `--strictPort`. Vite exits non-zero when port 5173 is taken
+  instead of silently falling back to a different port.
+  Added `dev:flex` alias for the old loose behaviour.
+
+### Fixed
+- `<think>` blocks no longer leak into TTS audio (the user
+  no longer hears the model reason out loud before the
+  reply).
+- Markdown code fences no longer fragment TTS output. The
+  segmenter no longer sees bare fence lines, so the
+  `ERROR: TTS stream failed for '\\`\\`\\`': No audio was
+  received` warning is gone.
+
+### Verified
+| Check | Result |
+|---|---|
+| `pytest tests/voice/` | 102/102 pass (19 new + 83 existing) |
+| M9-C live re-run (`m9c_voice_tools.py`) | PASS |
+| TTS chunks | 201 → 68 (no more empty fence segments) |
+| TTS total bytes | 141552 → 48240 |
+| TTS latency (post `voice.end`) | 13.7s → 6.5s |
+| TTS stream failed errors | 4 → 0 |
+| Total wall (incl. ASR + warmup) | 20.2s → 12.9s |
+| `agent.message` frames containing `<think>` (client-visible) | 0 |
+| README first line in re-transcribed TTS | yes (`# Gundam Halo — Backend`) |
+| `used_tool_content` | `True` |
+
+### Commits in this release
+- `3ce641a` — `fix(voice): M9-D strip LLM reasoning + rewrite markdown fences for TTS`
+- `895bb2a` — `chore(frontend): pin dev server to 5173 with --strictPort`
+
+---
+
 ## [0.1.1] — 2026-06-10
 
 ### Fixed

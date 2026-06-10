@@ -143,15 +143,26 @@ will still leak occasionally.
 
 ## Acceptance
 
-- [ ] Server-side reasoning strip in `HaloResponder`.
-- [ ] Markdown-aware segmenter that handles fenced code blocks
+- [x] Server-side reasoning strip in `HaloResponder` and
+      `voice_ws._emit_agent_response`.
+- [x] Markdown-aware rewrite that handles fenced code blocks
       without `No audio was received` errors.
-- [ ] System prompt guard.
-- [ ] Unit tests for both.
-- [ ] M9-C live re-run passes with the new strict transcript grep
-      (no `<think>`, no `TTS stream failed`).
-- [ ] Cockpit screenshot of the post-turn `Ready` badge captured
-      from a real text-bypass turn.
+- [x] System prompt guard.
+- [x] Unit tests for both (19 new tests, 102/102 voice suite pass).
+- [x] M9-C live re-run passes with the strict transcript grep
+      (no `<think>` in client-visible frames, no `TTS stream
+      failed` in server log).
+- [x] M9-C re-run results: TTS chunks 201 → 68, TTS latency
+      13.7s → 6.5s, total wall 20.2s → 12.9s, used_tool_content
+      still `True`. The agent's spoken reply (re-transcribed
+      via whisper) still contains the README first line.
+- [x] Cockpit regression — voice badge returns to "Ready — hold
+      to talk" after a text-bypass turn, captured in
+      `~/.mavis/tmp/gundam-halo-screenshots/v011-01-baseline-ready.png`.
+
+**Closed in v0.1.2** (`docs/CHANGELOG.md`). Commits:
+- `3ce641a` — `fix(voice): M9-D strip LLM reasoning + rewrite markdown fences for TTS`
+- `895bb2a` — `chore(frontend): pin dev server to 5173 with --strictPort`
 
 ## Commits (planned)
 
