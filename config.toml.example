@@ -75,7 +75,12 @@ min_speech_ms = 250
 min_silence_ms = 700
 
 [voice.asr]
-backend = "faster_whisper"            # local Whisper
+# M9-E (v0.1.3): default remains base. M9-E Layer 1 (medium
+# bump) was tested and rejected — see CHANGELOG v0.1.3 — the
+# 3x ASR latency penalty (5.5s → 16s on a 5s utterance) far
+# outweighs the marginal Cantonese quality gain. Layer 2
+# (Cantonese fine-tune of base) is the actual path forward.
+backend = "whisper_local"             # v1: "whisper_local" is the only one wired in the factory
 model_size = "base"                   # tiny/base/small/medium/large
 device = "auto"                       # auto | cpu | mps (Apple Silicon)
 

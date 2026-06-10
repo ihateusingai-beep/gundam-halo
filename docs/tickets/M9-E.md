@@ -8,6 +8,37 @@
 
 ---
 
+## Update — 2026-06-11: Layer 1 REJECTED, Layer 2 is the real path
+
+**Layer 1 (model_size base → medium) was tested and rejected in
+v0.1.3.** M9-C live re-run with `model_size = "medium"`:
+
+| Metric | base | medium | Δ |
+|---|---|---|---|
+| Cold-start | ~1.0s | ~40s (incl. 1.5 GB download) | +39s (first time) |
+| Per-turn ASR (5s utt) | ~5.5s | ~16s | **+10.5s / 3x** |
+| Total wall (M9-C live) | 12.9s | 33.1s | +20s |
+| Cantonese quality | garbled English | marginally cleaner English, still no actual Cantonese | marginal |
+| Disk footprint | 139 MB | +1.5 GB | +1 GB permanent |
+
+The 3x per-turn ASR latency is unacceptable for the cockpit
+UX (the user is waiting for turn-end feedback), and the
+Cantonese quality improvement is marginal. Whisper's
+Cantonese coverage is essentially zero across the entire
+model family; a bigger base model is not the answer.
+
+**Layer 1 is closed — not implementing.** The decision is
+documented in `CHANGELOG.md` v0.1.3. `config.toml.example`
+has been reverted to `base` with a comment pointing at this
+ticket.
+
+**Layer 2 (Cantonese fine-tune) is now the entire scope of
+M9-E.** See the rest of this ticket for the fine-tune plan,
+or jump to [Layer 2 fine-tune](#layer-2-cantonese-fine-tune-yue-specific-weights).
+
+---
+
+
 ## Symptom
 
 The M9-C live Cantonese fixture transcribes to:

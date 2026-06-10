@@ -25,6 +25,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.3] — 2026-06-11
+
+Closes M9-E Layer 1 with a documented rejection. The real fix
+is Layer 2 (Cantonese fine-tune), which is a separate sprint.
+
+### Investigated — M9-E Layer 1 (medium bump) — REJECTED
+
+Hypothesis: bumping Whisper `base` → `medium` would
+substantially improve Cantonese ASR quality for a one-line
+config change.
+
+Test setup: edit `~/.gundam-halo/config.toml`
+`model_size = "base"` → `"medium"`, restart backend, re-run
+M9-C live with the same Cantonese fixture
+(`tests/voice/fixtures/readme_query.wav`).
+
+Results:
+
+| Metric | base | medium | Δ |
+|---|---|---|---|
+| Cold-start (warmup) | ~1.0s | ~40s (incl. 1.5GB download) | +39s (first time) |
+| Per-turn ASR (5s utt) | ~5.5s | ~16s | **+10.5s / 3x** |
+| Total wall (M9-C live) | 12.9s | 33.1s | +20s |
+| ASR text on Cantonese fixture | `'Please use the file read tool to read backhand read me and tell me the first line.'` | `'Please use the File Read tool to read back-end readme and tell me the first line.'` | minor token fixes; still no actual Cantonese output |
+| TTS chunks / bytes | 62 / 44 KB | 62 / 44 KB | unchanged |
+| `used_tool_content` | True | True | unchanged |
+| Disk footprint | 139 MB | +1.5 GB (~10x) | permanent |
+
+Conclusion: **rejected**. The 3x ASR latency penalty is
+unacceptable for the cockpit UX (the user is waiting for
+turn-end feedback), and the Cantonese quality improvement
+is marginal — medium still produces a fully English
+transcription of the Cantonese input. Whisper's `yue`
+coverage is essentially zero across the entire model
+family; what we actually need is a fine-tune, not a bigger
+base model.
+
+### Reverted
+
+- `~/.gundam-halo/config.toml` and `config.toml.example`
+  both back to `model_size = "base"`.
+- `config.toml.example` carries a comment pointing future
+  readers at this CHANGELOG entry.
+- `medium.pt` cached at `~/.cache/whisper/medium.pt`
+  (1.5 GB) — left in place; will be re-used by Layer 2 if
+  we choose medium as the base for the Cantonese fine-tune.
+
+### Tracking
+
+- M9-E Layer 2 (Cantonese fine-tune) is the actual path
+  forward. See
+  [M9-E Layer 2 acceptance section](./tickets/M9-E.md#layer-2-fine-tune)
+  for scope and decision points. The model_size field is
+  a no-op for now; the new `model_path` config field (for
+  pointing at a local fine-tuned checkpoint) is the real
+  configuration knob that will land in v0.1.4 or later.
+
+### Commits in this release
+- `<docs>` — `chore(docs): document M9-E Layer 1 rejection in CHANGELOG v0.1.3`
+
+---
+
 ## [0.1.2] — 2026-06-10
 
 Closes M9-D (voice quality follow-up from the v0.1.1 M9-C live run).
