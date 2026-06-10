@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **`frontend/src-tauri/tauri.conf.json` `devUrl`** pinned from
+  `http://localhost:5173` to `http://127.0.0.1:5173`. macOS
+  resolves `localhost` to `::1` first when IPv6 is enabled, but
+  the dev backend binds 0.0.0.0 on IPv4 only — pinning to
+  `127.0.0.1` keeps the Tauri dev shell hitting the same
+  address Vite is actually serving on. Tailscale access still
+  works because Vite binds `0.0.0.0` and `127.0.0.1` is one
+  of the interfaces the OS routes back to localhost.
+
+### Tracking
+- [M9-E](./tickets/M9-E.md) — Whisper base → medium + Cantonese
+  fine-tune. Two-layer plan: model-size bump is a one-line
+  config change; the fine-tune is a separate sprint.
+
+---
+
 ## [0.1.2] — 2026-06-10
 
 Closes M9-D (voice quality follow-up from the v0.1.1 M9-C live run).
