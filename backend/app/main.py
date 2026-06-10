@@ -105,7 +105,14 @@ def create_app() -> FastAPI:
     # CORS — open for local dev, restrict in production
     halo_app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://localhost:8765"],
+        allow_origins=[
+            "http://localhost:5173",
+            "http://localhost:8765",
+            "http://localhost:8766",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:8765",
+            "http://127.0.0.1:8766",
+        ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
