@@ -13,6 +13,15 @@ Why openai-whisper over whisper.cpp in v1:
 - PyTorch handles MPS/CPU selection automatically
 - The Python API is enough for our throughput (1-2 turns/sec max)
 M2+ can swap to whisper.cpp via the same interface for lower latency.
+
+M9-E Layer 2 (v0.1.3): the `model_path` field is accepted in the
+constructor for forward-compat with the upcoming HF-transformers
+backend. In this v0.1.x line, `WhisperLocalASR` still uses the
+`openai-whisper` inference path, which only understands size names
+or `.pt` files — it cannot load a Hugging Face format checkpoint
+directory. A `model_path` directory is detected at warmup and a
+clear warning is logged; the field will be fully wired in v0.1.4
+when the HF backend lands (see docs/tickets/M9-E.md).
 """
 
 from __future__ import annotations
@@ -36,11 +45,13 @@ class WhisperLocalASR(ASRInterface):
     def __init__(
         self,
         model_size: str = "base",
+        model_path: str = "",  # M9-E Layer 2: HF-format dir, wired in v0.1.4
         language: str | None = None,  # None = auto-detect
         device: str = "auto",  # auto|cpu|cuda|mps
         compute_type: str = "auto",  # auto|int8|float16|float32
     ) -> None:
         self._model_size = model_size
+        self._model_path = model_path
         self._language = None if language in (None, "", "auto") else language
         self._device = self._resolve_device(device)
         self._compute_type = compute_type
@@ -65,6 +76,27 @@ class WhisperLocalASR(ASRInterface):
         """Load Whisper model into memory."""
         if self._model is not None:
             return
+
+        # M9-E Layer 2 forward-compat: if a model_path is set, surface
+        # the gap so the operator knows the v0.1.x line can't load a
+        # Hugging Face format directory yet. v0.1.4 will replace this
+        # backend with a HF-pipeline implementation.
+        if self._model_path:
+            expanded = os.path.expanduser(self._model_path)
+            if os.path.isdir(expanded):
+                logger.warning(
+                    f"voice.asr.model_path={self._model_path!r} is set "
+                    f"but WhisperLocalASR (openai-whisper backend) cannot "
+                    f"load HF-format directories. Falling back to "
+                    f"model_size={self._model_size!r}. Full support "
+                    f"lands in v0.1.4 (see docs/tickets/M9-E.md)."
+                )
+            else:
+                logger.warning(
+                    f"voice.asr.model_path={self._model_path!r} does not "
+                    f"exist on disk. Falling back to "
+                    f"model_size={self._model_size!r}."
+                )
 
         try:
             import whisper  # type: ignore

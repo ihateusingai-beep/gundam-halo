@@ -135,6 +135,10 @@ class VoiceASRConfig:
 
     backend: str = "whisper_local"  # only "whisper_local" in v1
     model_size: str = "base"  # tiny|base|small|medium|large
+    # M9-E Layer 2 (v0.1.3): when set, points at a local HF-format
+    # fine-tuned checkpoint (e.g. ~/.gundam-halo/models/whisper-yue-base/).
+    # Takes precedence over model_size if the directory exists.
+    model_path: str = ""
     language: str = "auto"  # auto|en|zh|yue|ja|...
     device: str = "auto"  # auto|cpu|cuda|mps
     compute_type: str = "auto"  # auto|int8|float16|float32
@@ -337,6 +341,7 @@ def _load_voice_config(toml_data: dict) -> VoiceConfig:
     asr = VoiceASRConfig(
         backend=asr_d.get("backend", asr_defaults.backend),
         model_size=asr_d.get("model_size", asr_defaults.model_size),
+        model_path=asr_d.get("model_path", asr_defaults.model_path),
         language=asr_d.get("language", asr_defaults.language),
         device=asr_d.get("device", asr_defaults.device),
         compute_type=asr_d.get("compute_type", asr_defaults.compute_type),

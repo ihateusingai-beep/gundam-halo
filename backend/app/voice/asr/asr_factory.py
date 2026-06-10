@@ -41,6 +41,7 @@ def create_asr(
     if backend == "whisper_local":
         return WhisperLocalASR(
             model_size=config.model_size,
+            model_path=config.model_path,
             language=config.language,
             device=config.device,
             compute_type=config.compute_type,

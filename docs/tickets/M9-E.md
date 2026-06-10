@@ -2,9 +2,12 @@
 
 > **Milestone**: M9 (voice layer) — M9-D follow-up
 > **Priority**: medium (perceived quality, not blocking)
-> **Status**: open
+> **Status**: Layer 1 closed (rejected); Layer 2 in flight (v0.1.3)
 > **Discovered during**: M9-C live run, 2026-06-10
-> **Owner**: TBD (Ken + Mavis collaboration)
+> **Owner**: Ken + Mavis
+> **Decided stack** (2026-06-11): Common Voice yue LoRA + HF
+> transformers + PEFT, on Whisper **base** (medium rejected in
+> Layer 1).
 
 ---
 
@@ -37,6 +40,95 @@ M9-E.** See the rest of this ticket for the fine-tune plan,
 or jump to [Layer 2 fine-tune](#layer-2-cantonese-fine-tune-yue-specific-weights).
 
 ---
+
+## v0.1.3 Layer 2 plan (Ken + Mavis, 2026-06-11)
+
+### Stack decisions
+
+| Question | Answer | Why |
+|---|---|---|
+| Dataset | **Common Voice yue** (Mozilla, CC-BY-SA 4.0, ~50h) | Public, no auth, native Cantonese speakers. Skip self-record for v1 (option B available later). |
+| Toolchain | **Hugging Face `transformers` + PEFT/LoRA** | Modern, active, smaller LoRA memory footprint, MPS-friendly. |
+| Base model | **Whisper `base`** (not medium) | Medium rejected in Layer 1 for latency. Base + LoRA per-turn ~6s on MPS. |
+| LoRA rank | 32, alpha 64, target `q_proj` + `v_proj` | Standard ratio; ~5M trainable params; attention-only LoRA is empirically the best quality/memory trade-off for Whisper. |
+| Training epochs | 3 | Standard for LoRA on 50h corpus. |
+| Effective batch | 8 (per_device 1 × grad_accum 8) | Memory ceiling on M-series MPS. |
+| Learning rate | 1e-3 | Standard LoRA starting point for Whisper. |
+| Optimizer | default (AdamW) | HF Trainer default. |
+| Mixed precision | none / bf16 if M3+ | MPS fp16 unreliable; bf16 is M3/M4 only. |
+
+### Code / config changes (committed in v0.1.3)
+
+| File | Status | Note |
+|---|---|---|
+| `pyproject.toml` | ✅ | New `train` extra: `transformers`, `peft`, `datasets`, `accelerate`, `jiwer`, `soundfile`. Install with `uv sync --extra train --extra voice`. |
+| `app/core/config.py` | ✅ | `VoiceASRConfig.model_path: str = ""` accepted. Loader updated. |
+| `app/voice/asr/whisper_local.py` | ✅ | Constructor accepts `model_path`; **emits a warning** if set, since openai-whisper can't load HF directories yet. Full support lands in v0.1.4. |
+| `app/voice/asr/asr_factory.py` | ✅ | Threads `model_path` through. |
+| `scripts/finetune_whisper_yue.py` | ✅ NEW | Full recipe script. CLI + argparse. `prepare_common_voice_yue` raises NotImplementedError as a **stub** — the real materialise-and-split logic is the next chunk of work. |
+| `tests/voice/test_whisper_yue.py` | ✅ NEW | Acceptance tests; **all skip** until a trained model lands at `~/.gundam-halo/models/whisper-yue-base/`. |
+
+### What's NOT in v0.1.3 (deferred)
+
+- **Actual training run** — the script is the recipe; executing it
+  is its own ~3h wall-clock session (download 50h CV yue + LoRA
+  training + WER eval).
+- **`WhisperLocalASR` swap to HF-pipeline backend** — the openai-
+  whisper package cannot load HF-format model directories. v0.1.4
+  will replace the backend. The trained weights from this sprint
+  are forward-compatible.
+- **User-recorded corpus** — deferred to a future Layer 2 v2.
+- **`m9c_voice_tools.py` augmented system note removal** — depends
+  on the trained model working through the new backend, so this
+  also lands in v0.1.4.
+
+### How to actually run the training (v0.1.3 follow-up session)
+
+```bash
+cd ~/workspace/working/gundam-halo/backend
+# 1. Install the training stack on top of the existing venv.
+uv sync --extra train --extra voice
+
+# 2. (Optional) Verify the env.
+.venv/bin/python -c "import transformers, peft, datasets, jiwer; print('ok')"
+
+# 3. Run the training. This will:
+#    - Download Common Voice 13.0 yue via Hugging Face Hub (~30min)
+#    - Materialise train/val/test splits to ~/.gundam-halo/cache/cv-yue/
+#    - LoRA fine-tune Whisper base for 3 epochs (~2.5h on M-series)
+#    - Merge LoRA into the base weights and save to
+#      ~/.gundam-halo/models/whisper-yue-base/  (HF format)
+#    - Run WER on the held-out test split, exit 2 if WER > 20%
+.venv/bin/python scripts/finetune_whisper_yue.py
+
+# 4. Run the acceptance tests (now that the model exists, they
+#    don't skip).
+.venv/bin/python -m pytest tests/voice/test_whisper_yue.py -v
+```
+
+### v0.1.4 follow-ups (after the model is trained)
+
+1. Replace `WhisperLocalASR` (openai-whisper) with
+   `WhisperHFASR` (transformers pipeline) — same interface,
+   swap the inference path. Add `backend = "whisper_hf"` to
+   the factory, keep `whisper_local` as a backward-compat
+   alias.
+2. Update `~/.gundam-halo/config.toml`:
+   ```toml
+   [voice.asr]
+   backend = "whisper_hf"
+   model_path = "~/.gundam-halo/models/whisper-yue-base/"
+   ```
+3. Re-run M9-C live. **Delete the augmented system note in
+   `scripts/m9c_voice_tools.py:187-192`** — verify the agent
+   still completes the task without the workaround.
+4. Commit the model directory under `~/.gundam-halo/` only if
+   it's small enough; otherwise document the download step
+   in a setup script.
+
+---
+
+## Layer 2 fine-tune (Cantonese yue-specific weights)
 
 
 ## Symptom

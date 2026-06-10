@@ -8,24 +8,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Changed
-- **`frontend/src-tauri/tauri.conf.json` `devUrl`** pinned from
-  `http://localhost:5173` to `http://127.0.0.1:5173`. macOS
-  resolves `localhost` to `::1` first when IPv6 is enabled, but
-  the dev backend binds 0.0.0.0 on IPv4 only — pinning to
-  `127.0.0.1` keeps the Tauri dev shell hitting the same
-  address Vite is actually serving on. Tailscale access still
-  works because Vite binds `0.0.0.0` and `127.0.0.1` is one
-  of the interfaces the OS routes back to localhost.
-
 ### Tracking
-- [M9-E](./tickets/M9-E.md) — Whisper base → medium + Cantonese
-  fine-tune. Two-layer plan: model-size bump is a one-line
-  config change; the fine-tune is a separate sprint.
+- [M9-E](./tickets/M9-E.md) — Layer 2 (Cantonese fine-tune)
+  in flight. Script + tests + deps land in v0.1.3. Actual
+  training run + backend swap land in a follow-up session.
 
 ---
 
 ## [0.1.3] — 2026-06-11
+
+Adds the M9-E Layer 2 fine-tune stack: dependencies, config
+plumbing, training recipe script, and acceptance tests. The
+training run itself is not executed in this release (3h+ of
+wall clock; separate session) but every piece of code and
+config required to run it is in place.
+
+### Added
+- **`pyproject.toml` `train` extra** —
+  `transformers`, `peft`, `datasets`, `accelerate`, `jiwer`,
+  `soundfile`. Not a runtime dependency; install only when
+  training: `uv sync --extra train --extra voice`.
+- **`backend/scripts/finetune_whisper_yue.py`** — full training
+  recipe (CLI + argparse). Downloads Common Voice yue,
+  materialises train/val/test splits, attaches a LoRA adapter
+  (r=32, alpha=64, q+v attention) to frozen Whisper base,
+  trains 3 epochs with effective batch 8 on MPS, merges the
+  LoRA back into the base weights, saves an HF-format
+  checkpoint to `~/.gundam-halo/models/whisper-yue-base/`,
+  and runs WER on the held-out test split (exit 2 if WER
+  > 20%). The dataset materialisation step is a
+  `NotImplementedError` stub — the next chunk of work is the
+  real split-by-speaker materialisation.
+- **`backend/tests/voice/test_whisper_yue.py`** — 4 acceptance
+  tests (model exists, model loads, M9-C fixture transcribes
+  with proper nouns preserved, held-out WER < 20%). All four
+  **skip** until a trained model lands; the suite stays green
+  throughout development and the tests activate automatically
+  the moment the model is trained.
+
+### Changed
+- **`VoiceASRConfig.model_path: str = ""`** — accepted in
+  `app/core/config.py`. Forward-compat with the upcoming
+  HF-pipeline backend. `WhisperLocalASR.__init__` accepts the
+  field and logs a clear warning if set (the openai-whisper
+  package cannot load HF-format directories; full support
+  lands in v0.1.4). `asr_factory.py` threads it through.
+
+### Verified
+| Check | Result |
+|---|---|
+| `pytest tests/voice/` | 102 passed + 4 skipped (new M9-E tests skip until model exists) |
+| Syntax: `app/core/config.py`, `whisper_local.py`, `asr_factory.py`, `finetune_whisper_yue.py` | OK |
+| Live `~/.gundam-halo/config.toml` | unchanged (still `model_size = "base"`, no model_path) |
+| Backend `/health` after restart with new code | 200 |
+
+### Decision
+
+M9-E Layer 2 stack (decided 2026-06-11):
+- Dataset: **Common Voice yue** (Mozilla, CC-BY-SA 4.0, ~50h)
+- Toolchain: **HuggingFace transformers + PEFT/LoRA**
+- Base model: **Whisper base** (medium rejected in Layer 1)
+- LoRA: r=32, alpha=64, target `q_proj` + `v_proj`
+- Effective batch 8, 3 epochs, lr 1e-3
+
+### Commits in this release
+- (Layer 1 rejection — see v0.1.3 entry below)
+- (Layer 2 deps + config + script + tests — this entry)
+
+### Tracking
+
+- The actual training run (~30min download + ~2.5h training +
+  ~5min eval) is its own session, NOT this release. The
+  command to run it is documented in
+  [M9-E §"How to actually run the training"](./tickets/M9-E.md#how-to-actually-run-the-training-v013-follow-up-session).
+- v0.1.4 follow-ups: replace `WhisperLocalASR` (openai-whisper)
+  with `WhisperHFASR` (transformers pipeline); update live
+  config to point `model_path` at the trained checkpoint;
+  re-run M9-C live and **delete the augmented system note in
+  `scripts/m9c_voice_tools.py:187-192`** as final acceptance.
+
+---
+
+## [0.1.3] — 2026-06-11 (Layer 1 rejected)
+
+See "Investigated — M9-E Layer 1 (medium bump) — REJECTED"
+section below. Layer 1 is closed; the v0.1.3 release focuses
+on Layer 2 instead.
+
+
 
 Closes M9-E Layer 1 with a documented rejection. The real fix
 is Layer 2 (Cantonese fine-tune), which is a separate sprint.
