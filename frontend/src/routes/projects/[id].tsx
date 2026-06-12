@@ -4,18 +4,12 @@ import { toast } from "sonner";
 
 import { HudCard } from "@/components/gundam/HudCard";
 import { CommandInput } from "@/components/gundam/CommandInput";
+import { MessageBubble, type ChatMessage } from "@/components/gundam/MessageBubble";
 import { StatusDot } from "@/components/gundam/StatusDot";
 import { Reticle } from "@/components/gundam/Reticle";
 import { ToolCallTraceList } from "@/components/gundam/ToolCallTraceList";
 import { api, ApiError } from "@/lib/api";
 import type { ProjectSummary } from "@/types/api";
-
-interface ChatMessage {
-  role: "user" | "agent" | "tool" | "system";
-  text: string;
-  tool_calls?: Array<{ id: string; name: string; args: Record<string, any> }>;
-  tool_name?: string;
-}
 
 /** Project detail — the primary use of the dashboard.
  *  Center: chat / agent activity (largest).
@@ -173,34 +167,6 @@ export function ProjectDetailPage() {
         placeholder="Tell the agent what to do..."
         disabled={busy}
       />
-    </div>
-  );
-}
-
-function MessageBubble({ msg }: { msg: ChatMessage }) {
-  const isUser = msg.role === "user";
-  const isTool = msg.role === "tool";
-  return (
-    <div
-      className={`p-3 rounded border ${
-        isUser
-          ? "border-[var(--accent)] bg-[var(--bg-elevated)]"
-          : isTool
-          ? "border-[var(--border-color)] border-dashed bg-[var(--bg-input)]/50"
-          : "border-[var(--border-color)] bg-[var(--bg-card)]"
-      }`}
-    >
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest font-[Rajdhani]">
-          {msg.role === "user" ? "YOU" : msg.role === "agent" ? "AGENT" : msg.role === "tool" ? "TOOL" : "SYSTEM"}
-        </span>
-        {isTool && msg.tool_name && (
-          <span className="text-[10px] text-[var(--accent)] font-mono">🔧 {msg.tool_name}</span>
-        )}
-      </div>
-      <pre className="text-sm text-[var(--text-primary)] whitespace-pre-wrap font-mono m-0">
-        {msg.text}
-      </pre>
     </div>
   );
 }
