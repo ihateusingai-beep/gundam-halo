@@ -60,12 +60,29 @@ export function VoicePanel() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioQueueRef = useRef<ArrayBuffer[]>([]);
-  const isPlayingRef = useRef(false);
+  // M10-A Plan A4: sequenceId bumps on every enqueue so stale in-flight
+  // frames abort their onended chain instead of triggering the next chunk.
+  // (Previously two simultaneous frames would race on isPlayingRef and
+  // could overlap or play a frame past the queue head.)
+  const playSeqRef = useRef(0);
+  const drainingRef = useRef(false);
 
   // Subscribe to state changes
   useEffect(() => {
     return onVoiceStatusChange(setStatus);
   }, []);
+
+  // M10-A Plan A4: when the turn ends (state goes back to ready/idle/error
+  // from speaking), bump the play seq so any in-flight drain chain aborts
+  // and clear the queue. This prevents stale frames from playing after
+  // the user pressed ✕ or after a new turn boundary.
+  useEffect(() => {
+    if (status.state === "ready" || status.state === "idle" || status.state === "error") {
+      playSeqRef.current += 1;
+      audioQueueRef.current = [];
+      drainingRef.current = false;
+    }
+  }, [status.state]);
 
   // Subscribe to all events for toast notifications + state debug
   useEffect(() => {
@@ -79,40 +96,62 @@ export function VoicePanel() {
     return unsub;
   }, []);
 
-  // TTS audio playback: enqueue binary frames, drain via <audio> element
+  // TTS audio playback: enqueue binary frames, drain sequentially.
   useEffect(() => {
     return onVoiceBinary((chunk) => {
       audioQueueRef.current.push(chunk);
-      drainAudioQueue();
+      void drainAudioQueue();
     });
   }, []);
 
-  function drainAudioQueue() {
-    if (isPlayingRef.current) return;
-    const next = audioQueueRef.current.shift();
-    if (!next) return;
-    isPlayingRef.current = true;
-    // Wrap the PCM in a Blob with an audio MIME that the browser can
-    // play. edge-tts outputs MP3 by default — the server already encodes
-    // it (see `voice_ws.py` — it uses the `tts_factory` to produce MP3).
-    // So we just feed the bytes to <audio src=blob:...>.
-    const blob = new Blob([next], { type: "audio/mpeg" });
-    const url = URL.createObjectURL(blob);
-    const audio = audioRef.current ?? new Audio();
-    audioRef.current = audio;
-    audio.src = url;
-    audio.onended = () => {
-      URL.revokeObjectURL(url);
-      isPlayingRef.current = false;
-      drainAudioQueue();
-    };
-    audio.onerror = () => {
-      URL.revokeObjectURL(url);
-      isPlayingRef.current = false;
-      drainAudioQueue();
-    };
-    audio.play().catch(() => {
-      isPlayingRef.current = false;
+  async function drainAudioQueue(): Promise<void> {
+    // Sequential drain: only one drain chain runs at a time. Stale chains
+    // exit early if playSeqRef moved past the version they were started
+    // with (e.g. user pressed ✕ Cancel, or new turn superseded).
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    const mySeq = playSeqRef.current;
+
+    try {
+      while (audioQueueRef.current.length > 0) {
+        if (mySeq !== playSeqRef.current) return; // superseded
+        const next = audioQueueRef.current.shift();
+        if (!next) return;
+        try {
+          await playChunk(next);
+        } catch (err) {
+          // Swallow per-chunk errors so one bad frame doesn't kill the queue.
+          console.warn("[VoicePanel] TTS chunk play failed:", err);
+        }
+        if (mySeq !== playSeqRef.current) return;
+      }
+    } finally {
+      drainingRef.current = false;
+    }
+  }
+
+  function playChunk(chunk: ArrayBuffer): Promise<void> {
+    return new Promise((resolve) => {
+      // Wrap MP3 bytes in a Blob URL. edge-tts output (see `voice_ws.py`
+      // + `tts_factory`) is already encoded as MP3.
+      const blob = new Blob([chunk], { type: "audio/mpeg" });
+      const url = URL.createObjectURL(blob);
+      const audio = audioRef.current ?? new Audio();
+      audioRef.current = audio;
+
+      const cleanup = () => {
+        URL.revokeObjectURL(url);
+        audio.onended = null;
+        audio.onerror = null;
+        resolve();
+      };
+      audio.onended = cleanup;
+      audio.onerror = cleanup;
+      audio.src = url;
+      audio.play().catch((err) => {
+        console.warn("[VoicePanel] audio.play() rejected:", err);
+        cleanup();
+      });
     });
   }
 

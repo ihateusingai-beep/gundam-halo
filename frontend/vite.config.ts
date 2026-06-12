@@ -25,6 +25,15 @@ export default defineConfig(async () => ({
   },
   // Env variables for backend connection
   envPrefix: ["VITE_", "TAURI_ENV_*"],
+  // M10-A Plan A7: inject APP_VERSION at build time.
+  // Falls back to git `git describe --tags --always` if no env var.
+  define: {
+    APP_VERSION: JSON.stringify(
+      process.env.VITE_APP_VERSION ??
+        process.env.npm_package_version ??
+        "0.0.0-dev",
+    ),
+  },
   build: {
     target: "es2022",
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,

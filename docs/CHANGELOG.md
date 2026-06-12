@@ -12,6 +12,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [M9-E](./tickets/M9-E.md) — Layer 2 (Cantonese fine-tune)
   in flight. Script + tests + deps land in v0.1.3. Actual
   training run + backend swap land in a follow-up session.
+- [M10-A](./tickets/M10-A.md) — Dashboard polish sprint
+  (Plan A) in flight. Part 1 (A1/A3/A4/A7) landed. A5/A6/A8
+  mechanical refactors deferred to follow-up.
+
+### Added
+- **frontend**: `lib/time.ts` — canonical `formatRelative` helper
+  (extracted from 3 duplicate copies in MissionCard, MissionSelect,
+  ProjectCard).
+- **frontend**: `vite.config.ts` `define.APP_VERSION` — build-time
+  version injection. Override with `VITE_APP_VERSION` env var.
+
+### Changed
+- **frontend**: `App.tsx` — removed `/cyber-wave-demo` route
+  (dev-only playground no longer reachable from the public app).
+- **frontend**: `components/layout/CockpitLayout.tsx` — frame
+  status text now reads `v{APP_VERSION}` (was hardcoded `v0.1.0`).
+- **frontend**: `components/gundam/VoicePanel.tsx` — TTS audio
+  playback switched from `isPlayingRef`-flag drain to a
+  Promise-chain drain with `playSeqRef` sequence-id guard.
+  Prevents stale-frame overlap and aborts in-flight playback
+  on `✕ Cancel` or turn boundary.
+
+### Fixed
+- **frontend**: VoicePanel TTS race — two simultaneous binary
+  frames could overlap or play past the queue head. Now
+  sequentially awaited with stale-frame skip.
+
+### Verified
+- `pnpm tsc --noEmit` clean
+- `pnpm build` clean (87 modules, 396.58 kB main chunk)
+- `pnpm lint` clean
+- Build smoke: `VITE_APP_VERSION=0.1.3 pnpm build` →
+  `STANDBY"," · v","0.1.3"]` in bundle.
 
 ---
 

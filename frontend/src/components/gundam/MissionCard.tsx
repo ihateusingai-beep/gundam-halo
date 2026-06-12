@@ -2,6 +2,7 @@ import { Link } from "react-router";
 
 import type { ProjectSummary } from "@/types/api";
 import { cn } from "@/lib/utils";
+import { formatRelative } from "@/lib/time";
 
 interface MissionCardProps {
   project: ProjectSummary;
@@ -87,25 +88,4 @@ export function MissionCard({ project, className = "" }: MissionCardProps) {
       <div className="gundam-engage-hint">ENGAGE ▸</div>
     </Link>
   );
-}
-
-function formatRelative(iso: string): string {
-  if (!iso) return "—";
-  try {
-    const then = new Date(iso).getTime();
-    if (isNaN(then)) return iso.slice(0, 16);
-    const now = Date.now();
-    const diffMs = now - then;
-    const sec = Math.floor(diffMs / 1000);
-    if (sec < 60) return `${sec}s ago`;
-    const min = Math.floor(sec / 60);
-    if (min < 60) return `${min}m ago`;
-    const hr = Math.floor(min / 60);
-    if (hr < 24) return `${hr}h ago`;
-    const day = Math.floor(hr / 24);
-    if (day < 30) return `${day}d ago`;
-    return new Date(iso).toLocaleDateString("en", { day: "numeric", month: "short" });
-  } catch {
-    return iso;
-  }
 }

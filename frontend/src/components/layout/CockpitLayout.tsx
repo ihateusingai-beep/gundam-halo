@@ -126,7 +126,7 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
           : "GUNDAM HALO // AWAITING ORDERS"}
       </div>
       <div className="gundam-frame-status" aria-hidden="true">
-        {mode === "active" ? "MISSION ACTIVE" : "STANDBY"} · v0.1.0
+        {mode === "active" ? "MISSION ACTIVE" : "STANDBY"} · v{APP_VERSION}
       </div>
       <div className="gundam-scan" aria-hidden="true" />
 
