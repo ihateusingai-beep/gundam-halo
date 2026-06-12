@@ -1,23 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { toast } from "sonner";
 
 import { HudCard } from "@/components/gundam/HudCard";
 import { Reticle } from "@/components/gundam/Reticle";
 import { api, ApiError } from "@/lib/api";
 import type { SessionListItem } from "@/types/api";
-
-interface ExpandedMessages {
-  status: "loading" | "ready" | "error";
-  messages?: Array<{
-    role: "system" | "user" | "assistant" | "tool";
-    content: string;
-    tool_calls: Array<{ id: string; name: string; arguments: Record<string, any> }>;
-    tool_call_id?: string;
-    name?: string;
-  }>;
-  error?: string;
-}
 
 /** Project memory browser — vertical timeline of past sessions.
  *
@@ -38,7 +26,11 @@ interface ExpandedMessages {
  *    │  ┃  ...                                    │
  *    └────────────────────────────────────────────┘
  *
- *  Click a card → expand to show the conversation inline.
+ *  Click a card → navigate to /projects/:id/sessions/:sessionId
+ *  (M10-B2 SessionDetailPage) for the full transcript. Inline
+ *  expansion was removed in favour of the dedicated page — the
+ *  bubble-rendering logic now lives in one place (MessageBubble
+ *  from A8) and sessions get shareable deep-links.
  */
 export function ProjectMemoryPage() {
   const { id } = useParams<{ id: string }>();
@@ -46,7 +38,6 @@ export function ProjectMemoryPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterAgent, setFilterAgent] = useState<string>("all");
-  const [expanded, setExpanded] = useState<Record<string, ExpandedMessages>>({});
 
   useEffect(() => {
     if (!id) return;
@@ -116,34 +107,6 @@ export function ProjectMemoryPage() {
 
     return Object.entries(buckets).filter(([_, v]) => v.length > 0);
   }, [sessions, filterAgent]);
-
-  const toggleExpand = async (sessionId: string) => {
-    if (expanded[sessionId]) {
-      // Collapse
-      setExpanded((prev) => {
-        const next = { ...prev };
-        delete next[sessionId];
-        return next;
-      });
-      return;
-    }
-    if (!id) return;
-    // Expand + fetch
-    setExpanded((prev) => ({ ...prev, [sessionId]: { status: "loading" } }));
-    try {
-      const res = await api.getSessionMessages(id, sessionId);
-      setExpanded((prev) => ({
-        ...prev,
-        [sessionId]: { status: "ready", messages: res.messages },
-      }));
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : String(e);
-      setExpanded((prev) => ({
-        ...prev,
-        [sessionId]: { status: "error", error: msg },
-      }));
-    }
-  };
 
   if (loading) {
     return (
@@ -242,12 +205,7 @@ export function ProjectMemoryPage() {
             <div key={groupName}>
               <div className="gundam-timeline-group-header">{groupName}</div>
               {items.map((s) => (
-                <SessionNode
-                  key={s.id}
-                  session={s}
-                  expanded={expanded[s.id]}
-                  onToggle={() => toggleExpand(s.id)}
-                />
+                <SessionNode key={s.id} session={s} projectId={id ?? ""} />
               ))}
             </div>
           ))}
@@ -259,19 +217,16 @@ export function ProjectMemoryPage() {
 
 function SessionNode({
   session,
-  expanded,
-  onToggle,
+  projectId,
 }: {
   session: SessionListItem;
-  expanded?: ExpandedMessages;
-  onToggle: () => void;
+  projectId: string;
 }) {
-  const isOpen = !!expanded;
   return (
     <div className="gundam-timeline-node">
-      <div
-        className={`gundam-memory-card ${isOpen ? "gundam-memory-card-expanded" : ""}`}
-        onClick={onToggle}
+      <Link
+        to={`/projects/${projectId}/sessions/${session.id}`}
+        className={`gundam-memory-card block hover:gundam-memory-card-expanded transition-colors`}
       >
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
@@ -289,12 +244,7 @@ function SessionNode({
             <span>
               {session.message_count} msg{session.message_count === 1 ? "" : "s"}
             </span>
-            <span
-              className="text-[var(--accent)]"
-              style={{ transition: "transform 0.2s", display: "inline-block", transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}
-            >
-              ▶
-            </span>
+            <span className="text-[var(--accent)]">→</span>
           </div>
         </div>
         {session.updated_at && session.updated_at !== session.created_at && (
@@ -302,55 +252,7 @@ function SessionNode({
             last update: {formatTime(session.updated_at)}
           </div>
         )}
-
-        {/* Expanded message list */}
-        {isOpen && <ExpandedSession data={expanded!} />}
-      </div>
-    </div>
-  );
-}
-
-function ExpandedSession({ data }: { data: ExpandedMessages }) {
-  if (data.status === "loading") {
-    return (
-      <div className="mt-3 flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-mono">
-        <div className="gundam-radar w-3 h-3" />
-        <span>DECRYPTING TRANSMISSION…</span>
-      </div>
-    );
-  }
-  if (data.status === "error") {
-    return (
-      <div className="mt-3 text-[10px] text-[var(--danger)] font-mono">
-        ⚠ {data.error}
-      </div>
-    );
-  }
-  if (!data.messages || data.messages.length === 0) {
-    return (
-      <div className="mt-3 text-[10px] text-[var(--text-muted)] font-mono">
-        (empty conversation)
-      </div>
-    );
-  }
-  return (
-    <div className="mt-3 space-y-1">
-      {data.messages.map((m, i) => (
-        <div key={i} className={`gundam-memory-msg gundam-memory-msg-${m.role}`}>
-          <div className="text-[9px] uppercase tracking-wider opacity-70 mb-0.5">
-            {m.role}
-            {m.name && m.role === "tool" ? ` · ${m.name}` : ""}
-          </div>
-          <div className="whitespace-pre-wrap break-words">
-            {m.content || (m.tool_calls && m.tool_calls.length > 0 ? "(tool call)" : "")}
-          </div>
-          {m.tool_calls && m.tool_calls.length > 0 && (
-            <div className="text-[9px] text-[var(--warning)] mt-1 font-mono">
-              🔧 {m.tool_calls.map((tc) => tc.name).join(", ")}
-            </div>
-          )}
-        </div>
-      ))}
+      </Link>
     </div>
   );
 }

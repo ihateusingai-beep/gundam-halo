@@ -6,6 +6,7 @@ import { OverviewPage } from "@/routes/index";
 import { NewProjectPage } from "@/routes/projects/new";
 import { ProjectDetailPage } from "@/routes/projects/[id]";
 import { ProjectMemoryPage } from "@/routes/projects/[id]/memory";
+import { SessionDetailPage } from "@/routes/projects/[id]/sessions/[sessionId]";
 import { SettingsPage } from "@/routes/settings";
 import { ThemeSwitcher } from "@/components/gundam/ThemeSwitcher";
 import { CommandPalette } from "@/components/gundam/CommandPalette";
@@ -28,6 +29,7 @@ export default function App() {
               <Route path="/projects/new" element={<NewProjectPage />} />
               <Route path="/projects/:id" element={<ProjectDetailPage />} />
               <Route path="/projects/:id/memory" element={<ProjectMemoryPage />} />
+              <Route path="/projects/:id/sessions/:sessionId" element={<SessionDetailPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
@@ -39,6 +41,7 @@ export default function App() {
               <Route path="/projects/new" element={<NewProjectPage />} />
               <Route path="/projects/:id" element={<ProjectDetailPage />} />
               <Route path="/projects/:id/memory" element={<ProjectMemoryPage />} />
+              <Route path="/projects/:id/sessions/:sessionId" element={<SessionDetailPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
