@@ -148,6 +148,15 @@ function useCommands(): Command[] {
         icon: "⚙",
         perform: () => navigate("/settings"),
       },
+      {
+        id: "nav.audit",
+        title: "Open Audit Log",
+        subtitle: "Mac control operations — file I/O, shell, policy blocks",
+        category: "Navigation",
+        keywords: ["security", "audit", "log", "mac"],
+        icon: "⛨",
+        perform: () => navigate("/audit"),
+      },
 
       // ---- System ----
       {

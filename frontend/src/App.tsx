@@ -8,6 +8,7 @@ import { ProjectDetailPage } from "@/routes/projects/[id]";
 import { ProjectMemoryPage } from "@/routes/projects/[id]/memory";
 import { SessionDetailPage } from "@/routes/projects/[id]/sessions/[sessionId]";
 import { SettingsPage } from "@/routes/settings";
+import { AuditDashboardPage } from "@/routes/audit";
 import { ThemeSwitcher } from "@/components/gundam/ThemeSwitcher";
 import { CommandPalette } from "@/components/gundam/CommandPalette";
 import { HaloLive2DProvider } from "@/context/live2d-bridge-context";
@@ -31,6 +32,7 @@ export default function App() {
               <Route path="/projects/:id/memory" element={<ProjectMemoryPage />} />
               <Route path="/projects/:id/sessions/:sessionId" element={<SessionDetailPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/audit" element={<AuditDashboardPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </MobileLayout>
@@ -43,6 +45,7 @@ export default function App() {
               <Route path="/projects/:id/memory" element={<ProjectMemoryPage />} />
               <Route path="/projects/:id/sessions/:sessionId" element={<SessionDetailPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/audit" element={<AuditDashboardPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </CockpitLayout>

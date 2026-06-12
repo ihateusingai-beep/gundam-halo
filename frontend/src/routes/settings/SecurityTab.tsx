@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 
 import { HudCard } from "@/components/gundam/HudCard";
 import { api, ApiError } from "@/lib/api";
@@ -65,9 +66,17 @@ export function SecurityTab() {
         <h3 className="text-sm font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
           Security — Audit Log
         </h3>
-        <span className="text-[10px] text-[var(--text-muted)] font-mono">
-          {entries.length} entries
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-[var(--text-muted)] font-mono">
+            {entries.length} entries
+          </span>
+          <Link
+            to="/audit"
+            className="text-[10px] font-mono uppercase tracking-wider text-[var(--accent)] hover:underline"
+          >
+            ⤴ Open Dashboard
+          </Link>
+        </div>
       </div>
 
       {/* Filter chips */}
