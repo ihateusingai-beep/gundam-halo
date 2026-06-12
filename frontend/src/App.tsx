@@ -8,6 +8,7 @@ import { ProjectDetailPage } from "@/routes/projects/[id]";
 import { ProjectMemoryPage } from "@/routes/projects/[id]/memory";
 import { SettingsPage } from "@/routes/settings";
 import { ThemeSwitcher } from "@/components/gundam/ThemeSwitcher";
+import { CommandPalette } from "@/components/gundam/CommandPalette";
 import { HaloLive2DProvider } from "@/context/live2d-bridge-context";
 import { useResponsive } from "@/lib/use-responsive";
 
@@ -44,6 +45,11 @@ export default function App() {
           </CockpitLayout>
         )}
       </HaloLive2DProvider>
+
+      {/* Global command palette — Cmd/Ctrl+K. Mounted last so it sits
+          above all other UI. Self-contained: subscribes to its own
+          open/close bus and reads the global Cmd/Ctrl+K shortcut. */}
+      <CommandPalette />
     </>
   );
 }
