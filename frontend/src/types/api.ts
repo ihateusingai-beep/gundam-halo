@@ -101,6 +101,23 @@ export interface SessionListItem {
   message_count: number;
 }
 
+/** A5 — wire shape of a single message in the session history. */
+export interface SessionHistoryMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  tool_calls: Array<{ id: string; name: string; arguments: Record<string, any> }>;
+  tool_call_id?: string;
+  name?: string;
+}
+
+/** A5 — response from GET /api/sessions/:id/messages */
+export interface SessionHistoryResponse {
+  session_id: string;
+  project_name: string | null;
+  message_count: number;
+  messages: SessionHistoryMessage[];
+}
+
 export interface SessionMessagesResponse {
   session_id: string;
   project_name: string;

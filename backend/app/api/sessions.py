@@ -58,6 +58,28 @@ class MessageResponse(BaseModel):
     error: Optional[str] = None
 
 
+class SessionMessage(BaseModel):
+    """A single message in a session's transcript (A5).
+
+    Wire shape matches `/api/projects/{name}/memory/{session_id}` exactly
+    so the frontend can reuse the same `mapMessages()` mapper for both
+    endpoints (B2 SessionDetailPage and A5 ProjectDetailPage).
+    """
+
+    role: str  # "system" | "user" | "assistant" | "tool"
+    content: str
+    tool_calls: List[dict] = []
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
+
+
+class SessionHistoryResponse(BaseModel):
+    session_id: str
+    project_name: Optional[str] = None
+    message_count: int
+    messages: List[SessionMessage]
+
+
 # In-memory caches. These can be lost on restart — disk has the truth.
 _sessions: dict[str, SessionInfo] = {}
 _agents: dict[str, BaseAgent] = {}
@@ -185,6 +207,71 @@ async def get_session(session_id: str) -> SessionInfo:
 @router.get("", response_model=List[SessionInfo])
 async def list_sessions() -> List[SessionInfo]:
     return list(_sessions.values())
+
+
+@router.get("/{session_id}/messages", response_model=SessionHistoryResponse)
+async def get_session_messages(session_id: str) -> SessionHistoryResponse:
+    """Return the persisted message history for a session (A5).
+
+    The history is always read from disk (`conversations/<sid>.json`)
+    so the endpoint is consistent whether the session is currently
+    in-memory (in-flight) or was loaded earlier. Each `send_message`
+    call already persists the full transcript before returning, so
+    the disk is always the truth.
+
+    Used by ProjectDetailPage to:
+      1. Reload context after a page refresh (so the user doesn't
+         lose their conversation if they reload mid-session).
+      2. Hydrate the local message list on mount when resuming a
+         known session_id from a deep-link or a hot-reload.
+
+    Note: we deliberately do NOT read from `_agents[session_id].messages`
+    even when the agent is in-memory — we want a consistent source of
+    truth and the disk is always at least as up-to-date as the agent
+    (each turn is persisted before the HTTP response is returned).
+    """
+    # Find the project for this session.
+    # Prefer in-memory cache, fall back to disk scan.
+    info = _sessions.get(session_id)
+    project_name = info.project_name if info else None
+
+    if not project_name:
+        # Disk scan: look for the session file under any project dir
+        projects_root = get_config().home / "projects"
+        if projects_root.exists():
+            for pdir in projects_root.iterdir():
+                if not pdir.is_dir():
+                    continue
+                if persistence.session_exists(pdir.name, session_id):
+                    project_name = pdir.name
+                    break
+
+    if not project_name:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session '{session_id}' not found on disk or in memory",
+        )
+
+    messages = persistence.load_messages(project_name, session_id) or []
+
+    return SessionHistoryResponse(
+        session_id=session_id,
+        project_name=project_name,
+        message_count=len(messages),
+        messages=[
+            SessionMessage(
+                role=m.role.value if hasattr(m.role, "value") else str(m.role),
+                content=m.content,
+                tool_calls=[
+                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                    for tc in m.tool_calls
+                ],
+                tool_call_id=m.tool_call_id,
+                name=m.name,
+            )
+            for m in messages
+        ],
+    )
 
 
 @router.post("/{session_id}/message", response_model=MessageResponse)

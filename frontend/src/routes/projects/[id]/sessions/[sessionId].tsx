@@ -7,6 +7,7 @@ import { Reticle } from "@/components/gundam/Reticle";
 import { MessageBubble, type ChatMessage } from "@/components/gundam/MessageBubble";
 import { StatusDot } from "@/components/gundam/StatusDot";
 import { api, ApiError } from "@/lib/api";
+import { mapMessages } from "@/lib/message-mapper";
 
 /** Per-session detail page (B2).
  *
@@ -183,48 +184,8 @@ export function SessionDetailPage() {
   );
 }
 
-/** Convert backend wire format to our internal ChatMessage shape. */
-function mapMessages(
-  raw: Array<{
-    role: "system" | "user" | "assistant" | "tool";
-    content: string;
-    tool_calls?: Array<{ id: string; name: string; arguments: Record<string, any> }>;
-    name?: string;
-  }>,
-): ChatMessage[] {
-  return raw.map((m) => {
-    // Backend "assistant" maps to our "agent" role.
-    // Backend "tool" can mean two things: a tool result message (name + content)
-    // OR an assistant message that *made* a tool call. We collapse the latter
-    // into an "agent" bubble with tool_calls attached, matching A8's contract.
-    if (m.role === "assistant") {
-      return {
-        role: "agent" as const,
-        text: m.content || "",
-        ...(m.tool_calls && m.tool_calls.length > 0
-          ? {
-              tool_calls: m.tool_calls.map((tc) => ({
-                id: tc.id,
-                name: tc.name,
-                args: tc.arguments ?? {},
-              })),
-            }
-          : {}),
-      };
-    }
-    if (m.role === "tool") {
-      return {
-        role: "tool" as const,
-        text: m.content || "(no result)",
-        ...(m.name ? { tool_name: m.name } : {}),
-      };
-    }
-    return {
-      role: m.role as "user" | "system",
-      text: m.content || "",
-    };
-  });
-}
+/** Wire-format → ChatMessage conversion lives in `lib/message-mapper.ts`
+ *  (shared with ProjectDetailPage / A5). See that file for the contract. */
 
 function Stat({
   label,
