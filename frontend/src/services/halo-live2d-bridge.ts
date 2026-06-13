@@ -197,26 +197,30 @@ function connect() {
  */
 function subscribeToMainWsTriggers() {
   subscribeTo("live2d_tool_trigger", (event) => {
-    const d = event.data as {
+    // Defensive: backend may send this with partial data. We need at
+    // least an `expression` (or `motion`) to drive Cubism; an
+    // `undefined` flowing into startMotion/setExpression can crash the
+    // renderer. Bail out early with a warning instead.
+    const d = (event.data ?? {}) as Partial<{
       expression: string;
       motion: string;
       emotion: string;
       tool: string;
       phase: string;
-    };
-    if (!d || !d.expression) {
+    }>;
+    if (!d.expression && !d.motion) {
       console.warn("[HaloLive2D] live2d_tool_trigger missing fields", d);
       return;
     }
     console.log(
       `[HaloLive2D] Tool trigger: tool=${d.tool}, phase=${d.phase}, emotion=${d.emotion}`,
     );
-    state.lastEmotion = d.emotion;
+    state.lastEmotion = d.emotion ?? null;
     dispatchLive2DTrigger({
       session_id: "",
-      expression: d.expression,
-      motion: d.motion,
-      emotion: d.emotion,
+      expression: d.expression ?? "",
+      motion: d.motion ?? "",
+      emotion: d.emotion ?? "",
     });
     notifyState();
   });

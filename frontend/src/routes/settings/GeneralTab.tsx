@@ -16,6 +16,17 @@ const SPEED_FILL_PCT = (fps: number | null): string => {
   return `${((fps - 1) / 59) * 100}%`;
 };
 
+/** True only inside the Tauri desktop runtime. Tray controls rely on
+ *  Rust commands (`set_animation_speed` / `get_animation_speed`) that
+ *  are unavailable in a plain browser, so we hide the entire section
+ *  on the web dev server to avoid throwing on every slider change. */
+function isTauriRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof (window as any).__TAURI_INTERNALS__ !== "undefined"
+  );
+}
+
 function TraySpeedControl() {
   const [fps, setFps] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
@@ -159,7 +170,14 @@ export function GeneralTab({ settings }: { settings: Settings }) {
       </Section>
 
       <Section title="Tray Icon Animation">
-        <TraySpeedControl />
+        {isTauriRuntime() ? (
+          <TraySpeedControl />
+        ) : (
+          <p className="text-[10px] text-[var(--text-muted)] font-mono">
+            Tray animation controls are only available in the Tauri
+            desktop app. (Web dashboard preview.)
+          </p>
+        )}
       </Section>
     </HudCard>
   );

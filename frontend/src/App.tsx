@@ -14,6 +14,31 @@ import { CommandPalette } from "@/components/gundam/CommandPalette";
 import { HaloLive2DProvider } from "@/context/live2d-bridge-context";
 import { useResponsive } from "@/lib/use-responsive";
 
+/**
+ * Single source of truth for the route map. Previously the same `<Routes>`
+ * block was duplicated for `isMobile` (MobileLayout) and desktop
+ * (CockpitLayout) — a new route added to one side and not the other
+ * would silently redirect mobile users to `/` (the catch-all). Extracting
+ * this once means future route additions only need to touch one place.
+ */
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/" element={<OverviewPage />} />
+      <Route path="/projects/new" element={<NewProjectPage />} />
+      <Route path="/projects/:id" element={<ProjectDetailPage />} />
+      <Route path="/projects/:id/memory" element={<ProjectMemoryPage />} />
+      <Route
+        path="/projects/:id/sessions/:sessionId"
+        element={<SessionDetailPage />}
+      />
+      <Route path="/settings" element={<SettingsPage />} />
+      <Route path="/audit" element={<AuditDashboardPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
 export default function App() {
   const isMobile = useResponsive();
 
@@ -25,29 +50,11 @@ export default function App() {
       <HaloLive2DProvider>
         {isMobile ? (
           <MobileLayout>
-            <Routes>
-              <Route path="/" element={<OverviewPage />} />
-              <Route path="/projects/new" element={<NewProjectPage />} />
-              <Route path="/projects/:id" element={<ProjectDetailPage />} />
-              <Route path="/projects/:id/memory" element={<ProjectMemoryPage />} />
-              <Route path="/projects/:id/sessions/:sessionId" element={<SessionDetailPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/audit" element={<AuditDashboardPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            <AppRoutes />
           </MobileLayout>
         ) : (
           <CockpitLayout>
-            <Routes>
-              <Route path="/" element={<OverviewPage />} />
-              <Route path="/projects/new" element={<NewProjectPage />} />
-              <Route path="/projects/:id" element={<ProjectDetailPage />} />
-              <Route path="/projects/:id/memory" element={<ProjectMemoryPage />} />
-              <Route path="/projects/:id/sessions/:sessionId" element={<SessionDetailPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/audit" element={<AuditDashboardPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            <AppRoutes />
           </CockpitLayout>
         )}
       </HaloLive2DProvider>

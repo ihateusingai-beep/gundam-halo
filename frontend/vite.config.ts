@@ -22,6 +22,31 @@ export default defineConfig(async () => ({
       // Tell vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+    // Proxy backend calls so the SPA can use a same-origin base URL
+    // (avoids CORS, port drift, and "Load failed" fetch errors when
+    // API_BASE defaults to a stale port like 8766).
+    // Backend runs on 8000 (uvicorn app.main:app). API mounts under
+    // /api/*; WebSocket endpoints sit at /ws and /voice.
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+      },
+      "/health": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+      },
+      "/ws": {
+        target: "ws://127.0.0.1:8000",
+        ws: true,
+        changeOrigin: true,
+      },
+      "/voice": {
+        target: "ws://127.0.0.1:8000",
+        ws: true,
+        changeOrigin: true,
+      },
+    },
   },
   // Env variables for backend connection
   envPrefix: ["VITE_", "TAURI_ENV_*"],

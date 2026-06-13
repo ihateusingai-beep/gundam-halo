@@ -329,10 +329,17 @@ function ensureOpen(): WebSocket {
   return state.socket;
 }
 
-function send(payload: object | string) {
+function send(payload: object | string | ArrayBuffer) {
   const ws = state.socket;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     console.warn("[Voice] cannot send, socket not open", payload);
+    return;
+  }
+  // Binary PCM chunks must go through raw — `JSON.stringify(new ArrayBuffer(...))`
+  // collapses to `"{}"`, which the backend rejects with `unknown_type: None`
+  // and spams the voice-error toast. Detect and pass through.
+  if (payload instanceof ArrayBuffer) {
+    ws.send(payload);
     return;
   }
   ws.send(typeof payload === "string" ? payload : JSON.stringify(payload));

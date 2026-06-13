@@ -26,18 +26,17 @@ import type {
 } from "@/types/api";
 
 // Detect backend URL:
-// - Tauri: read from window.__TAURI__ (TBD)
-// - Web dev: 127.0.0.1:8766  (8765 is currently grabbed by an unrelated
-//   `python -m http.server` running in math-dungeon-sprint2-debt/ —
-//   we yield the well-known port and run on 8766 to avoid clobbering
-//   that session. Pinned IPv4: macOS resolves "localhost" to ::1 first
-//   when IPv6 is enabled, and the dev backend binds 0.0.0.0 on v4
-//   only. Tailscale/prod override via VITE_API_BASE.)
-// - Tailscale: hostname from config / VITE_API_BASE override
+// - Web dev: same-origin via Vite proxy (vite.config.ts) → empty string
+//   means `${path}` is resolved relative to the page origin (5173),
+//   and Vite forwards `/api`, `/health`, `/ws`, `/voice` to the
+//   backend on :8000. This avoids the previous 8766 port drift that
+//   caused `TypeError: Load failed` on every fetch.
+// - Tauri: read from window.__TAURI__ (TBD).
+// - Tailscale / prod: override via VITE_API_BASE (e.g. "http://box:8000").
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string) ||
   (typeof window !== "undefined" && (window as any).__HALO_API__) ||
-  "http://127.0.0.1:8766";
+  "";
 
 class ApiError extends Error {
   status: number;

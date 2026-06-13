@@ -80,7 +80,13 @@ function SecretInput({
       <div className="flex items-center gap-2">
         <input
           type="password"
-          autoComplete="off"
+          // `new-password` tells the browser this is *not* a login
+          // password — it suppresses the "save password?" prompt
+          // (which `autoComplete="off"` does NOT reliably do in
+          // Chrome/Edge) so secrets never end up in the OS / browser
+          // password manager. `data-1p-ignore` + `data-bwignore` are
+          // belt-and-braces for 1Password / Bitwarden.
+          autoComplete="new-password"
           spellCheck={false}
           data-1p-ignore
           // Hint to password managers (1Password / Bitwarden) not to store
