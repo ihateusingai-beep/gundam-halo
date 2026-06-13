@@ -51,8 +51,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # manager to validate incoming `create(name=...)` requests.
 PROJECT_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}$")
 
-# Reserved names — would shadow real dirs in $HALO_HOME. Refusing them
-# keeps `~/.gundam-halo/{projects,archive,templates,...}` unambiguous.
+# Reserved names — two failure modes are blocked here:
+#  1. Real dirs in $HALO_HOME (default, global, archive, templates, .mavis)
+#     that a project would shadow and break unambiguous path resolution.
+#  2. Shell-token names (rm) — even if a user does `halo create rm`, the
+#     resulting directory would be a footgun in shell commands like
+#     `rm -rf ~/.gundam-halo/projects/*`, where a literal "rm" subdir
+#     would match. Defense-in-depth only; the manager is not a shell.
 RESERVED_PROJECT_NAMES: frozenset[str] = frozenset(
     {
         "default",
@@ -60,6 +65,8 @@ RESERVED_PROJECT_NAMES: frozenset[str] = frozenset(
         "archive",
         "templates",
         ".mavis",
+        # Shell-token names (kept narrow — only the most common footgun).
+        "rm",
     }
 )
 

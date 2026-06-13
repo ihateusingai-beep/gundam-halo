@@ -330,12 +330,16 @@ def test_create_rejects_invalid_name(manager: ProjectManager, bad: str, why: str
     )
 
 
-@pytest.mark.parametrize("reserved", ["default", "global", "archive", "templates"])
+@pytest.mark.parametrize(
+    "reserved",
+    ["default", "global", "archive", "templates", "rm"],
+)
 def test_create_rejects_reserved_name(manager: ProjectManager, reserved: str):
     """Reserved names that pass the regex (e.g. ``default``) get a
     specific 'reserved' error. Names like ``.mavis`` are also in the
     reserved set but they're caught by the regex first — covered
-    by the regex test."""
+    by the regex test. ``rm`` is a defense-in-depth shell-token name
+    (would be a footgun in ``rm -rf ~/.gundam-halo/projects/*``)."""
     with pytest.raises(ProjectNameError) as exc:
         manager.create(reserved)
     assert "reserved" in str(exc.value).lower()
