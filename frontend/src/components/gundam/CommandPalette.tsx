@@ -9,9 +9,21 @@
  *   title/subtitle/keywords, scored by match position + title
  *   prefix bonus. Good enough for ~30 commands; we don't pull in
  *   fuse.js for this.
- * - Keyboard: ↑↓ to move, Enter to run, Esc to close. The input
- *   is auto-focused on open and the active item is scrolled into
- *   view (centered).
+ * - Built on the shadcn `command` primitive (cmdk under the hood):
+ *   `<Command>` + `<CommandList>` + `<CommandGroup>` + `<CommandItem>`
+ *   + `<CommandEmpty>`. For the input row we drop down to
+ *   `CommandPrimitive.Input` (cmdk's bare input) instead of the
+ *   shadcn `CommandInput` wrapper, because the wrapper layers in a
+ *   styled `InputGroup` and a search icon — we want our own flat
+ *   transparent input with a `⌘` prefix and `Esc` hint to match
+ *   the existing cockpit visual treatment. We pass
+ *   `shouldFilter={false}` on `<Command>` because filtering / scoring
+ *   is our job (`scoreCommand`); cmdk's built-in filter would
+ *   otherwise fight our ranking. We *do* lean on cmdk for:
+ *   arrow-key navigation, selected-item `aria-selected`,
+ *   scroll-into-view, and Enter-to-select.
+ * - Keyboard: ↑↓ to move (cmdk), Enter to run (cmdk), Esc / Tab are
+ *   handled by us on the input (Tab cycles category, Esc closes).
  * - State is local to the palette. We DO NOT route through zustand
  *   for `open` because open/close is a render-level UI detail and
  *   we want it to vanish with no global side effects.
@@ -19,7 +31,7 @@
  * Where to add new actions:
  *   - Add to `useCommands()` for app-level / dynamic actions.
  *   - For one-off, page-local actions, just call `usePalette()`
- *     from a child component and dispatch `openPalette(initialArgs)`.
+ *     from a child component and dispatch `openPalette(initialArgs)).
  */
 
 import {
@@ -38,6 +50,14 @@ import { useProjectsStore } from "@/stores/projects";
 import { useThemeStore } from "@/stores/theme";
 import { api } from "@/lib/api";
 import { THEMES } from "@/components/gundam/ThemeSwitcher";
+import { Command as CommandPrimitive } from "cmdk";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 
 // ---------------------------------------------------------------- //
 // Types
@@ -334,15 +354,23 @@ function pushRecent(id: string) {
 // Main component
 // ---------------------------------------------------------------- //
 
+const CATEGORY_CYCLE: (CommandCategory | null)[] = [
+  null,
+  "Navigation",
+  "Projects",
+  "Themes",
+  "Mac Control",
+  "System",
+];
+
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [placeholder, setPlaceholder] = useState("Type a command or search…");
   const [categoryFilter, setCategoryFilter] = useState<CommandCategory | null>(null);
   const [recents, setRecents] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
   const commands = useCommands();
 
   // Subscribe to global open/close events
@@ -351,7 +379,7 @@ export function CommandPalette() {
       setOpen(next);
       if (next) {
         setQuery(ev?.initialQuery ?? "");
-        setActive(0);
+        setActiveId(null); // let the filtered list decide
         setPlaceholder(ev?.placeholder ?? "Type a command or search…");
         setCategoryFilter(ev?.category ?? null);
         setRecents(getRecents());
@@ -375,7 +403,8 @@ export function CommandPalette() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Auto-focus input on open
+  // Auto-focus input on open. cmdk's CommandInput is a forwardRef to
+  // the real <input>, so the same ref pattern as before works.
   useEffect(() => {
     if (open) {
       // wait for the input to mount
@@ -383,7 +412,8 @@ export function CommandPalette() {
     }
   }, [open]);
 
-  // Filter + score
+  // Filter + score. We always compute this ourselves; cmdk is told
+  // `shouldFilter={false}` so it does NOT also filter.
   const filtered = useMemo<ScoredCommand[]>(() => {
     let pool = commands;
     if (categoryFilter) pool = pool.filter((c) => c.category === categoryFilter);
@@ -393,19 +423,16 @@ export function CommandPalette() {
       .sort((a, b) => b.score - a.score);
   }, [commands, query, categoryFilter]);
 
-  // Reset active when filtered list changes
+  // Keep the highlighted item in sync with the filtered list. When
+  // the list changes (new query, new category, new commands), reset
+  // the selection to the first item. When cmdk navigates with arrow
+  // keys, it calls onValueChange with the new item id, which we
+  // echo back to our state so the highlight is correct after a
+  // re-render.
   useEffect(() => {
-    setActive(0);
-  }, [query, categoryFilter]);
-
-  // Scroll active item into view
-  useEffect(() => {
-    if (!listRef.current) return;
-    const el = listRef.current.querySelector<HTMLElement>(
-      `[data-idx="${active}"]`,
-    );
-    el?.scrollIntoView({ block: "nearest" });
-  }, [active]);
+    if (activeId && filtered.some((s) => s.cmd.id === activeId)) return;
+    setActiveId(filtered[0]?.cmd.id ?? null);
+  }, [filtered, activeId]);
 
   const runCommand = useCallback(
     async (cmd: Command) => {
@@ -421,34 +448,19 @@ export function CommandPalette() {
     [],
   );
 
+  // Key handling that cmdk does NOT do for us:
+  //   Esc → close
+  //   Tab → cycle category filter
+  //   ↑/↓/Enter → handled by cmdk's Command root
   const onInputKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActive((a) => Math.min(a + 1, Math.max(0, filtered.length - 1)));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActive((a) => Math.max(0, a - 1));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      const target = filtered[active];
-      if (target) void runCommand(target.cmd);
-    } else if (e.key === "Escape") {
+    if (e.key === "Escape") {
       e.preventDefault();
       setOpen(false);
     } else if (e.key === "Tab" && !e.shiftKey) {
-      // Tab cycles categories: All → Navigation → Projects → Themes → Mac → System → All
       e.preventDefault();
       setCategoryFilter((c) => {
-        const order: (CommandCategory | null)[] = [
-          null,
-          "Navigation",
-          "Projects",
-          "Themes",
-          "Mac Control",
-          "System",
-        ];
-        const idx = c ? order.indexOf(c) : 0;
-        return order[(idx + 1) % order.length] ?? null;
+        const idx = c ? CATEGORY_CYCLE.indexOf(c) : 0;
+        return CATEGORY_CYCLE[(idx + 1) % CATEGORY_CYCLE.length] ?? null;
       });
     }
   };
@@ -507,15 +519,17 @@ export function CommandPalette() {
           }}
         />
 
-        {/* Header / input */}
+        {/* Header / input row. The prefix glyph, the ⌘ chip, and
+            the category-filter chip are decorative siblings of the
+            CommandInput, which is a cmdk <input>. */}
         <div className="relative flex items-center gap-2 px-4 py-3 border-b border-[var(--border-color)]">
           <span className="text-[var(--accent)] font-[Orbitron] text-lg select-none">
             ⌘
           </span>
-          <input
+          <CommandPrimitive.Input
             ref={inputRef}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onValueChange={setQuery}
             onKeyDown={onInputKey}
             placeholder={placeholder}
             className={cn(
@@ -538,71 +552,109 @@ export function CommandPalette() {
         </div>
 
         {/* Results */}
-        <div
-          ref={listRef}
-          className="relative max-h-[60vh] overflow-y-auto"
-          role="listbox"
+        <Command
+          shouldFilter={false}
+          value={activeId ?? ""}
+          onValueChange={setActiveId}
+          className={cn(
+            "relative max-h-[60vh] overflow-y-auto bg-transparent",
+            "[&_[cmdk-list-sizer]]:!p-0",
+          )}
+          label="Command results"
         >
-          {filtered.length === 0 && (
-            <div className="px-4 py-8 text-center text-[var(--text-muted)] text-sm font-mono">
-              No commands match "{query}"
-            </div>
-          )}
+          <CommandList
+            className="max-h-none"
+          >
+            {filtered.length === 0 && (
+              <CommandEmpty
+                className={cn(
+                  "px-4 py-8 text-center text-[var(--text-muted)] text-sm font-mono",
+                )}
+              >
+                No commands match "{query}"
+              </CommandEmpty>
+            )}
 
-          {filtered.length > 0 && recentCommands.length > 0 && query === "" && !categoryFilter && (
-            <div className="px-4 pt-3 pb-1">
-              <h3 className="text-[10px] font-[Orbitron] text-[var(--text-muted)] uppercase tracking-widest">
-                Recent
-              </h3>
-            </div>
-          )}
+            {filtered.length > 0 &&
+              recentCommands.length > 0 &&
+              query === "" &&
+              !categoryFilter && (
+                <div className="px-4 pt-3 pb-1">
+                  <h3 className="text-[10px] font-[Orbitron] text-[var(--text-muted)] uppercase tracking-widest">
+                    Recent
+                  </h3>
+                </div>
+              )}
 
-          {/* When no query: show recents at top, then categories. Otherwise, score-sorted grouped by category. */}
-          {query === "" && !categoryFilter && recentCommands.length > 0 ? (
-            <div className="pb-2">
-              {recentCommands.map((cmd) => {
-                const idxInFiltered = filtered.findIndex((s) => s.cmd.id === cmd.id);
-                return (
-                  <PaletteRow
-                    key={cmd.id}
-                    idx={idxInFiltered >= 0 ? idxInFiltered : 0}
-                    active={idxInFiltered === active}
-                    cmd={cmd}
-                    onClick={() => void runCommand(cmd)}
-                    onHover={() => {
-                      if (idxInFiltered >= 0) setActive(idxInFiltered);
-                    }}
-                    disabled={idxInFiltered < 0}
-                  />
-                );
-              })}
-              <div className="border-t border-[var(--border-color)] my-1" />
-            </div>
-          ) : null}
+            {/* When no query: show recents at top, then categories. Otherwise, score-sorted grouped by category. */}
+            {query === "" && !categoryFilter && recentCommands.length > 0
+              ? (
+                <CommandGroup
+                  heading=""
+                  className="!p-0 !pb-2"
+                >
+                  {recentCommands.map((cmd) => {
+                    const idxInFiltered = filtered.findIndex((s) => s.cmd.id === cmd.id);
+                    const disabled = idxInFiltered < 0;
+                    return (
+                      <CommandItem
+                        key={cmd.id}
+                        value={cmd.id}
+                        disabled={disabled}
+                        onSelect={() => {
+                          if (!disabled) void runCommand(cmd);
+                        }}
+                        className={cn(
+                          // Override cmdk's default selection styling with our
+                          // Gundam tokens. cmdk adds `data-selected="true"`
+                          // on the highlighted item.
+                          "flex items-center gap-3 px-4 py-2 cursor-pointer",
+                          "transition-colors rounded-none border-l-2 border-transparent",
+                          "data-[selected=true]:bg-[var(--accent)]/10",
+                          "data-[selected=true]:border-[var(--accent)]",
+                          "data-[disabled=true]:opacity-40",
+                          "[&[data-selected=true]_.gundam-row-title]:text-[var(--accent)]",
+                          "[&[data-selected=true]_.gundam-row-icon]:text-[var(--accent)]",
+                          "[&[data-selected=true]_.gundam-row-icon]:border-[var(--accent)]",
+                        )}
+                      >
+                        <PaletteRowContent cmd={cmd} />
+                      </CommandItem>
+                    );
+                  })}
+                  <div className="border-t border-[var(--border-color)] my-1" />
+                </CommandGroup>
+              )
+              : null}
 
-          {grouped.map(([category, items]) => (
-            <div key={category} className="pb-2">
-              <div className="px-4 pt-2 pb-1">
-                <h3 className="text-[10px] font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
-                  {category}
-                </h3>
-              </div>
-              {items.map((s) => {
-                const idxInFiltered = filtered.indexOf(s);
-                return (
-                  <PaletteRow
+            {grouped.map(([category, items]) => (
+              <CommandGroup
+                key={category}
+                heading={category}
+                className="!p-0 !pb-2 [&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-[Orbitron] [&_[cmdk-group-heading]]:text-[var(--accent)] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest"
+              >
+                {items.map((s) => (
+                  <CommandItem
                     key={s.cmd.id}
-                    idx={idxInFiltered}
-                    active={idxInFiltered === active}
-                    cmd={s.cmd}
-                    onClick={() => void runCommand(s.cmd)}
-                    onHover={() => setActive(idxInFiltered)}
-                  />
-                );
-              })}
-            </div>
-          ))}
-        </div>
+                    value={s.cmd.id}
+                    onSelect={() => void runCommand(s.cmd)}
+                    className={cn(
+                      "flex items-center gap-3 px-4 py-2 cursor-pointer",
+                      "transition-colors rounded-none border-l-2 border-transparent",
+                      "data-[selected=true]:bg-[var(--accent)]/10",
+                      "data-[selected=true]:border-[var(--accent)]",
+                      "[&[data-selected=true]_.gundam-row-title]:text-[var(--accent)]",
+                      "[&[data-selected=true]_.gundam-row-icon]:text-[var(--accent)]",
+                      "[&[data-selected=true]_.gundam-row-icon]:border-[var(--accent)]",
+                    )}
+                  >
+                    <PaletteRowContent cmd={s.cmd} />
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
 
         {/* Footer hint */}
         <div className="relative flex items-center justify-between gap-3 px-4 py-2 border-t border-[var(--border-color)] text-[10px] font-mono text-[var(--text-muted)]">
@@ -628,39 +680,22 @@ export function CommandPalette() {
   );
 }
 
-interface PaletteRowProps {
-  idx: number;
-  active: boolean;
-  cmd: Command;
-  onClick: () => void;
-  onHover?: () => void;
-  disabled?: boolean;
-}
+// ---------------------------------------------------------------- //
+// Row content (extracted so both recent and grouped items render
+// identically). The outer <CommandItem> owns selection styling;
+// this is purely the icon / title / subtitle / enter-glyph.
+// ---------------------------------------------------------------- //
 
-function PaletteRow({ idx, active, cmd, onClick, onHover, disabled }: PaletteRowProps) {
+function PaletteRowContent({ cmd }: { cmd: Command }) {
   return (
-    <div
-      data-idx={idx}
-      role="option"
-      aria-selected={active}
-      onClick={disabled ? undefined : onClick}
-      onMouseEnter={() => {
-        if (!disabled && onHover) onHover();
-      }}
-      className={cn(
-        "flex items-center gap-3 px-4 py-2 cursor-pointer",
-        "transition-colors",
-        active && "bg-[var(--accent)]/10 border-l-2 border-[var(--accent)]",
-        !active && "border-l-2 border-transparent",
-        disabled && "opacity-40",
-      )}
-    >
+    <>
       {cmd.icon && (
         <span
           className={cn(
+            "gundam-row-icon",
             "w-6 h-6 flex items-center justify-center text-sm shrink-0",
             "border border-[var(--border-color)] rounded",
-            active ? "text-[var(--accent)] border-[var(--accent)]" : "text-[var(--text-secondary)]",
+            "text-[var(--text-secondary)]",
           )}
         >
           {cmd.icon}
@@ -669,8 +704,8 @@ function PaletteRow({ idx, active, cmd, onClick, onHover, disabled }: PaletteRow
       <div className="flex-1 min-w-0">
         <div
           className={cn(
-            "text-sm font-mono truncate",
-            active ? "text-[var(--accent)]" : "text-[var(--text-primary)]",
+            "gundam-row-title",
+            "text-sm font-mono truncate text-[var(--text-primary)]",
           )}
         >
           {cmd.title}
@@ -681,11 +716,17 @@ function PaletteRow({ idx, active, cmd, onClick, onHover, disabled }: PaletteRow
           </div>
         )}
       </div>
-      {active && (
-        <span className="text-[10px] font-[Rajdhani] uppercase tracking-widest text-[var(--accent)]">
-          ↵
-        </span>
-      )}
-    </div>
+      <span
+        className={cn(
+          "gundam-row-enter",
+          "text-[10px] font-[Rajdhani] uppercase tracking-widest text-[var(--accent)]",
+          // Only show the ↵ glyph on the currently highlighted row.
+          "opacity-0 group-data-[selected=true]/command-item:opacity-100",
+        )}
+        aria-hidden="true"
+      >
+        ↵
+      </span>
+    </>
   );
 }
