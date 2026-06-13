@@ -155,6 +155,20 @@ def save_messages(
             pass
         raise
 
+    # M12 hook: mirror into SQLite + enqueue for embedding
+    try:
+        from app.memory.lifecycle import on_session_saved
+
+        on_session_saved(
+            project_name=project_name,
+            session_id=session_id,
+            agent_type=agent_type,
+            messages=messages,
+        )
+    except Exception as e:
+        # Lifecycle is best-effort; the file is already on disk.
+        logger.debug(f"persistence: on_session_saved hook failed: {e}")
+
     return path
 
 
@@ -193,10 +207,17 @@ def delete_session(project_name: str, session_id: str) -> bool:
     if path.exists():
         try:
             path.unlink()
-            return True
         except OSError as e:
             logger.error(f"Failed to delete {path}: {e}")
             return False
+        # M12 hook: drop from SQLite
+        try:
+            from app.memory.lifecycle import on_session_deleted
+
+            on_session_deleted(session_id)
+        except Exception as e:
+            logger.debug(f"persistence: on_session_deleted hook failed: {e}")
+        return True
     return False
 
 

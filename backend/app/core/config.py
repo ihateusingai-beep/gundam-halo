@@ -179,6 +179,39 @@ class VoiceConfig:
 
 
 @dataclass
+class MemoryConfig:
+    """Structured memory layer config (M12 — SQLite + FAISS).
+
+    The JSON / MD files remain the source of truth; SQLite is a
+    queryable index and FAISS is the vector recall index. Both are
+    rebuildable from disk (see ``app/memory/lifecycle.py``).
+    """
+
+    # Embedding backend:
+    #   "hash"  — deterministic, offline, no model. Poor quality.
+    #   "model" — sentence-transformers/all-MiniLM-L6-v2 (v0.2.1+).
+    embedding_backend: str = "hash"
+    embedding_dim: int = 384
+
+    # Background embedder queue cap. Past this, oldest entries are
+    # dropped (the SQLite index will still have them, just not vectors).
+    embed_queue_max: int = 5000
+
+    # SQLite WAL mode. ON = better read concurrency.
+    sqlite_wal: bool = True
+
+    # Rebuild on startup if index is missing or schema is older.
+    auto_rebuild: bool = True
+
+    # Disable the FAISS-backed vector index. When True, the lifecycle
+    # layer uses NullVectorIndex (no FAISS native module loaded).
+    # This is mainly useful for test environments where loading
+    # faiss-cpu + torch together in the same process can crash on
+    # Apple Silicon (see M12 ticket "Known follow-ups").
+    disable_vector_index: bool = False
+
+
+@dataclass
 class Config:
     """Root config object."""
 
@@ -190,6 +223,7 @@ class Config:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     @property
     def log_level(self) -> str:
@@ -409,6 +443,27 @@ def load_config(home: Optional[Path] = None) -> Config:
         telegram=_load_telegram_config(toml_data),
         security=_load_security_config(toml_data),
         voice=_load_voice_config(toml_data),
+        memory=_load_memory_config(toml_data),
+    )
+
+
+def _load_memory_config(toml_data: dict) -> MemoryConfig:
+    """Load the [memory] section from TOML.
+
+    All fields are optional and fall back to MemoryConfig defaults.
+    See ARCHITECTURE §M12 for design rationale.
+    """
+    d = toml_data.get("memory", {})
+    defaults = MemoryConfig()
+    return MemoryConfig(
+        embedding_backend=d.get("embedding_backend", defaults.embedding_backend),
+        embedding_dim=d.get("embedding_dim", defaults.embedding_dim),
+        embed_queue_max=d.get("embed_queue_max", defaults.embed_queue_max),
+        sqlite_wal=d.get("sqlite_wal", defaults.sqlite_wal),
+        auto_rebuild=d.get("auto_rebuild", defaults.auto_rebuild),
+        disable_vector_index=d.get(
+            "disable_vector_index", defaults.disable_vector_index
+        ),
     )
 
 

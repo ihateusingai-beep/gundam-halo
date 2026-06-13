@@ -34,6 +34,7 @@ dependencies = [
     "python-telegram-bot>=22.6",
     "psutil>=5.9",                   # for Mac system gauges (CPU/RAM/disk/network)
     "watchdog>=4.0",                 # for file system watching
+    "faiss-cpu>=1.7",                # M12: vector recall (in-memory cosine)
 ]
 
 [project.optional-dependencies]
@@ -79,10 +80,11 @@ packages = ["app"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not faiss_native'"
 markers = [
     "live: requires running LLM API",
     "mac: requires macOS for full functionality",
+    "faiss_native: requires loading the FAISS C++ extension; skipped in mixed-mode runs (Apple Silicon faiss-cpu + torch finalization).",
 ]
 
 [tool.ruff]

@@ -77,6 +77,11 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     from app.api.sessions import init_persistence_on_startup
     init_persistence_on_startup()
 
+    # M12: init the structured memory layer (SQLite + FAISS + embedder)
+    from app.memory.lifecycle import init_memory_on_startup
+
+    init_memory_on_startup()
+
     yield
 
     # Shutdown
@@ -84,6 +89,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     tool_motion_mapper.stop()
     await manager.stop_all()
     reset_event_bus()
+    # M12: stop the background embedder cleanly
+    try:
+        from app.memory.lifecycle import reset_background_embedder
+
+        reset_background_embedder()
+    except Exception:
+        pass
 
 
 def create_app() -> FastAPI:
@@ -120,35 +132,12 @@ def create_app() -> FastAPI:
 
     # Mount routes
     from app.api import health, projects, sessions, mac, system, channels as channels_api, ws as ws_api, settings as settings_api, secrets as secrets_api, memory as memory_api
-    from app.tools.builder import default_tools
+    # M12 recall router: register BEFORE the legacy /api/memory/{user}
+    # router so the new sub-paths (`/sessions`, `/search`, `/recall`,
+    # `/rebuild`) don't get shadowed by the catch-all `{user}` route.
+    from app.api import memory_recall as memory_recall_api
 
-    # Import agents so they register themselves (side-effect of @register decorator)
-    import app.agents.simple  # noqa: F401
-    import app.agents.native_react  # noqa: F401
-    logger.debug(f"Registered agents: {list(AgentRegistry.keys())}")
-
-    # Import channels so they register themselves
-    import app.channels.telegram  # noqa: F401
-    logger.debug(f"Registered channels: {list(ChannelRegistry.keys())}")
-
-    # Register default tools in the ToolRegistry (so they're discoverable
-    # even though we typically pass them explicitly to agents). Guarded
-    # against duplicate registration because tests call create_app()
-    # multiple times.
-    for tool in default_tools():
-        if not ToolRegistry.contains(tool.name):
-            ToolRegistry.register_value(tool.name, tool)
-    logger.debug(f"Registered {len(default_tools())} default tools")
-
-    halo_app.include_router(health.router, prefix="/health", tags=["health"])
-    halo_app.include_router(system.router, prefix="/api/system", tags=["system"])
-    halo_app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
-    halo_app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
-    halo_app.include_router(mac.router, prefix="/api/mac", tags=["mac"])
-    halo_app.include_router(channels_api.router, prefix="/api/channels", tags=["channels"])
-    halo_app.include_router(ws_api.router, tags=["websocket"])
-    halo_app.include_router(settings_api.router, prefix="/api", tags=["settings"])
-    halo_app.include_router(secrets_api.router, prefix="/api/secrets", tags=["secrets"])
+    halo_app.include_router(memory_recall_api.router, prefix="/api/memory", tags=["memory-recall"])
     halo_app.include_router(memory_api.router, prefix="/api/memory", tags=["memory"])
 
     # Voice layer (M1) — only mount if enabled in config

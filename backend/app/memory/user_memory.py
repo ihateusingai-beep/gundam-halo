@@ -35,10 +35,11 @@ import json
 import logging
 import re
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class MemoryEntry:
     updated_at: float
     created_at: float
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "user": self.user,
             "key": self.key,
@@ -142,9 +143,9 @@ class UserMemoryStore:
         self._base = halo_home / USERS_DIR
         self._base.mkdir(parents=True, exist_ok=True)
         # user_key -> { slug -> { key, value, created_at, updated_at } }
-        self._cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._cache: dict[str, dict[str, dict[str, Any]]] = {}
         self._loaded: set[str] = set()
-        self._locks: Dict[str, str] = {}  # user_key -> lockfile path
+        self._locks: dict[str, str] = {}  # user_key -> lockfile path
 
     def _user_dir(self, user: str) -> Path:
         return self._base / user
@@ -197,7 +198,7 @@ class UserMemoryStore:
     # Public API
     # ------------------------------------------------------------------
 
-    def get(self, user: str, key: str) -> Optional[MemoryEntry]:
+    def get(self, user: str, key: str) -> MemoryEntry | None:
         """Read a single key. Returns None if missing."""
         slug = slugify_key(key)
         if not slug:
@@ -254,6 +255,13 @@ class UserMemoryStore:
             entry_path.write_text(body, encoding="utf-8")
             # Persist the index
             self._save_index(user)
+            # M12 hook: enqueue for embedding
+            try:
+                from app.memory.lifecycle import on_user_memory_set
+
+                on_user_memory_set(user, slug, value)
+            except Exception as e:
+                logger.debug(f"UserMemoryStore.set: lifecycle hook failed: {e}")
             return MemoryEntry(
                 user=user,
                 key=slug,
@@ -280,9 +288,16 @@ class UserMemoryStore:
                 except Exception as e:
                     logger.warning(f"Failed to delete {entry_path}: {e}")
             self._save_index(user)
+            # M12 hook: best-effort (FAISS entry is dropped on next rebuild)
+            try:
+                from app.memory.lifecycle import on_user_memory_deleted
+
+                on_user_memory_deleted(user, slug)
+            except Exception as e:
+                logger.debug(f"UserMemoryStore.delete: lifecycle hook failed: {e}")
             return True
 
-    def list_keys(self, user: str) -> List[MemoryEntry]:
+    def list_keys(self, user: str) -> list[MemoryEntry]:
         """List all keys for a user, sorted by updated_at (newest first)."""
         self._ensure_loaded(user)
         with self._user_lock(user):
@@ -300,7 +315,7 @@ class UserMemoryStore:
             out.sort(key=lambda e: e.updated_at, reverse=True)
             return out
 
-    def list_users(self) -> List[str]:
+    def list_users(self) -> list[str]:
         """List all user keys that have at least one memory entry."""
         if not self._base.exists():
             return []
@@ -319,7 +334,7 @@ class UserMemoryStore:
 # ---------------------------------------------------------------------------
 
 
-_store: Optional[UserMemoryStore] = None
+_store: UserMemoryStore | None = None
 
 
 def get_user_memory_store() -> UserMemoryStore:
