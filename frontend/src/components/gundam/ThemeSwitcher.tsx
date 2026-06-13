@@ -1,7 +1,14 @@
-import { useState } from "react";
 import { useThemeStore } from "@/stores/theme";
 import type { GundamTheme, ThemeInfo } from "@/types/api";
-import { cn } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export const THEMES: ThemeInfo[] = [
   { id: "gundam-ntd", name: "NT-D", emoji: "🦄", description: "Unicorn psychoframe" },
@@ -17,7 +24,6 @@ export const THEMES: ThemeInfo[] = [
 /** Floating 8-mode theme switcher (always visible, bottom-right). */
 export function ThemeSwitcher() {
   const { theme, setTheme } = useThemeStore();
-  const [open, setOpen] = useState(false);
 
   return (
     <div
@@ -26,61 +32,50 @@ export function ThemeSwitcher() {
         bottom: 24,
         right: 24,
         zIndex: 9999,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-end",
-        gap: 8,
       }}
     >
-      {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {THEMES.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => {
-                setTheme(t.id);
-                setOpen(false);
-              }}
-              className={cn(
-                "w-24 h-9 rounded-full border-2 cursor-pointer text-xs",
-                "font-[Rajdhani] uppercase tracking-wider",
-                "transition-all hover:scale-105",
-                theme === t.id && "ring-2 ring-[var(--accent)]",
-              )}
-              style={{
-                borderColor: "var(--accent)",
-                background: "var(--bg-card)",
-                color: "var(--accent)",
-              }}
-              title={t.description}
-            >
-              {t.emoji} {t.name}
-            </button>
-          ))}
-          <button
-            onClick={() => {
-              setTheme(null as unknown as GundamTheme);
-              setOpen(false);
-            }}
-            className="w-24 h-9 rounded-full border-2 border-gray-500 bg-gray-800 text-gray-400 text-xs cursor-pointer font-[Rajdhani]"
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          className="w-[72px] h-[72px] rounded-full border-[3px] border-white cursor-pointer text-2xl"
+          style={{
+            background: "linear-gradient(135deg, #FF69B4, #00D4FF, #FFD700)",
+          }}
+          aria-label="Toggle Gundam theme switcher"
+        >
+          🎮
+          <span style={{ display: "block", fontSize: 10, marginTop: 2 }}>
+            MS MODE
+          </span>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          side="top"
+          sideOffset={8}
+          className="min-w-32"
+        >
+          <DropdownMenuRadioGroup
+            value={theme ?? ""}
+            onValueChange={(v) => setTheme(v as GundamTheme)}
           >
-            ✖ OFF
-          </button>
-        </div>
-      )}
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-[72px] h-[72px] rounded-full border-[3px] border-white cursor-pointer text-2xl"
-        style={{
-          background: "linear-gradient(135deg, #FF69B4, #00D4FF, #FFD700)",
-        }}
-        aria-label="Toggle Gundam theme switcher"
-      >
-        🎮
-        <span style={{ display: "block", fontSize: 10, marginTop: 2 }}>
-          MS MODE
-        </span>
-      </button>
+            {THEMES.map((t) => (
+              <DropdownMenuRadioItem key={t.id} value={t.id ?? ""}>
+                <span className="font-[Rajdhani] uppercase tracking-wider text-xs">
+                  {t.emoji} {t.name}
+                </span>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={() => setTheme(null as unknown as GundamTheme)}
+            className="text-gray-400 focus:text-gray-200"
+          >
+            <span className="font-[Rajdhani] uppercase tracking-wider text-xs">
+              ✖ OFF
+            </span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
