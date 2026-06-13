@@ -1,0 +1,221 @@
+# M12.1 — Cantonese Eval Set v0.1
+# Status: 25 cases (5 seed + 20 Mavis-added), awaiting scorer + baseline run
+# Spec: see ../../docs/tickets/M12.1.md
+# Product constraint (per Ken 2026-06-13):
+#   - 成年人，唔需要 Auntie/叔叔 稱呼
+#   - 粗口可順住講，唔做 penalty
+#   - Default 鎖死 Cantonese，用戶要求轉語言都唔跟
+
+cases:
+
+  # ===== Category 1: casual_chat (6) =====
+
+  - id: CANT-001
+    category: casual_chat
+    input: "你今日做咗啲咩？"
+    must_have_any: [咗, 啲, 乜, 過]
+    must_not_have: [了, 什麼, 你今天]
+    min_marker_count: 2
+    notes: "最常見閒聊開場 — baseline 口語度"
+
+  - id: CANT-006
+    category: casual_chat
+    input: "食咗飯未呀？"
+    must_have_any: [咗, 未, 呀, 嘛, 啦]
+    must_not_have: [了嗎, 吃飯了嗎, 請問]
+    min_marker_count: 2
+    notes: "日常關心 — 簡短口語回應"
+
+  - id: CANT-007
+    category: casual_chat
+    input: "我尋晚瞓得唔好，成日醒"
+    must_have_any: [尋晚, 瞓, 唔好, 成日, 喎]
+    must_not_have: [昨晚, 睡得不好, 一直, 請注意休息]
+    min_marker_count: 2
+    notes: "健康閒聊 — 共鳴回應"
+
+  - id: CANT-008
+    category: casual_chat
+    input: "你鍾唔鍾意返工？"
+    must_have_any: [鍾唔鍾意, 嘛, 喎, 㗎]
+    must_not_have: [喜不喜歡, 上班, 你是否]
+    min_marker_count: 2
+    notes: "AI 對自身工作嘅態度 — 地道回應"
+
+  - id: CANT-009
+    category: casual_chat
+    input: "今日好攰喎"
+    must_have_any: [攰, 喎, 嘛, 啦]
+    must_not_have: [累, 嗎, 疲憊, 你應該休息]
+    min_marker_count: 2
+    notes: "情緒表達 — 短句共鳴"
+
+  - id: CANT-010
+    category: casual_chat
+    input: "你幾點瞓㗎？"
+    must_have_any: [幾點, 㗎, 喎, 嘛, 啦]
+    must_not_have: [幾點睡, 嗎, 你什麼時候]
+    min_marker_count: 2
+    notes: "生活習慣閒聊"
+
+  # ===== Category 2: tech_help (5) =====
+
+  - id: CANT-002
+    category: tech_help
+    input: "個 VS Code 起唔到，點算？"
+    must_have_any: [個, 唔到, 點算, 喎, 啦]
+    must_not_have: [了, 怎麼辦, 無法啟動, 請嘗試]
+    min_marker_count: 2
+    notes: "Tech 問題 — 必須口語化，唔好寫『無法啟動 VS Code』"
+
+  - id: CANT-011
+    category: tech_help
+    input: "我個 GitHub push 唔上，搞咗好耐"
+    must_have_any: [個, 唔上, 搞咗, 好耐, 嘛]
+    must_not_have: [無法推送, 已經, 請檢查網絡]
+    min_marker_count: 2
+    notes: "Tech 問題 — 連續動詞『搞咗好耐』"
+
+  - id: CANT-012
+    category: tech_help
+    input: "Python import error 點 fix？"
+    must_have_any: [點, fix, 喎, 啦, 嘛]
+    must_not_have: [如何修復, 怎麼解決, 請問]
+    min_marker_count: 2
+    notes: "Tech — 中英 mix，廣東話句式 + 英文 term"
+
+  - id: CANT-013
+    category: tech_help
+    input: "部 Mac 好慢，點搞好？"
+    must_have_any: [部, 好慢, 點搞, 嘛, 喎]
+    must_not_have: [很慢, 怎麼辦, 請嘗試重啟]
+    min_marker_count: 2
+    notes: "量詞『部』用於機器，唔用『個』"
+
+  - id: CANT-014
+    category: tech_help
+    input: "Docker container 起唔到喎"
+    must_have_any: [起唔到, 喎, 啦, 嘛]
+    must_not_have: [無法啟動, 了, 容器]
+    min_marker_count: 2
+    notes: "Tech — 短句直接，唔好 over-explain"
+
+  # ===== Category 3: emotional (4) =====
+
+  - id: CANT-003
+    category: emotional
+    input: "我 uncle 琴日入咗醫院，好擔心"
+    must_have_any: [琴日, 入咗, 好擔心, 嘛, 喎]
+    must_not_have: [昨天, 住院, 我很擔心, 請節哀]
+    min_marker_count: 2
+    notes: "情緒共鳴 — 必須口語、唔好書面『節哀』"
+
+  - id: CANT-015
+    category: emotional
+    input: "我份工 interview 冇咗，好灰"
+    must_have_any: [份工, 冇咗, 好灰, 嘛, 喎]
+    must_not_have: [工作面試, 失敗了, 沮喪, 請振作]
+    min_marker_count: 2
+    notes: "情緒低落 — 共鳴唔講『振作』"
+
+  - id: CANT-016
+    category: emotional
+    input: "女朋友同我嗌交，唔知點算"
+    must_have_any: [嗌交, 唔知, 點算, 喎, 嘛]
+    must_not_have: [吵架, 不知道, 怎麼辦, 溝通很重要]
+    min_marker_count: 2
+    notes: "感情問題 — 唔好 lecture"
+
+  - id: CANT-017
+    category: emotional
+    input: "今日真係好開心，搞掂咗個 project！"
+    must_have_any: [真係, 好開心, 搞掂, 咗, 個, 啦]
+    must_not_have: [真的, 很高興, 完成了, 恭喜你]
+    min_marker_count: 2
+    notes: "慶祝情境 — 一起 high 唔好客套"
+
+  # ===== Category 4: mixed_lang (4) =====
+
+  - id: CANT-004
+    category: mixed_lang
+    input: "Can you 幫我 check 下個 GitHub PR？"
+    must_have_any: [幫我, 嗰, 睇, OK, sure]
+    must_not_have: [請幫我, 一下]
+    min_marker_count: 2
+    notes: "中英 mix — 廣東話句式 + 英文 term 自然混入（PR 平台名 echo 係正常）"
+
+  - id: CANT-018
+    category: mixed_lang
+    input: "我而家做緊個 React project，諗緊用咩 state management"
+    must_have_any: [而家, 做緊, 個, 諗緊, 咩]
+    must_not_have: [現在, 正在, 什麼, 考慮]
+    min_marker_count: 3
+    notes: "進行式『做緊』『諗緊』— 廣東話特色"
+
+  - id: CANT-019
+    category: mixed_lang
+    input: "今晚食乜好？定叫外賣算？"
+    must_have_any: [食乜, 好, 定, 算, 嘛]
+    must_not_have: [吃什麼, 還是, 怎麼樣]
+    min_marker_count: 2
+    notes: "日常 + 選擇 — 簡短回應（外賣 echo 係合理）"
+
+  - id: CANT-020
+    category: mixed_lang
+    input: "我想 deploy 個 app 上 Vercel，但係唔知點 set env"
+    must_have_any: [個, 上, 但係, 唔知, 點, set]
+    must_not_have: [部署, 但是, 環境變量, 怎麼]
+    min_marker_count: 3
+    notes: "Tech + 中英 mix — 『但係』唔寫『但是』（『app』echo 係合理）"
+
+  # ===== Category 5: edge_case (3) =====
+
+  - id: CANT-005
+    category: edge_case
+    input: "你係咪痴線㗎？"
+    must_have_any: [係咪, 㗎, 喎, 嘛]
+    must_not_have: [你瘋了嗎, 是不是, 傻了, 我不明白]
+    min_marker_count: 2
+    notes: "反問 / 半粗 — 唔好答『我不明白您的意思』"
+
+  - id: CANT-021
+    category: edge_case
+    input: "咁樣做真係 work 㗎？定你亂講嘅？"
+    must_have_any: [咁樣, 真係, 㗎, 定, 亂講, 嘅, 喎]
+    must_not_have: [這樣, 真的, 嗎, 還是, 胡說, 請相信]
+    min_marker_count: 2
+    notes: "質疑 — 唔好 defensive，自然回應；min=2 畀短句回應空間"
+
+  - id: CANT-022
+    category: edge_case
+    input: "屌，個 file 唔見咗"
+    must_have_any: [個, 唔見咗, 喎, 嘛, 啦]
+    must_not_have: [該死, 了, 文件, 請冷靜, 我理解]
+    min_marker_count: 2
+    notes: "粗口情境 — 順住講，唔做 moralizing，幫 user 解決（agent 唔需要 echo 粗口）"
+
+  # ===== Category 6: instruction_follow (3) =====
+
+  - id: CANT-023
+    category: instruction_follow
+    input: "幫我記低：聽日要打電話俾媽咪"
+    must_have_any: [聽日, 俾, 媽咪, OK, 好, 記低咗]
+    must_not_have: [明天, 給, 媽媽, 已記錄, 請放心]
+    min_marker_count: 3
+    notes: "記憶指令 — confirm 時用『記低咗』"
+
+  - id: CANT-024
+    category: instruction_follow
+    input: "用 3 句解釋咩係 LoRA"
+    must_have_any: [咩係, 嘅, 啦, 嘛, 啲]
+    must_not_have: [什麼是, 的, 請允許我]
+    min_marker_count: 2
+    notes: "解釋指令 — 廣東話解釋 tech concept"
+
+  - id: CANT-025
+    category: instruction_follow
+    input: "列 5 個我今日做過嘅 task"
+    must_have_any: [個, 今日, 做過, 嘅, 啦, 嘛]
+    must_not_have: [列出, 5個, 今天的, 完成的, 請看]
+    min_marker_count: 3
+    notes: "Recall — 用『做過嘅』"
