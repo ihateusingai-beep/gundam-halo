@@ -70,13 +70,13 @@ def _sanitize_config() -> Dict[str, Any]:
     }
 
 
-@router.get("/settings")
+@router.get("")
 async def get_settings() -> Dict[str, Any]:
     """Return sanitized app config (secrets masked)."""
     return _sanitize_config()
 
 
-@router.get("/settings/audit")
+@router.get("/audit")
 async def get_audit(
     limit: int = Query(100, ge=1, le=1000, description="Max entries to return"),
 ) -> List[Dict[str, Any]]:

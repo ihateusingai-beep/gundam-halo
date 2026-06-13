@@ -157,6 +157,22 @@ def create_app() -> FastAPI:
     halo_app.include_router(memory_recall_api.router, prefix="/api/memory", tags=["memory-recall"])
     halo_app.include_router(memory_api.router, prefix="/api/memory", tags=["memory"])
 
+    # Mount 8 of the 9 missing routers that were imported on line 151
+    # but never wired up — caused 53 pre-existing 404s in pytest and
+    # 5/7 smoke-test failures. The 9th (`projects`) is mounted below
+    # immediately after `projects_health` so its static `/health` path
+    # wins registration-order over the catch-all `/{name}` route.
+    # `health` mounts with prefix="/health" (router-relative path is
+    # empty, so the prefix becomes the URL); `ws` is root-mounted.
+    halo_app.include_router(health.router, prefix="/health", tags=["health"])
+    halo_app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+    halo_app.include_router(mac.router, prefix="/api/mac", tags=["mac"])
+    halo_app.include_router(system.router, prefix="/api/system", tags=["system"])
+    halo_app.include_router(channels_api.router, prefix="/api/channels", tags=["channels"])
+    halo_app.include_router(ws_api.router, tags=["ws"])
+    halo_app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
+    halo_app.include_router(secrets_api.router, prefix="/api/secrets", tags=["secrets"])
+
     # M14-T1: per-project filesystem health probe at
     # `/api/projects/health`. Returns `{ok, count}`. Full CRUD
     # endpoints are T2's job — the existing `app.api.projects`
@@ -165,6 +181,11 @@ def create_app() -> FastAPI:
     from app.api import projects_health
 
     halo_app.include_router(projects_health.router, prefix="/api/projects", tags=["projects"])
+
+    # Mount the full `projects` CRUD router AFTER `projects_health`
+    # so the static `/api/projects/health` route is registered first
+    # and the catch-all `GET/DELETE /{name}` below doesn't shadow it.
+    halo_app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 
     # M13 first-run wizard — 11 endpoints. Always mounted (the wizard
     # itself decides whether to show, based on the live detected state).
