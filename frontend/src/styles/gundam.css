@@ -1253,3 +1253,227 @@
   animation: voice-audio-bars 0.6s ease-in-out infinite;
   box-shadow: 0 0 8px var(--accent);
 }
+
+/* ===========================================================================
+ * COCKPIT FRAME — first-person frame chrome (M15 cockpit overhaul)
+ *
+ * The CockpitLayout component emits these classes:
+ *   - .gundam-cockpit-frame        — outer container, sets up z-stack layers
+ *   - .gundam-cockpit-bg           — background image layer (data-bg="core-XX")
+ *   - .gundam-cockpit-vignette     — CRT vignette ::before pseudo
+ *   - .gundam-hex-bg               — base hex grid (already defined above)
+ *   - .gundam-scan                 — top scan line (already defined above)
+ *   - .gundam-mode-select / -active — visual variant per cockpit mode
+ *   - .gundam-frame-corner(-tl/-tr/-bl/-br) — 4 corner brackets
+ *   - .gundam-frame-brand / .gundam-frame-status — fixed wordmark overlays
+ *   - .gundam-reveal(-1/-2/-3)     — staggered word-reveal for Mission Select
+ *   - .gundam-reveal-mission-title — long-form title clip-path reveal
+ * ========================================================================== */
+
+[data-theme^="gundam-"] .gundam-cockpit-frame {
+  position: relative;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  isolation: isolate;
+}
+
+/* Background image layer (only visible when html[data-bg] is set).
+ * Uses cover so any uploaded JPG scales correctly without distortion. */
+[data-theme^="gundam-"] .gundam-cockpit-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+  opacity: 0.5;
+  pointer-events: none;
+  /* Default fallback — pure hex grid only. When html[data-bg] is set,
+   * the M14 theme controller writes an inline background-image to this
+   * element, so this declaration is just a safety net. */
+  background-image: none;
+  mix-blend-mode: screen;
+}
+
+[data-theme^="gundam-"] .gundam-cockpit-vignette::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 0%,
+    transparent 55%,
+    rgba(0, 0, 0, 0.45) 90%,
+    rgba(0, 0, 0, 0.85) 100%
+  );
+}
+
+/* Mode variants — `select` = calmer/stanby, `active` = brighter/mission. */
+[data-theme^="gundam-"] .gundam-mode-select {
+  --frame-accent: color-mix(in srgb, var(--accent) 50%, transparent);
+  --frame-glow: 0 0 0 1px var(--frame-accent);
+}
+
+[data-theme^="gundam-"] .gundam-mode-active {
+  --frame-accent: var(--accent);
+  --frame-glow:
+    0 0 0 1px var(--accent),
+    0 0 24px var(--accent-glow),
+    inset 0 0 0 1px var(--accent-secondary);
+}
+
+/* Scan line speed/brightness by mode. Base `.gundam-scan` animation is
+ * defined later in this file (see `gundam-scan` block) — we just override
+ * the duration + opacity per mode. */
+[data-theme^="gundam-"] .gundam-mode-select .gundam-scan {
+  opacity: 0.35;
+}
+[data-theme^="gundam-"] .gundam-mode-active .gundam-scan {
+  opacity: 0.85;
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+
+/* Corner brackets — 4 fixed L-shapes drawn with `::before` / `::after`.
+ * Each element only places 2 corners (tl/tr or bl/br) so we don't need
+ * to nest 4 ::before/::after. Width=20px, drawn with 2px thick lines. */
+[data-theme^="gundam-"] .gundam-frame-corner {
+  position: fixed;
+  width: 24px;
+  height: 24px;
+  pointer-events: none;
+  z-index: 9996;
+  opacity: 0.85;
+}
+[data-theme^="gundam-"] .gundam-frame-corner::before,
+[data-theme^="gundam-"] .gundam-frame-corner::after {
+  content: '';
+  position: absolute;
+  background: var(--frame-accent, var(--accent));
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+/* Top-left corner */
+[data-theme^="gundam-"] .gundam-frame-corner-tl { top: 8px; left: 8px; }
+[data-theme^="gundam-"] .gundam-frame-corner-tl::before {
+  top: 0; left: 0; width: 24px; height: 2px;
+}
+[data-theme^="gundam-"] .gundam-frame-corner-tl::after {
+  top: 0; left: 0; width: 2px; height: 24px;
+}
+/* Top-right corner */
+[data-theme^="gundam-"] .gundam-frame-corner-tr { top: 8px; right: 8px; }
+[data-theme^="gundam-"] .gundam-frame-corner-tr::before {
+  top: 0; right: 0; width: 24px; height: 2px;
+}
+[data-theme^="gundam-"] .gundam-frame-corner-tr::after {
+  top: 0; right: 0; width: 2px; height: 24px;
+}
+/* Bottom-left corner */
+[data-theme^="gundam-"] .gundam-frame-corner-bl { bottom: 8px; left: 8px; }
+[data-theme^="gundam-"] .gundam-frame-corner-bl::before {
+  bottom: 0; left: 0; width: 24px; height: 2px;
+}
+[data-theme^="gundam-"] .gundam-frame-corner-bl::after {
+  bottom: 0; left: 0; width: 2px; height: 24px;
+}
+/* Bottom-right corner */
+[data-theme^="gundam-"] .gundam-frame-corner-br { bottom: 8px; right: 8px; }
+[data-theme^="gundam-"] .gundam-frame-corner-br::before {
+  bottom: 0; right: 0; width: 24px; height: 2px;
+}
+[data-theme^="gundam-"] .gundam-frame-corner-br::after {
+  bottom: 0; right: 0; width: 2px; height: 24px;
+}
+
+/* Frame wordmark overlays — small monospace text, top-left and top-right. */
+[data-theme^="gundam-"] .gundam-frame-brand {
+  position: fixed;
+  top: 12px;
+  left: 44px;
+  z-index: 9996;
+  pointer-events: none;
+  font-family: 'Courier New', monospace;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  text-shadow: 0 0 6px var(--accent-glow);
+  opacity: 0.75;
+}
+[data-theme^="gundam-"] .gundam-frame-status {
+  position: fixed;
+  top: 12px;
+  right: 44px;
+  z-index: 9996;
+  pointer-events: none;
+  font-family: 'Courier New', monospace;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  text-shadow: 0 0 6px var(--accent-glow);
+  opacity: 0.75;
+}
+
+/* Word reveal — clip-path horizontal sweep, used by Mission Select
+ * "SELECT MISSION" title and supporting lines. Staggered via -1/-2/-3
+ * delays. Animations are pure CSS, no JS, runs once on mount. */
+[data-theme^="gundam-"] .gundam-reveal {
+  display: inline-block;
+  clip-path: inset(0 100% 0 0);
+  animation: gundam-reveal-sweep 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+[data-theme^="gundam-"] .gundam-reveal-1 { animation-delay: 0.1s; }
+[data-theme^="gundam-"] .gundam-reveal-2 { animation-delay: 0.35s; }
+[data-theme^="gundam-"] .gundam-reveal-3 { animation-delay: 0.6s; }
+
+@keyframes gundam-reveal-sweep {
+  from { clip-path: inset(0 100% 0 0); opacity: 0.4; }
+  to   { clip-path: inset(0 0 0 0);    opacity: 1;   }
+}
+
+/* Long-form title reveal — wider sweep, slightly slower, used on the
+ * "Awaiting Orders" sub-title in the cockpit status HudCard. */
+[data-theme^="gundam-"] .gundam-reveal-mission-title {
+  display: inline-block;
+  clip-path: inset(0 100% 0 0);
+  animation: gundam-reveal-sweep 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.2s forwards;
+  opacity: 0.4;
+}
+
+/* Scan line — full-width top-to-bottom moving gradient. Replaces the
+ * missing base rule; the prefers-reduced-motion override in this file
+ * already disables it for accessibility. */
+[data-theme^="gundam-"] .gundam-scan {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 9997;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent) 50%,
+    transparent 100%
+  );
+  box-shadow: 0 0 12px var(--accent);
+  animation: gundam-scan-move 8s linear infinite;
+  opacity: 0.5;
+}
+
+/* Mode-specific scan speed — see CockpitLayout.tsx plan (8s/select, 4s/active). */
+[data-theme^="gundam-"] .gundam-mode-select .gundam-scan {
+  animation-duration: 8s;
+  opacity: 0.35;
+}
+[data-theme^="gundam-"] .gundam-mode-active .gundam-scan {
+  animation-duration: 4s;
+  opacity: 0.85;
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+
+@keyframes gundam-scan-move {
+  0%   { transform: translateY(0); }
+  100% { transform: translateY(100vh); }
+}
