@@ -43,12 +43,18 @@ def expand_home(path: str | Path) -> Path:
 class LLMConfig:
     provider: str = "minimax"
     api_key: str = ""
+    # The name of the env var that holds the raw API key. Default
+    # `MINIMAX_API_KEY` is the one we use everywhere; the wizard writes
+    # this *name* (not the key itself) into config.toml as
+    # `api_key_env = "MINIMAX_API_KEY"`.
+    #
     # IMPORTANT: the MiniMax API has at least two distinct OpenAI-compatible
     # endpoints — `api.MiniMax.chat` and `api.minimax.io` — that DO NOT share
     # keys. The gundam-halo project ships with `.io` because that's the
     # cluster the project's MiniMax API key was issued against (same as
     # Open-LLM-VTuber's `conf.yaml`). If you see 401 `invalid api key (2049)`
     # on a key that works elsewhere, check the host here.
+    api_key_env: str = "MINIMAX_API_KEY"
     base_url: str = "https://api.minimax.io/v1"
     default_model: str = "MiniMax-M2"
     fallback_model: str = "MiniMax-M2"
@@ -279,6 +285,7 @@ def _load_llm_config(toml_data: dict) -> LLMConfig:
     return LLMConfig(
         provider=d.get("provider", defaults.provider),
         api_key=_env(api_key_env, ""),  # NEVER store in TOML, always env
+        api_key_env=api_key_env,
         base_url=_env("MINIMAX_BASE_URL", d.get("base_url", defaults.base_url)),
         default_model=_env("MINIMAX_MODEL", d.get("default_model", defaults.default_model)),
         fallback_model=d.get("fallback_model", defaults.fallback_model),

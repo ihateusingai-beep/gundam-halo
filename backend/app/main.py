@@ -140,6 +140,12 @@ def create_app() -> FastAPI:
     halo_app.include_router(memory_recall_api.router, prefix="/api/memory", tags=["memory-recall"])
     halo_app.include_router(memory_api.router, prefix="/api/memory", tags=["memory"])
 
+    # M13 first-run wizard — 11 endpoints. Always mounted (the wizard
+    # itself decides whether to show, based on the live detected state).
+    from app.api import setup as setup_api
+
+    halo_app.include_router(setup_api.router, prefix="/api/setup", tags=["setup"])
+
     # Voice layer (M1) — only mount if enabled in config
     if get_config().voice.enabled:
         from app.api import voice_ws
