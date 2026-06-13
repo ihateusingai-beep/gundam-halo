@@ -7,6 +7,7 @@ import {
   setAnimationSpeed,
 } from "@/services/halo-tray-controls";
 import type { Settings } from "@/types/api";
+import { api } from "@/lib/api";
 
 import { SPEED_PRESETS } from "./constants";
 import { KV, Section } from "./shared";
@@ -118,7 +119,42 @@ function TraySpeedControl() {
   );
 }
 
-export function GeneralTab({ settings }: { settings: Settings }) {
+/** General settings tab — LLM brain config + server + user + paths.
+ *
+ *  Fetches settings live on mount so this tab always reflects the current
+ *  server state — e.g. after saving a new API key via SecretsTab, this
+ *  tab immediately shows "✓ configured" instead of a stale prop value.
+ */
+export function GeneralTab({ settings: propSettings }: { settings?: Settings | null }) {
+  const [settings, setSettings] = useState<Settings | null>(propSettings ?? null);
+  const [loading, setLoading] = useState(propSettings == null);
+
+  useEffect(() => {
+    if (propSettings) {
+      setSettings(propSettings);
+      return;
+    }
+    api.getSettings()
+      .then(setSettings)
+      .catch((e) => toast.error("Failed to load settings", { description: String(e) }))
+      .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (loading || !settings) {
+    return (
+      <HudCard>
+        <div className="flex items-center gap-3">
+          <div className="gundam-radar w-8 h-8" />
+          <p className="text-[var(--text-muted)] font-mono">Loading settings...</p>
+        </div>
+      </HudCard>
+    );
+  }
+
+  // Non-null assertion for the remainder of the render
+  const s = settings;
+
   return (
     <HudCard>
       <h3 className="text-sm font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
@@ -126,47 +162,47 @@ export function GeneralTab({ settings }: { settings: Settings }) {
       </h3>
 
       <Section title="LLM (Brain)">
-        <KV label="Provider" value={settings.llm.provider} />
-        <KV label="Base URL" value={settings.llm.base_url} mono />
-        <KV label="Default Model" value={settings.llm.default_model} accent />
-        <KV label="Fallback Model" value={settings.llm.fallback_model} />
+        <KV label="Provider" value={s.llm.provider} />
+        <KV label="Base URL" value={s.llm.base_url} mono />
+        <KV label="Default Model" value={s.llm.default_model} accent />
+        <KV label="Fallback Model" value={s.llm.fallback_model} />
         <KV
           label="API Key"
-          value={settings.llm.api_key_configured ? "✓ configured" : "✗ not configured"}
-          accent={settings.llm.api_key_configured}
-          danger={!settings.llm.api_key_configured}
+          value={s.llm.api_key_configured ? "✓ configured" : "✗ not configured"}
+          accent={s.llm.api_key_configured}
+          danger={!s.llm.api_key_configured}
         />
       </Section>
 
       <Section title="Server">
-        <KV label="Host" value={settings.server.host} mono />
-        <KV label="Port" value={String(settings.server.port)} mono />
-        <KV label="Log Level" value={settings.server.log_level} />
+        <KV label="Host" value={s.server.host} mono />
+        <KV label="Port" value={String(s.server.port)} mono />
+        <KV label="Log Level" value={s.server.log_level} />
         <KV
           label="Tailscale Required"
-          value={settings.server.require_tailscale ? "yes" : "no"}
+          value={s.server.require_tailscale ? "yes" : "no"}
         />
         <KV
           label="Tailscale Hostname"
-          value={settings.server.tailscale_hostname}
+          value={s.server.tailscale_hostname}
           mono
         />
       </Section>
 
       <Section title="User">
-        <KV label="Name" value={settings.user.name} />
-        <KV label="Default Theme" value={settings.user.default_theme} />
+        <KV label="Name" value={s.user.name} />
+        <KV label="Default Theme" value={s.user.default_theme} />
       </Section>
 
       <Section title="Paths">
-        <KV label="HALO_HOME" value={settings.app.home} mono />
+        <KV label="HALO_HOME" value={s.app.home} mono />
         <KV
           label="Config File"
-          value={settings.app.config_path}
+          value={s.app.config_path}
           mono
           hint="Edit TOML to change settings; restart server to apply"
         />
-        <KV label="Version" value={settings.app.version} mono />
+        <KV label="Version" value={s.app.version} mono />
       </Section>
 
       <Section title="Tray Icon Animation">
