@@ -23,10 +23,29 @@ Design choices
   storage. Simpler, debuggable, and small enough at our scale.
 - ``faiss`` is imported **lazily** inside the constructor — this
   module can be imported without loading the FAISS C++ extension.
-  This matters because on Apple Silicon, having ``faiss-cpu``'s
-  OpenBLAS native module already loaded when ``torch`` later
-  initialises MPS can crash the Python process. (See the
-  M12 ticket "Known follow-ups" for context.)
+
+Apple Silicon + torch MPS crash guard
+-------------------------------------
+
+On darwin/arm64, the ``faiss-cpu`` wheel bundles its own
+``libomp.dylib``. When ``torch`` is loaded *before* faiss in the
+same process (and MPS is initialised), faiss's first OpenMP call
+aborts with ``OMP Error #15: Initializing libomp.dylib, but
+found libomp.dylib already initialized`` and the process dies
+with SIGABRT (exit 134). This bites the live Tauri app on
+Apple Silicon Macs.
+
+The runtime guard lives in :mod:`app.memory._apple_silicon_compat`
+and is consulted by :func:`make_vector_index` before importing
+faiss. On Apple Silicon + torch-already-loaded-with-MPS, we fall
+back to :class:`NullVectorIndex` (which still records metadata
+in memory so the lifecycle layer doesn't break; lexical search
+via :class:`SqliteIndex` is unaffected). Override with the env
+var ``HALO_FAISS_FORCE=1`` to force the real FAISS path; the
+guard additionally sets ``KMP_DUPLICATE_LIB_OK=TRUE`` before
+importing faiss on Apple Silicon as a belt-and-braces
+mitigation. See ``docs/tickets/M12.md`` "Known follow-ups" #5
+for the upstream ticket.
 
 If FAISS isn't installed (e.g. on a host where we want a slim
 build), this module exposes a ``NullVectorIndex`` that always
@@ -328,11 +347,43 @@ def make_vector_index(
     ``force_null=True`` skips the FAISS import entirely — used in
     test environments where loading faiss-cpu in the same process
     as torch can crash on Apple Silicon (M12 ticket "Known
-    follow-ups").
+    follow-ups"). This is now a **layered** guard: even when
+    ``force_null=False``, the Apple Silicon / torch-MPS detection
+    in :mod:`app.memory._apple_silicon_compat` may still opt out
+    of faiss and return a :class:`NullVectorIndex` instead.
+
+    Override behaviour with the env var ``HALO_FAISS_FORCE``:
+    ``=1`` forces the real FAISS path (the KMP_DUPLICATE_LIB_OK
+    workaround is also applied on Apple Silicon), ``=0`` forces
+    NullVectorIndex, ``auto`` (default) consults the heuristic.
     """
     if force_null:
         logger.debug("VectorIndex forced to NullVectorIndex (FAISS disabled)")
         return NullVectorIndex(dim=dim)
+
+    # Import lazily so a fast-fail doesn't pull the compat helpers
+    # into every call site that happens to use vector_index.
+    from app.memory import _apple_silicon_compat as _compat
+
+    # Emit the one-shot decision log the first time we are called.
+    _compat.log_decision_once()
+
+    if not _compat.should_use_faiss():
+        logger.info(
+            "VectorIndex: using NullVectorIndex on this host. "
+            "Reason: %s",
+            _compat.get_fallback_reason(),
+        )
+        return NullVectorIndex(dim=dim)
+
+    # We decided to use faiss. On Apple Silicon also arm the
+    # KMP_DUPLICATE_LIB_OK belt-and-braces guard before the
+    # import — this is the documented escape hatch if a user
+    # forces faiss with HALO_FAISS_FORCE=1 in spite of torch
+    # being already loaded.
+    if _compat.is_apple_silicon():
+        _compat.prepare_for_safe_faiss_import()
+
     try:
         import faiss  # noqa: F401
 
