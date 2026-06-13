@@ -133,3 +133,8 @@ lerna-debug.log*
 # projects/*/.active/
 # projects/*/.cache/
 # sessions/.active/
+
+# Local screenshots (mockups, scratch references). Per session
+# 2026-06-13: binary artifacts stay out of git. Re-add to commit
+# if/when a screenshot becomes part of the docs/ surface.
+screenshots/
