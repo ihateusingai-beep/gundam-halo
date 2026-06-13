@@ -82,10 +82,27 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     init_memory_on_startup()
 
+    # M14-T1: wire the per-project filesystem manager as a singleton
+    # on app.state so request handlers (and the new health probe)
+    # can reach it without re-creating the manager per request.
+    # Kept AFTER init_memory_on_startup so the manager is the
+    # *last* thing initialised — the order matters for the test
+    # suite that asserts on shared singleton state.
+    from app.projects.manager import init_project_manager, set_project_manager
+
+    set_project_manager(application, init_project_manager(home=cfg.home))
+    logger.debug("ProjectManager singleton wired (home=%s)", cfg.home)
+
     yield
 
     # Shutdown
     logger.info("Gundam Halo shutting down")
+    # M14-T1: drop the manager reference so a fresh lifespan can
+    # pick up a new HALO_HOME (matters for tests that monkey-patch
+    # the env var between lifespan invocations).
+    from app.projects.manager import reset_project_manager
+
+    reset_project_manager(application)
     tool_motion_mapper.stop()
     await manager.stop_all()
     reset_event_bus()
@@ -139,6 +156,15 @@ def create_app() -> FastAPI:
 
     halo_app.include_router(memory_recall_api.router, prefix="/api/memory", tags=["memory-recall"])
     halo_app.include_router(memory_api.router, prefix="/api/memory", tags=["memory"])
+
+    # M14-T1: per-project filesystem health probe at
+    # `/api/projects/health`. Returns `{ok, count}`. Full CRUD
+    # endpoints are T2's job — the existing `app.api.projects`
+    # router (mounted below) is the M4-era scaffolding that T2
+    # will refactor on top of `ProjectManager`.
+    from app.api import projects_health
+
+    halo_app.include_router(projects_health.router, prefix="/api/projects", tags=["projects"])
 
     # M13 first-run wizard — 11 endpoints. Always mounted (the wizard
     # itself decides whether to show, based on the live detected state).
