@@ -90,6 +90,18 @@ export const api = {
       features: string[];
     }>("/api/system/info"),
 
+  // Sprint 16: voice config GET / PUT (currently just wake_phrases).
+  // The PUT persists to ~/.gundam-halo/config.toml so the next
+  // server start also picks it up. The in-process config is updated
+  // immediately so the very next voice turn benefits.
+  getVoiceConfig: () =>
+    request<{ wake_phrases: string[] }>("/voice/config"),
+  setVoiceConfig: (payload: { wake_phrases: string[] }) =>
+    request<{ wake_phrases: string[]; persisted: boolean; error?: string }>(
+      "/voice/config",
+      { method: "PUT", body: JSON.stringify(payload) },
+    ),
+
   // Projects
   listProjects: () => request<ProjectSummary[]>("/api/projects"),
   createProject: (data: ProjectCreate) =>

@@ -24,6 +24,24 @@ def test_default_tool_names():
     assert "open_app" in names
 
 
+def test_sprint16_tools_wired():
+    """Sprint 16 — the 4 Unicorn voice-control tools are wired."""
+    names = {t.name for t in default_tools()}
+    assert "brightness" in names
+    assert "system_settings" in names
+    assert "screenshot" in names
+    assert "bluetooth" in names
+    # Mail tool was explicitly removed by user sign-off (2026-06-14).
+    assert "mail" not in names
+
+
+def test_default_tool_count_is_18():
+    """15 pre-Sprint16 + 4 new - 1 mail = 18 tools. Catches
+    accidental duplicate registrations or un-removed legacy tools."""
+    tools = default_tools()
+    assert len(tools) == 18, f"expected 18 tools, got {len(tools)}: {[t.name for t in tools]}"
+
+
 def test_all_tools_have_unique_names():
     tools = default_tools()
     names = [t.name for t in tools]

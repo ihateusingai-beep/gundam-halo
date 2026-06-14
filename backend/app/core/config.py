@@ -182,6 +182,27 @@ class VoiceConfig:
     live2d: VoiceLive2DConfig = field(default_factory=VoiceLive2DConfig)
     sample_rate: int = 16000
     frame_duration_ms: int = 250  # chunk size for streaming audio frames
+    # Sprint 16 (Unicorn voice control): text-level wake phrases. The
+    # voice pipeline checks whether the ASR transcript starts with
+    # one of these strings, and if so, strips the prefix and tags
+    # the turn as `wake_triggered: True` in the agent.message frame.
+    # User-approved default (2026-06-14):
+    #   "Unicorn" — brand
+    #   "NTD"     — Gundam NT-D theme, in-world codename
+    #   "gundam"  — lowercase to match casual speech
+    #   "獨角獸"  — "Unicorn" literal Chinese
+    #   "高達"    — "Gundam" Cantonese pronunciation
+    # Empty list disables the detection (the agent is still invoked
+    # on every transcript, just without a `wake_triggered` flag).
+    wake_phrases: List[str] = field(
+        default_factory=lambda: [
+            "Unicorn",
+            "NTD",
+            "gundam",
+            "獨角獸",
+            "高達",
+        ]
+    )
 
 
 @dataclass

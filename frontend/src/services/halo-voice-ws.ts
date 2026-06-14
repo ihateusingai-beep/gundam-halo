@@ -42,6 +42,7 @@ export type VoiceState =
   | "listening"   // mic open, streaming audio
   | "thinking"    // got ASR, waiting for agent
   | "speaking"    // agent replied, TTS playing
+  | "reconnecting" // socket was open, went dead, auto-reconnect in flight
   | "error";
 
 export interface VoiceStatus {
@@ -202,10 +203,134 @@ function dispatchBinary(chunk: ArrayBuffer) {
 }
 
 // ---------------------------------------------------------------------------
-// Connection
+// Connection — with heartbeat, auto-reconnect, and dead-socket recovery
 // ---------------------------------------------------------------------------
+//
+// The voice WebSocket can die in several ways that we used to miss:
+//   - Tab backgrounded → browser suspends the socket silently (no onclose)
+//   - Network blip (WiFi roaming, sleep/wake) → half-open socket
+//   - Backend restart → TCP RST may take seconds to propagate
+//   - Vite HMR page reload while keeping a stale module instance
+//
+// Each of these used to leave the panel stuck in "Ready" while the
+// socket was actually CLOSED — the user would press the mic button,
+// get no reaction, and have no signal that the backend was unreachable.
+//
+// We now:
+//   1. Heartbeat: send `{type: "ping"}` every HEARTBEAT_MS, expect a
+//      `pong` reply within HEARTBEAT_TIMEOUT_MS. A missed pong flips
+//      the socket to dead and tears it down (which triggers reconnect).
+//   2. Auto-reconnect: `onclose` schedules a reconnect with capped
+//      exponential backoff (1s → 2s → 4s … → 30s). Once we reconnect
+//      successfully, the backoff resets.
+//   3. Dead-socket send: if `send()` is called when the socket isn't
+//      OPEN, we kick off a reconnect and drop the message with a
+//      warning — instead of silently no-op'ing. The UI relies on
+//      a tight feedback loop, so silent drops hurt.
+//   4. State honesty: any time we observe the socket in CLOSED /
+//      CLOSING state but the high-level state machine still claims
+//      "ready" / "listening" / "speaking", we flip to "idle" so the
+//      UI doesn't lie to the user.
+
+const HEARTBEAT_MS = 25_000;
+const HEARTBEAT_TIMEOUT_MS = 10_000;
+const RECONNECT_BACKOFF_BASE_MS = 1_000;
+const RECONNECT_BACKOFF_MAX_MS = 30_000;
 
 let connectAttempted = false;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let pongDeadline: ReturnType<typeof setTimeout> | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
+
+/** Reset the heartbeat cycle: arm the next ping, clear any pending
+ *  pong-deadline timer. Called on every received message (including
+ *  pong) so a chatty connection never times out spuriously. */
+function noteSocketActivity(): void {
+  if (pongDeadline) {
+    clearTimeout(pongDeadline);
+    pongDeadline = null;
+  }
+}
+
+function startHeartbeat(): void {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    const ws = state.socket;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // Socket disappeared underneath us — let onclose (or the next
+      // send attempt) handle the recovery.
+      return;
+    }
+    try {
+      ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+    } catch (e) {
+      console.warn("[Voice] heartbeat send threw, treating as dead:", e);
+      forceReconnect("heartbeat_send_failed");
+      return;
+    }
+    // Arm the deadline. If we don't see a pong (or any other frame)
+    // within the timeout, the connection is half-open.
+    pongDeadline = setTimeout(() => {
+      const cur = state.socket;
+      if (!cur || cur.readyState !== WebSocket.OPEN) return;
+      console.warn("[Voice] no pong within heartbeat timeout, reconnecting");
+      forceReconnect("heartbeat_timeout");
+    }, HEARTBEAT_TIMEOUT_MS);
+  }, HEARTBEAT_MS);
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  if (pongDeadline) {
+    clearTimeout(pongDeadline);
+    pongDeadline = null;
+  }
+}
+
+/** Force-close the current socket and schedule a reconnect. The
+ *  onclose handler will set state.idle + clear the socket ref. */
+function forceReconnect(reason: string): void {
+  console.log(`[Voice] forceReconnect: ${reason}`);
+  const ws = state.socket;
+  state.socket = null;
+  stopHeartbeat();
+  if (ws && ws.readyState <= WebSocket.OPEN) {
+    try {
+      ws.close(1000, reason);
+    } catch (e) {
+      console.warn("[Voice] close() during forceReconnect threw:", e);
+    }
+  }
+  scheduleReconnect();
+}
+
+function scheduleReconnect(): void {
+  if (reconnectTimer) return; // already scheduled
+  const delay = Math.min(
+    RECONNECT_BACKOFF_BASE_MS * Math.pow(2, reconnectAttempt),
+    RECONNECT_BACKOFF_MAX_MS,
+  );
+  reconnectAttempt += 1;
+  console.log(`[Voice] reconnect scheduled in ${delay}ms (attempt ${reconnectAttempt})`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectAttempted = false; // allow connect() to actually run
+    connect();
+  }, delay);
+  // If we're still in "reconnecting" 5 s after the schedule, drop
+  // the badge to "Disconnected" so the user knows the panel is
+  // waiting for them. The reconnect itself still runs in the
+  // background — when it succeeds, onopen flips us back to "ready".
+  setTimeout(() => {
+    if (state.state === "reconnecting") {
+      setState({ state: "idle" });
+    }
+  }, 5_000);
+}
 
 function connect() {
   if (state.socket && state.socket.readyState <= WebSocket.OPEN) return;
@@ -221,24 +346,35 @@ function connect() {
 
   ws.onopen = () => {
     console.log("[Voice] connected");
+    reconnectAttempt = 0; // reset backoff on successful connect
     setState({ state: "ready" });
+    startHeartbeat();
   };
 
   ws.onclose = () => {
     console.log("[Voice] disconnected");
+    stopHeartbeat();
     setState({
-      state: "idle",
+      state: "reconnecting",
       socket: null,
       currentSession: null,
     });
     connectAttempted = false;
+    // Auto-reconnect unless the page is being torn down. We can't
+    // detect that perfectly, but the next send()/heartbeat tick will
+    // reconnect if the user is still around.
+    if (typeof document !== "undefined" && document.visibilityState !== "hidden") {
+      scheduleReconnect();
+    }
   };
 
   ws.onerror = () => {
     setState({ error: "WebSocket error" });
+    // onclose will follow and trigger the reconnect — don't double up.
   };
 
   ws.onmessage = (msg) => {
+    noteSocketActivity();
     if (msg.data instanceof ArrayBuffer) {
       dispatchBinary(msg.data);
       return;
@@ -251,6 +387,13 @@ function connect() {
       console.warn("[Voice] failed to parse WS message:", e, msg.data);
     }
   };
+}
+
+/** Public test-helper + dev-console API: trigger a forced reconnect
+ *  with the same backoff as a normal failure. Useful when the user
+ *  suspects the panel is stuck — call from the JS console. */
+export function forceVoiceReconnect(reason = "manual"): void {
+  forceReconnect(reason);
 }
 
 function handleEvent(event: VoiceWSEvent) {
@@ -310,6 +453,18 @@ function handleEvent(event: VoiceWSEvent) {
       setState({ state: "ready", currentSession: null });
       break;
     }
+    case "pong": {
+      // Heartbeat response — already cleared the pong-deadline
+      // in noteSocketActivity() before reaching handleEvent, but
+      // we treat this as the canonical "alive" signal. If the
+      // socket was previously thought dead, surface that recovery
+      // in the console.
+      if (pongDeadline === null) {
+        // Heartbeat wasn't actually armed — likely an unsolicited
+        // pong. Harmless.
+      }
+      break;
+    }
     case "voice.cancelled": {
       setState({ state: "ready", currentSession: null });
       break;
@@ -335,17 +490,37 @@ function ensureOpen(): WebSocket {
 function send(payload: object | string | ArrayBuffer) {
   const ws = state.socket;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    console.warn("[Voice] cannot send, socket not open", payload);
+    // Dead-socket send — common after a tab background, network blip,
+    // or backend restart. Don't silently drop the message; kick off
+    // a reconnect and warn so the user can see in DevTools that
+    // something went wrong.
+    console.warn(
+      "[Voice] cannot send, socket not open — scheduling reconnect",
+      payload,
+    );
+    if (!reconnectTimer) {
+      forceReconnect("dead_socket_send");
+    }
     return;
   }
   // Binary PCM chunks must go through raw — `JSON.stringify(new ArrayBuffer(...))`
   // collapses to `"{}"`, which the backend rejects with `unknown_type: None`
   // and spams the voice-error toast. Detect and pass through.
   if (payload instanceof ArrayBuffer) {
-    ws.send(payload);
+    try {
+      ws.send(payload);
+    } catch (e) {
+      console.warn("[Voice] ws.send(binary) threw, forcing reconnect:", e);
+      forceReconnect("binary_send_threw");
+    }
     return;
   }
-  ws.send(typeof payload === "string" ? payload : JSON.stringify(payload));
+  try {
+    ws.send(typeof payload === "string" ? payload : JSON.stringify(payload));
+  } catch (e) {
+    console.warn("[Voice] ws.send(text) threw, forcing reconnect:", e);
+    forceReconnect("text_send_threw");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +611,30 @@ if (typeof window !== "undefined") {
   } else {
     window.addEventListener("load", connect, { once: true });
   }
+
+  // When the user returns to the tab after a long background, the
+  // WebSocket is often half-open (browser suspended the underlying
+  // socket without firing onclose). Probing the socket on visibility
+  // change and forcing a reconnect if it's not actually OPEN turns
+  // a silent stall into a 1-2 s recovery.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const ws = state.socket;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.log("[Voice] tab visible, socket not open — forcing reconnect");
+      forceReconnect("tab_visible");
+    } else {
+      // Socket looks alive but may be half-open. Trigger a ping
+      // immediately; if we don't see a pong, forceReconnect will fire
+      // from the heartbeat deadline path.
+      try {
+        ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+      } catch (e) {
+        console.warn("[Voice] visibility-ping send threw:", e);
+        forceReconnect("visibility_ping_failed");
+      }
+    }
+  });
 }
 
 if (typeof window !== "undefined") {

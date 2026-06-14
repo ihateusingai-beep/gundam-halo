@@ -14,6 +14,8 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { useVoiceInput } from "@/hooks/use-voice-input";
+import { api } from "@/lib/api";
+import { WakePhraseHint } from "@/components/gundam/WakePhraseHint";
 import {
   getVoiceStatus,
   onVoiceBinary,
@@ -33,6 +35,7 @@ const STATE_LABEL: Record<VoiceStatus["state"], string> = {
   listening: "Listening…",
   thinking: "Thinking…",
   speaking: "Speaking…",
+  reconnecting: "Reconnecting…",
   error: "Error",
 };
 
@@ -42,6 +45,7 @@ const STATE_COLOR: Record<VoiceStatus["state"], string> = {
   listening: "var(--accent)",
   thinking: "var(--warning)",
   speaking: "var(--accent-secondary)",
+  reconnecting: "var(--warning)",
   error: "var(--danger)",
 };
 
@@ -51,6 +55,7 @@ const STATE_GLYPH: Record<VoiceStatus["state"], string> = {
   listening: "◉",
   thinking: "⌛",
   speaking: "▶",
+  reconnecting: "↻",
   error: "✕",
 };
 
@@ -155,6 +160,36 @@ export function VoicePanel() {
     });
   }
 
+  // Sprint 16: fetch the active wake phrases on mount so the
+  // WakePhraseHint can render the "Listening for **X**" affordance.
+  // We refetch when the page gains focus (Settings → Voice tab
+  // edits) so the hint updates without a full reload.
+  const [wakePhrases, setWakePhrases] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const fetchPhrases = () => {
+      api
+        .getVoiceConfig()
+        .then((d) => {
+          if (alive) setWakePhrases(d.wake_phrases ?? []);
+        })
+        .catch(() => {
+          /* non-fatal — the hint just stays hidden */
+        });
+    };
+    fetchPhrases();
+    const onVis = () => {
+      if (document.visibilityState === "visible") fetchPhrases();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", fetchPhrases);
+    return () => {
+      alive = false;
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", fetchPhrases);
+    };
+  }, []);
+
   const mic = useVoiceInput({
     onFrame: (pcm) => {
       // Lazily lazy-import to avoid a circular dep at module load
@@ -176,7 +211,14 @@ export function VoicePanel() {
     },
   });
 
-  const isPressable = mic.state === "ready" || mic.state === "idle";
+  // Pressable in any state where the mic system can accept a new
+  // press. `reconnecting` covers the case where the voice WS died
+  // but the user is still trying to talk — `send()` will kick the
+  // socket back into life and start the turn once it reconnects.
+  const isPressable =
+    mic.state === "ready" ||
+    mic.state === "idle" ||
+    status.state === "reconnecting";
   const isHolding = mic.state === "capturing";
 
   function handleTextSubmit() {
@@ -249,6 +291,16 @@ export function VoicePanel() {
             ? "Release to send"
             : "Hold to talk"}
         </span>
+        {/* Sprint 16: wake-phrase hint. Hidden when the mic is
+            unavailable or the user has cleared the phrase list. */}
+        <WakePhraseHint
+          phrases={wakePhrases}
+          hidden={
+            mic.state === "denied" ||
+            mic.state === "unsupported" ||
+            mic.state === "error"
+          }
+        />
       </div>
 
       {mic.error && (

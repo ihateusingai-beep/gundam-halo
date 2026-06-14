@@ -13,6 +13,7 @@ import { SecretsTab } from "./SecretsTab";
 import { SecurityTab } from "./SecurityTab";
 import { SETTINGS_TABS, type SettingsTab } from "./constants";
 import { ThemesTab } from "./ThemesTab";
+import { VoiceTab } from "./VoiceTab";
 
 /** Settings page — 7 tabs: General / Mac / Channels / Themes / Security / Secrets / Memory. */
 export function SettingsPage() {
@@ -84,6 +85,7 @@ export function SettingsPage() {
       {activeTab === "security" && <SecurityTab />}
       {activeTab === "secrets" && <SecretsTab />}
       {activeTab === "memory" && <MemoryTab />}
+      {activeTab === "voice" && <VoiceTab />}
     </div>
   );
 }

@@ -7,7 +7,8 @@ export type SettingsTab =
   | "themes"
   | "security"
   | "secrets"
-  | "memory";
+  | "memory"
+  | "voice";
 
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; icon: string }> = [
   { id: "general", label: "General", icon: "◈" },
@@ -17,6 +18,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; icon: string
   { id: "security", label: "Security", icon: "⛨" },
   { id: "secrets", label: "Secrets", icon: "⚿" },
   { id: "memory", label: "User Memory", icon: "▣" },
+  { id: "voice", label: "Voice", icon: "◍" },
 ];
 
 export interface BgOption {
