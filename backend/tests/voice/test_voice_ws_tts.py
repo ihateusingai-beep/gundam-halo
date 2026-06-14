@@ -43,9 +43,15 @@ def voice_m2_app(monkeypatch):
     responder = HaloResponder(tts=fake_tts, live2d=fake_live2d)
     voice_ws.set_responder(responder)
 
-    # Register a fake agent callback that returns a fixed reply
-    async def fake_agent(sid: str, text: str) -> str:
-        return f"[EMO:focused] Agent reply to: {text}. Done."
+    # Register a fake agent callback that yields sentence-sized chunks.
+    # M15: callback contract is now an async iterator of sentences.
+    from typing import AsyncIterator
+
+    async def fake_agent(sid: str, text: str) -> AsyncIterator[str]:
+        # Two sentences — the first carries the emotion tag so the
+        # responder can detect it and strip it from the displayed text.
+        yield f"[EMO:focused] Agent reply to: {text}."
+        yield "Done."
 
     voice_ws.set_agent_callback(fake_agent)
 

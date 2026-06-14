@@ -284,9 +284,12 @@ function handleEvent(event: VoiceWSEvent) {
     }
     case "agent.message": {
       const d = (event as VoiceAgentMessageEvent).data;
-      if (d.is_final) {
-        setState({ lastReply: d.text, emotion: d.emotion });
-      }
+      // M15: agent streams sentence-by-sentence. The server
+      // accumulates text across frames and re-sends the running total
+      // on each `is_final: false`, then a final `is_final: true`
+      // frame. Update `lastReply` on every frame so the cockpit
+      // transcript grows incrementally as the agent speaks.
+      setState({ lastReply: d.text, emotion: d.emotion });
       break;
     }
     case "tts.start": {

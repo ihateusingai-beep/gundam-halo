@@ -8,8 +8,9 @@ execute each tool → append tool results as Tool messages → loop.
 from __future__ import annotations
 
 import logging
+import re
 import time
-from typing import Any, List, Optional
+from typing import Any, AsyncIterator, List, Optional
 
 from app.agents._stubs import BaseAgent
 from app.core.events import EventType, get_event_bus
@@ -216,4 +217,155 @@ class NativeReActAgent(BaseAgent):
         )
 
 
+    # ------------------------------------------------------------------
+    # Streaming variant (M15 — voice "即時回應")
+    #
+    # Same ReAct control flow as `run()`, but the final text turn uses
+    # `engine.stream_chat()` and yields sentence-sized chunks as soon as
+    # the LLM emits a sentence boundary. The voice WebSocket handler
+    # forwards each chunk to TTS + audio immediately, dropping the
+    # end-to-end first-audible latency from "agent finishes + TTS
+    # finishes" to "agent emits first sentence + TTS of that sentence".
+    #
+    # Yields: str (one sentence at a time, never empty). Tool-call
+    # turns do not yield (the audio side stays silent during tool
+    # execution; the WS publishes TOOL_CALL_START/END events for UI).
+    # ------------------------------------------------------------------
+
+    _SENT_END = re.compile(r"(?<=[.!?。！？])\s+|(?<=[.!?。！？])$")
+
+    async def run_streaming(
+        self,
+        input: str,
+        context: Optional[AgentContext] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        """Run the agent and yield sentence-sized text chunks.
+
+        Mirrors `run()`'s control flow but streams the LLM reply when
+        the engine supports it. Tool-call turns (rare in voice use)
+        fall through to the batch path. Yields one sentence at a time;
+        the caller TTSes each sentence as it arrives.
+        """
+        if self._initial_messages:
+            messages: List[Message] = list(self._initial_messages) + [
+                Message(role=Role.USER, content=input)
+            ]
+        else:
+            from app.agents.system_prompt import build_system_prompt
+
+            system = build_system_prompt(REACT_SYSTEM_PROMPT, context=context)
+            messages: List[Message] = [
+                Message(role=Role.SYSTEM, content=system),
+                Message(role=Role.USER, content=input),
+            ]
+        all_messages: List[Message] = list(messages)
+        tool_calls_made = 0
+        supports_stream = hasattr(self.engine, "stream_chat")
+
+        for turn in range(self._max_turns):
+            try:
+                if supports_stream:
+                    accumulated = ""
+                    async for chunk in self.engine.stream_chat(
+                        messages, tools=self._tool_specs
+                    ):
+                        accumulated += chunk
+                        # Yield any complete sentences
+                        while True:
+                            m = self._SENT_END.search(accumulated)
+                            if not m:
+                                break
+                            end = m.end()
+                            sentence = accumulated[:end].strip()
+                            accumulated = accumulated[end:]
+                            if sentence:
+                                yield sentence
+                    tail = accumulated.strip()
+                    if tail:
+                        yield tail
+                    # No tool calls in this turn — done
+                    return
+
+                # Batch path (no streaming engine)
+                response = await self.engine.chat(
+                    messages, tools=self._tool_specs
+                )
+            except Exception as e:
+                logger.error(f"native_react streaming error: {e}")
+                return
+
+            all_messages.append(response)
+            messages.append(response)
+            if not response.tool_calls:
+                if response.content:
+                    yield response.content
+                return
+
+            # Tool-call turn (batch)
+            for tc in response.tool_calls:
+                tool_calls_made += 1
+                tool = self._tool_by_name.get(tc.name)
+                call_id = tc.id or f"call-{tool_calls_made}"
+                started_at = time.time()
+
+                get_event_bus().publish(
+                    EventType.TOOL_CALL_START,
+                    {
+                        "call_id": call_id,
+                        "tool": tc.name,
+                        "args": tc.arguments,
+                        "session_id": context.session_id if context else None,
+                        "project": context.project_id if context else None,
+                    },
+                )
+
+                if not tool:
+                    observation = f"Error: tool '{tc.name}' not found"
+                    ok = False
+                else:
+                    try:
+                        call_kwargs = dict(tc.arguments or {})
+                        if context is not None:
+                            if context.user_display_name and "display_name" not in call_kwargs:
+                                call_kwargs["display_name"] = context.user_display_name
+                            if context.user_id and "transport_id" not in call_kwargs:
+                                call_kwargs["transport_id"] = context.user_id
+                        observation = await tool.run(**call_kwargs)
+                        ok = True
+                    except Exception as e:
+                        logger.error(f"Tool {tc.name} error: {e}")
+                        observation = f"Error executing {tc.name}: {e}"
+                        ok = False
+
+                duration_ms = int((time.time() - started_at) * 1000)
+
+                get_event_bus().publish(
+                    EventType.TOOL_CALL_END,
+                    {
+                        "call_id": call_id,
+                        "tool": tc.name,
+                        "ok": ok,
+                        "duration_ms": duration_ms,
+                        "result_preview": observation[:200] if observation else "",
+                        "session_id": context.session_id if context else None,
+                        "project": context.project_id if context else None,
+                    },
+                )
+
+                messages.append(
+                    Message(
+                        role=Role.TOOL,
+                        content=observation,
+                        tool_call_id=tc.id,
+                        name=tc.name,
+                    )
+                )
+                all_messages.append(messages[-1])
+
+        # Max turns
+        return
+
+
 __all__ = ["NativeReActAgent"]
+

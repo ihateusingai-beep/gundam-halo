@@ -15,14 +15,17 @@ A Tauri client connects here and:
 1. `voice.hello` — server config on connect
 2. `vad.state` — speech_start / speech_end (UI feedback)
 3. `asr.result` — transcribed text
-4. `agent.message` — final text reply (always)
+4. `agent.message` — text reply (sent incrementally as the agent
+   streams sentences; `is_final: false` per chunk, then `is_final: true`
+   on the last frame)
 5. `tts.start` / `tts.audio` (binary) / `tts.end` — TTS audio stream
 6. `live2d.trigger` — emotion-driven motion command
 7. `voice.turn_ended` / `voice.cancelled` / `voice.error` — control
 
 The endpoint is decoupled from the agent loop: it only needs an
-`agent_callback(sid, text) → str | None`. TTS and Live2D are wired
-automatically when their config flags are enabled.
+`agent_callback(sid, text) → AsyncIterator[str] | None` that yields
+sentence-sized chunks. TTS and Live2D are wired automatically when
+their config flags are enabled.
 """
 
 from __future__ import annotations
@@ -30,40 +33,51 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.config import get_config
 from app.voice.asr.asr_factory import create_asr
-from app.voice.halo_responder import HaloResponder, parse_emotion
+from app.voice.halo_responder import (
+    DEFAULT_EMOTION,
+    EMOTION_MAP,
+    HaloResponder,
+    parse_emotion,
+)
 from app.voice.live2d.live2d_factory import create_live2d
 from app.voice.pipeline import VoicePipeline
 from app.voice.tts.tts_factory import create_tts
+from app.voice.tts.voice_sanitizer import sanitize_for_tts
 from app.voice.vad.vad_factory import create_vad
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-AgentCallback = Callable[[str, str], Awaitable[str | None]]
-_agent_callback: AgentCallback | None = None
+# M15: callback contract is now streaming — yields sentence-sized
+# chunks. The callback may itself be a coroutine (so it can `await`
+# setup) that returns an async iterator, or a plain function that
+# returns an async iterator directly. We accept both shapes via the
+# `inspect.iscoroutine` check at the call site.
+AgentStreamCallback = Callable[[str, str], "AsyncIterator[str] | Awaitable[AsyncIterator[str] | None]"]
+_agent_callback: AgentStreamCallback | None = None
 _responder: HaloResponder | None = None
 
 
-def set_agent_callback(callback: AgentCallback | None) -> None:
+def set_agent_callback(callback: AgentStreamCallback | None) -> None:
     """Register a function to handle transcribed text from voice input.
 
-    The callback runs the agent and returns the text reply. If TTS
-    is enabled, that reply is then fed through `HaloResponder` to
-    produce TTS audio + Live2D triggers.
+    The callback runs the agent and yields sentence-sized text chunks.
+    The voice WS handler forwards each chunk to TTS + audio immediately,
+    minimising first-audible latency.
     """
     global _agent_callback
     _agent_callback = callback
     logger.info(f"Voice agent callback set: {callback is not None}")
 
 
-def get_agent_callback() -> AgentCallback | None:
+def get_agent_callback() -> AgentStreamCallback | None:
     return _agent_callback
 
 
@@ -100,6 +114,29 @@ def _build_responder() -> HaloResponder | None:
 
 async def _send_json(ws: WebSocket, payload: dict[str, Any]) -> None:
     await ws.send_json(payload)
+
+
+async def _resolve_stream_iter(
+    result: "AsyncIterator[str] | Awaitable[AsyncIterator[str] | None] | None",
+) -> AsyncIterator[str] | None:
+    """Normalise the agent callback's return shape.
+
+    Callers may return either a plain async iterator (no awaiting
+    needed — the work is implicit when the iterator is iterated) or
+    an awaitable that resolves to an async iterator (so the callback
+    can `await` setup like engine construction before yielding).
+    Both shapes are valid; this helper picks the right one.
+    """
+    import inspect
+
+    if result is None:
+        return None
+    if inspect.isawaitable(result) and not hasattr(result, "__aiter__"):
+        # It's a coroutine / future — await it to get the iterator
+        resolved = await result  # type: ignore[func-returns-value]
+        return resolved
+    # Plain async iterator (e.g. async generator object)
+    return result  # type: ignore[return-value]
 
 
 async def _send_text_then_binary(
@@ -175,91 +212,149 @@ async def voice_websocket(websocket: WebSocket) -> None:
     current_session_id: str | None = None
     turn_active = False
 
-    async def _emit_agent_response(
-        sid: str, agent_text: str | None
+    async def _emit_agent_response_streaming(
+        sid: str, sentence_iter: AsyncIterator[str]
     ) -> None:
-        """Send `agent.message` + (if responder wired) tts + live2d frames."""
-        if agent_text is None:
+        """Consume the agent's sentence stream and forward each chunk
+        to the client immediately.
+
+        For each sentence yielded by the agent we:
+          1. Sanitise it (strip <think>, rewrite code fences) so the
+             TTS path doesn't re-sanitise broken text
+          2. Append to an accumulated reply text and send
+             `agent.message` (is_final=False) so the cockpit
+             transcript updates incrementally
+          3. On the first sentence, parse the emotion tag and send
+             `live2d.trigger` (avatar reacts once for the whole turn)
+          4. Run TTS for the single sentence and stream the audio
+             chunks as `tts.audio` + binary frames
+
+        After the stream is exhausted we send a final
+        `agent.message` (is_final=True) and a `tts.end`.
+        """
+        accumulated = ""
+        chunk_count = 0
+        emotion: str = DEFAULT_EMOTION
+        live2d_sent = False
+        tts_started = False
+
+        try:
+            async for sentence in sentence_iter:
+                if not sentence or not sentence.strip():
+                    continue
+                sanitized = sanitize_for_tts(sentence)
+                if not sanitized:
+                    continue
+                # Parse emotion from the very first sentence. We
+                # re-parse (and re-accumulate) the CLEAN text so the
+                # `[EMO:foo]` tag never reaches the transcript.
+                if not live2d_sent:
+                    clean_first, first_emotion = parse_emotion(sanitized)
+                    emotion = first_emotion or DEFAULT_EMOTION
+                    cfg = EMOTION_MAP.get(
+                        emotion, EMOTION_MAP[DEFAULT_EMOTION]
+                    )
+                    live2d_expr = cfg.get("expr", "ntd_calm")
+                    live2d_motion = cfg.get("motion", "idle")
+                    # 1) Fire the actual Live2D engine (so the
+                    #    avatar reacts in-process — used by the
+                    #    background Live2D panel and by FakeLive2D
+                    #    tests)
+                    if responder is not None and responder._live2d is not None:
+                        try:
+                            await responder._live2d.trigger(
+                                live2d_expr, live2d_motion
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Live2D trigger failed: {e}"
+                            )
+                    # 2) Broadcast to the frontend WS so the cockpit
+                    #    avatar animates
+                    await _send_json(websocket, {
+                        "type": "live2d.trigger",
+                        "data": {
+                            "session_id": sid,
+                            "expression": live2d_expr,
+                            "motion": live2d_motion,
+                            "emotion": emotion,
+                        },
+                    })
+                    live2d_sent = True
+                    # Use clean (tag-stripped) text for accumulation
+                    # and TTS so the emotion tag never leaks through.
+                    sanitized = clean_first
+
+                if not sanitized:
+                    continue
+                accumulated = (
+                    f"{accumulated} {sanitized}" if accumulated else sanitized
+                )
+
+                # Incremental agent.message update (is_final=False)
+                await _send_json(websocket, {
+                    "type": "agent.message",
+                    "data": {
+                        "session_id": sid,
+                        "text": accumulated,
+                        "emotion": emotion,
+                        "is_final": False,
+                    },
+                })
+
+                if responder is not None:
+                    if not tts_started:
+                        await _send_json(websocket, {
+                            "type": "tts.start",
+                            "data": {"session_id": sid, "emotion": emotion},
+                        })
+                        tts_started = True
+                    try:
+                        async for audio_chunk in responder.respond_sentence(
+                            sanitized
+                        ):
+                            chunk_count += 1
+                            await _send_text_then_binary(
+                                websocket,
+                                {
+                                    "type": "tts.audio",
+                                    "data": {
+                                        "session_id": sid,
+                                        "sentence": sanitized,
+                                    },
+                                },
+                                audio_chunk,
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"TTS stream failed for sentence {sanitized!r}: {e}"
+                        )
+                        # Continue with the next sentence — partial
+                        # response is better than dropping the whole
+                        # turn
+        except Exception as e:
+            logger.error(f"agent streaming error: {e}")
+            await _send_json(websocket, {
+                "type": "voice.error",
+                "data": {"error": f"agent_stream_failed: {e}"},
+            })
             return
-        # M9-D: strip LLM reasoning + rewrite markdown fences BEFORE
-        # parsing the emotion tag. The responder (TTS path) also
-        # sanitises, but the agent.message frame is sent straight
-        # from this handler, so we must sanitise here too — otherwise
-        # the user sees <think> in the cockpit transcript AND
-        # hears the TTS (which is double-bad).
-        from app.voice.tts.voice_sanitizer import sanitize_for_tts
-        sanitized = sanitize_for_tts(agent_text)
-        clean_text, emotion = parse_emotion(sanitized)
+
+        # Final agent.message (is_final=True)
         await _send_json(websocket, {
             "type": "agent.message",
             "data": {
                 "session_id": sid,
-                "text": clean_text,
+                "text": accumulated,
                 "emotion": emotion,
                 "is_final": True,
             },
         })
 
-        # Send live2d.trigger frame to the frontend (M3)
-        # The expression/motion names come from EMOTION_MAP in HaloResponder.
-        # We re-parse here so we can emit the frame before TTS starts.
-        from app.voice.halo_responder import EMOTION_MAP, DEFAULT_EMOTION
-        cfg = EMOTION_MAP.get(emotion, EMOTION_MAP.get(DEFAULT_EMOTION, {}))
-        live2d_expr = cfg.get("expr", "ntd_calm")
-        live2d_motion = cfg.get("motion", "idle")
-        await _send_json(websocket, {
-            "type": "live2d.trigger",
-            "data": {
-                "session_id": sid,
-                "expression": live2d_expr,
-                "motion": live2d_motion,
-                "emotion": emotion,
-            },
-        })
-
-        if responder is None:
-            return
-        # Fire Live2D trigger (UI animation even without real Live2D)
-        try:
-            chunk_count = 0
-            async for sent, audio_chunk in responder.respond_stream(
-                agent_text
-            ):
-                chunk_count += 1
-                logger.debug(
-                    f"TTS chunk {chunk_count}: {len(audio_chunk)} bytes "
-                    f"for {sent!r}"
-                )
-                # Send a tts.start on first chunk, then tts.audio frames
-                if chunk_count == 1:
-                    await _send_json(websocket, {
-                        "type": "tts.start",
-                        "data": {"session_id": sid, "emotion": emotion},
-                    })
-                await _send_text_then_binary(
-                    websocket,
-                    {
-                        "type": "tts.audio",
-                        "data": {
-                            "session_id": sid,
-                            "sentence": sent,
-                        },
-                    },
-                    audio_chunk,
-                )
-            # Always send tts.end so the client knows we're done
+        if responder is not None and tts_started:
             await _send_json(websocket, {
                 "type": "tts.end",
-                "data": {
-                    "session_id": sid,
-                    "chunks": chunk_count,
-                },
-            })
-        except Exception as e:
-            logger.error(f"TTS streaming failed: {e}")
-            await _send_json(websocket, {
-                "type": "voice.error",
-                "data": {"error": f"tts_failed: {e}"},
+                "data": {"session_id": sid, "chunks": chunk_count},
             })
 
     try:
@@ -326,9 +421,27 @@ async def voice_websocket(websocket: WebSocket) -> None:
                                 "duration_ms": result.asr_duration_ms,
                             },
                         })
-                        await _emit_agent_response(
-                            result.session_id, result.agent_reply
-                        )
+                        # M15: re-run agent in streaming mode.
+                        # The pipeline's _on_user_text already ran
+                        # the batch agent and discarded its reply
+                        # (set agent_reply=None by contract); we
+                        # re-run via the streaming callback here.
+                        if _agent_callback is not None:
+                            try:
+                                sentence_iter = await _resolve_stream_iter(
+                                    _agent_callback(
+                                        result.session_id, result.asr_text
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Streaming agent callback error: {e}"
+                                )
+                                sentence_iter = None
+                            if sentence_iter is not None:
+                                await _emit_agent_response_streaming(
+                                    result.session_id, sentence_iter
+                                )
                         await _send_json(websocket, {
                             "type": "voice.turn_ended",
                             "data": {
@@ -359,11 +472,16 @@ async def voice_websocket(websocket: WebSocket) -> None:
                     if _agent_callback is not None:
                         t_turn_start = time.time()
                         try:
-                            reply = await _agent_callback(sid, text)
+                            sentence_iter = await _resolve_stream_iter(
+                                _agent_callback(sid, text)
+                            )
                         except Exception as e:
                             logger.error(f"Agent callback error: {e}")
-                            reply = None
-                        await _emit_agent_response(sid, reply)
+                            sentence_iter = None
+                        if sentence_iter is not None:
+                            await _emit_agent_response_streaming(
+                                sid, sentence_iter
+                            )
                         # M9-C follow-up: voice.text path was missing
                         # voice.turn_ended, which left the frontend
                         # badge stuck in "speaking"/"thinking" and

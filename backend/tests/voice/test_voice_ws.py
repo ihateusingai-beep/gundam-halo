@@ -40,16 +40,30 @@ def voice_enabled_app(monkeypatch):
 
     from app.voice.asr import asr_factory
     from app.voice.vad import vad_factory
+    from app.voice.tts import tts_factory
+    from app.voice.live2d import live2d_factory
     monkeypatch.setattr(vad_factory, "create_vad", lambda config=None: fake_vad)
     monkeypatch.setattr(asr_factory, "create_asr", lambda config=None: fake_asr)
+    # Also patch TTS / Live2D so the default _build_responder()
+    # doesn't try to instantiate real Edge TTS in CI. Returning
+    # None makes voice_ws skip TTS entirely.
+    monkeypatch.setattr(tts_factory, "create_tts", lambda config=None: None)
+    monkeypatch.setattr(live2d_factory, "create_live2d", lambda config=None: None)
     # voice_ws imports these via `from app.voice.asr.asr_factory import create_asr`
     # so the bound name lives on voice_ws itself:
     monkeypatch.setattr(voice_ws, "create_vad", lambda config=None: fake_vad)
     monkeypatch.setattr(voice_ws, "create_asr", lambda config=None: fake_asr)
+    monkeypatch.setattr(voice_ws, "create_tts", lambda config=None: None)
+    monkeypatch.setattr(voice_ws, "create_live2d", lambda config=None: None)
 
     cfg = _config_module.get_config()
     original = cfg.voice.enabled
     cfg.voice.enabled = True
+    # Reset responder so cross-test pollution from voice_m2_app
+    # (which sets a FakeTTS responder) doesn't leak in. Also
+    # explicitly clear so the default _build_responder doesn't
+    # instantiate a real Edge TTS in CI.
+    voice_ws.set_responder(None)
     ToolRegistry.clear()  # reset accumulated state from module-level halo_app
     try:
         app = create_app()
@@ -57,6 +71,7 @@ def voice_enabled_app(monkeypatch):
     finally:
         cfg.voice.enabled = original
         voice_ws.set_agent_callback(None)
+        voice_ws.set_responder(None)
         ToolRegistry.clear()
 
 
@@ -78,10 +93,15 @@ def test_voice_status_endpoint(voice_client):
 
 
 def test_voice_text_bypass_returns_agent_message(voice_client):
-    """voice.text frame triggers the agent callback without ASR."""
+    """voice.text frame triggers the agent callback without ASR.
+    M15: callback now yields sentence-sized chunks (async iterator).
+    """
+    from typing import AsyncIterator
 
-    async def fake_agent(sid: str, text: str) -> str:
-        return f"echo: {text}"
+    async def fake_agent(sid: str, text: str) -> AsyncIterator[str]:
+        # Two sentences — first one is incremental, last is final
+        yield f"echo part 1 of: {text}"
+        yield f"echo part 2 of: {text}"
 
     voice_ws.set_agent_callback(fake_agent)
 
@@ -95,11 +115,40 @@ def test_voice_text_bypass_returns_agent_message(voice_client):
             "text": "hello there",
         }))
 
-        msg = ws.receive_json()
-        assert msg["type"] == "agent.message"
-        assert msg["data"]["session_id"] == "test-1"
-        assert msg["data"]["text"] == "echo: hello there"
-        assert msg["data"]["is_final"] is True
+        # M15 streaming protocol: with responder wired (default
+        # _build_responder hits Edge TTS), the server emits
+        #   live2d.trigger
+        #   tts.start
+        #   agent.message (is_final=False)  ← sentence 1
+        #   tts.audio (+ binary)
+        #   agent.message (is_final=False)  ← sentence 2
+        #   tts.audio (+ binary)
+        #   agent.message (is_final=True)
+        #   tts.end
+        #   voice.turn_ended
+        # We only assert the agent.message frames (the protocol under
+        # test). Other frames (live2d, tts.*) are skipped over.
+        agent_messages: list[dict] = []
+        for _ in range(8):  # bound the loop
+            try:
+                msg = ws.receive_json()
+            except Exception:
+                break
+            if msg.get("type") == "agent.message":
+                agent_messages.append(msg)
+            elif msg.get("type") == "voice.turn_ended":
+                break
+
+    assert len(agent_messages) == 3, f"expected 3 agent.message frames, got {len(agent_messages)}: {agent_messages}"
+    # First: incremental, single sentence
+    assert agent_messages[0]["data"]["text"] == "echo part 1 of: hello there"
+    assert agent_messages[0]["data"]["is_final"] is False
+    # Second: incremental, accumulated
+    assert agent_messages[1]["data"]["text"] == "echo part 1 of: hello there echo part 2 of: hello there"
+    assert agent_messages[1]["data"]["is_final"] is False
+    # Third: final
+    assert agent_messages[2]["data"]["is_final"] is True
+    assert agent_messages[2]["data"]["text"] == "echo part 1 of: hello there echo part 2 of: hello there"
 
 
 def test_voice_text_without_callback_returns_asr_result(voice_client):

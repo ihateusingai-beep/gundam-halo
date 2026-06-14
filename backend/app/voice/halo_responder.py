@@ -243,6 +243,31 @@ class HaloResponder:
         finally:
             get_event_bus().publish(EventType.VOICE_TTS_END, {"emotion": emotion})
 
+    async def respond_sentence(
+        self, sentence: str
+    ) -> AsyncIterator[bytes]:
+        """Stream TTS audio for ONE pre-split sentence (M15 streaming).
+
+        The caller is responsible for already having split the agent
+        text into sentences (typically via the agent's sentence
+        boundary detection). This bypasses `split_sentences` and the
+        emotion tag parsing — the caller passes a single, already
+        sanitised sentence. Use `respond_stream` if you have a full
+        text and want the splitter + emotion handling.
+
+        Yields:
+            Raw audio bytes (mp3). Caller forwards to client.
+        """
+        if not sentence or not sentence.strip():
+            return
+        try:
+            async for chunk in self._tts.stream_synthesize(sentence):
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            logger.error(f"respond_sentence TTS failed for {sentence!r}: {e}")
+            raise
+
 
 __all__ = [
     "DEFAULT_EMOTION",

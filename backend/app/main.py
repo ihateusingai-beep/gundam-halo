@@ -83,19 +83,31 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     init_memory_on_startup()
 
     # M15: wire the voice WebSocket agent callback so a recorded audio
-    # turn (release after hold-to-talk) actually runs the agent.
-    # Without this, finalize_turn() skips the agent call and the TTS
-    # pipeline never fires — the user sees no reply after ASR completes.
-    # The callback is a fresh agent per turn so the config cache
-    # (invalidated by /api/secrets writes) is respected at runtime.
+    # turn (release after hold-to-talk) actually runs the agent and
+    # streams sentences to TTS in real time. Without this, finalize_turn()
+    # skips the agent call and the TTS pipeline never fires — the user
+    # sees no reply after ASR completes. Fresh agent per turn so the
+    # config cache (invalidated by /api/secrets writes) is respected.
     from app.api.voice_ws import set_agent_callback
     from app.agents import native_react  # noqa: F401 — ensure registered
+    from typing import AsyncIterator
 
-    async def voice_agent_callback(sid: str, text: str) -> str | None:
-        """Run the native_react agent for a voice turn and return the reply."""
+    async def voice_agent_callback(
+        sid: str, text: str
+    ) -> AsyncIterator[str] | None:
+        """Run the native_react agent streaming for a voice turn.
+
+        Yields sentence-sized chunks as the LLM emits them. The
+        voice WS handler forwards each chunk to TTS immediately,
+        so the user hears the first sentence in ~1-2s instead of
+        waiting for the entire reply + a full TTS synthesis.
+        """
         cfg = get_config()
         if not cfg.llm.api_key:
-            logger.warning(f"Voice turn {sid}: MINIMAX_API_KEY not configured, skipping agent")
+            logger.warning(
+                f"Voice turn {sid}: MINIMAX_API_KEY not configured, "
+                "skipping agent"
+            )
             return None
         try:
             from app.engines.minimax import MiniMaxEngine
@@ -110,14 +122,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             tools = default_tools()
             agent_cls = AgentRegistry.get("native_react")
             agent = agent_cls(engine, cfg.llm.default_model, tools=tools)
-            result = await agent.run(text)
-            return result.output if result.success else None
+            return agent.run_streaming(text)
         except Exception as e:
             logger.error(f"Voice agent callback error (sid={sid}): {e}")
             return None
 
     set_agent_callback(voice_agent_callback)
-    logger.debug("Voice agent callback wired (native_react, per-turn)")
+    logger.debug("Voice agent callback wired (native_react streaming, per-turn)")
 
     # M14-T1: wire the per-project filesystem manager as a singleton
     # on app.state so request handlers (and the new health probe)
