@@ -1,20 +1,27 @@
 """Gundam Halo — FastAPI entry point.
 
 Boot order:
-1. Load config (TOML + env)
-2. Initialize logging
-3. Initialize core (registry, event bus)
-4. Initialize engines (MiniMax)
-5. Initialize agents, channels (deferred — lazy on first use)
-6. Initialize security (audit log)
-7. Mount API routes
-8. Start uvicorn
+1. Load .env (HALO_HOME/.env) into os.environ — this MUST run
+   before any module reads cfg.llm.api_key, otherwise the
+   `RuntimeError("MINIMAX_API_KEY not set")` triggers even when
+   the user has stored a key in the dashboard. We do a stdlib
+   mini-parser here to avoid pulling in python-dotenv as a dep.
+2. Load config (TOML + env)
+3. Initialize logging
+4. Initialize core (registry, event bus)
+5. Initialize engines (MiniMax)
+6. Initialize agents, channels (deferred — lazy on first use)
+7. Initialize security (audit log)
+8. Mount API routes
+9. Start uvicorn
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -29,6 +36,61 @@ from app.core.registry import (
     ToolRegistry,
 )
 from app.core.logging import configure_logging
+
+
+def _load_halo_dotenv() -> int:
+    """Best-effort load of $HALO_HOME/.env into os.environ.
+
+    Mavis fix (2026-06-14, Sprint 16 follow-up): the previous
+    Secrets-tab save path wrote the API key to .env but never told
+    the OS about it on the next process start, so every restart
+    required a manual `source .env && uvicorn ...`. We now do a
+    minimal KEY=VALUE parser at module import time — before any
+    cfg.llm.api_key is consulted.
+
+    Format handled:
+      - blank lines and `# ...` comments skipped
+      - `KEY=VALUE` and `KEY="VALUE WITH SPACES"` both supported
+      - leading `export ` is tolerated
+      - existing os.environ values WIN (we never clobber)
+    Format NOT handled (would require python-dotenv):
+      - $OTHER_VAR interpolation
+      - line continuations
+      - multi-line quoted values
+    These are not used by the current dashboard-written .env.
+    """
+    halo_home = os.environ.get("HALO_HOME", str(Path.home() / ".gundam-halo"))
+    env_path = Path(halo_home) / ".env"
+    if not env_path.exists():
+        return 0
+    n = 0
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip()
+        if (v.startswith('"') and v.endswith('"')) or (
+            v.startswith("'") and v.endswith("'")
+        ):
+            v = v[1:-1]
+        if k and k not in os.environ:
+            os.environ[k] = v
+            n += 1
+    return n
+
+
+# Load .env before any other module reads config. This is
+# intentionally at module-import time (not inside lifespan) so
+# that config.py's get_config() finds the keys even on the first
+# call.
+_loaded = _load_halo_dotenv()
+if _loaded:
+    import sys
+    print(f"[main] loaded {_loaded} env var(s) from $HALO_HOME/.env", file=sys.stderr)
+
 
 logger = logging.getLogger(__name__)
 
