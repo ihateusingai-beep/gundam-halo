@@ -102,6 +102,14 @@ voice-yuesub = [
     # scripts/setup-yuesub-models.sh comments and pin numpy
     # via [tool.uv] constraint.
     "torchaudio>=2.1",
+    # pandas is required by the corrector's data loaders
+    # (jyutping dictionary, char frequency, t2s mapping).
+    # Not pulled in by funasr_onnx's install_requires, so we
+    # declare it here. Only loaded when corrector="bert" or
+    # corrector="opencc" with regex rules that consult the
+    # jyutping dict (current impl: always loads on first
+    # correct() call; could be made lazy per corrector mode).
+    "pandas>=2,<3",
 ]
 
 [project.scripts]

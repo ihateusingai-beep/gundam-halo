@@ -422,14 +422,13 @@ class YuesubASR(ASRInterface):
 
             text = self._asr_segment(segment_audio)
             if text:
-                # Corrector (Track C). The corrector is sync and
-                # blocking; Track C wraps it in `asyncio.to_thread`
-                # for the production pipeline. The injected
-                # corrector here is the unwrapped, sync version —
-                # callers should pass a `Corrector` whose `correct`
-                # is fast (regex + OpenCC) or pre-async-wrapped.
+                # Corrector (Track C). The corrector's `acorrect`
+                # is async; for corrector="opencc" it's near-instant
+                # but still runs in a thread (uniform code path);
+                # for corrector="bert" the 300-500ms cost is
+                # absorbed by the sentence-streamed TTS pipeline.
                 if self._corrector is not None:
-                    text = self._corrector.correct(text)
+                    text = await self._corrector.acorrect(text)
                 results.append(text)
 
         # Join segments with spaces, collapse whitespace
