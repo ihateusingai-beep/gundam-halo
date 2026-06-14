@@ -92,6 +92,16 @@ voice-yuesub = [
     # tokenizer). PyPI's funasr_onnx install_requires does NOT list
     # jieba (a known packaging gap), so we declare it here.
     "jieba>=0.42,<1",
+    # torchaudio provides the MMS_FA forced-aligner used by
+    # yuesub-api's `OnnxTranscriber._asr` for token-span alignment
+    # (the `aligner = bundle.get_aligner()` call). funasr_onnx
+    # itself does NOT include an aligner — we depend on torchaudio
+    # here. Note: uv sync may need to drop silero-vad to resolve
+    # the numpy<=1.26.4 constraint funasr_onnx requires; if
+    # whisper_local users hit a silero-VAD ImportError, see
+    # scripts/setup-yuesub-models.sh comments and pin numpy
+    # via [tool.uv] constraint.
+    "torchaudio>=2.1",
 ]
 
 [project.scripts]

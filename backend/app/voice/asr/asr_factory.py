@@ -1,7 +1,11 @@
 """ASR engine factory.
 
 Picks an ASR backend from `voice.asr.backend` in config.toml.
-v1: only `whisper_local`. Future: `whisper_cpp`, `groq`, `funasr`.
+v1: `whisper_local` (Sprint 16).
+Sprint 17b: `yuesub` (Cantonese, SenseVoice + fsmn-vad + optional
+BERT corrector). The yuesub backend is a lazy import so that
+whisper_local users don't need to install the voice-yuesub
+extras (funasr_onnx, librosa, transformers[onnx], opencc, etc.).
 """
 
 from __future__ import annotations
@@ -47,10 +51,54 @@ def create_asr(
             compute_type=config.compute_type,
         )
 
+    if backend == "yuesub":
+        # Lazy import: the yuesub ASR module pulls in funasr_onnx +
+        # torchaudio + transformers, all of which are in the
+        # voice-yuesub extra. whisper_local users don't need them.
+        from app.voice.asr.yuesub import YuesubASR
+
+        corrector = _build_corrector(config.corrector)
+
+        return YuesubASR(
+            language=config.language,
+            device=config.device,
+            corrector=corrector,
+        )
+
     raise ValueError(
         f"Unknown ASR backend: {backend!r}. "
-        f"v1 supports only 'whisper_local'."
+        f"Supported: 'whisper_local' (Sprint 16), 'yuesub' (Sprint 17b)."
     )
+
+
+def _build_corrector(corrector_name: str):
+    """Build a Corrector from a config string.
+
+    Sprint 17b: `corrector = "bert" | "opencc" | "none"`.
+    Returns None for "none". The corrector itself is owned by
+    Track C; here we just glue the config string to the
+    implementation. The corrector is sync (Track C will wrap
+    it in `asyncio.to_thread` inside the voice pipeline).
+
+    Returns:
+        A `Corrector` instance, or None for "none".
+
+    Raises:
+        ValueError: on unknown corrector name.
+    """
+    name = (corrector_name or "none").lower()
+    if name in ("none", "", "off", "false"):
+        return None
+    if name not in ("bert", "opencc"):
+        raise ValueError(
+            f"Unknown voice.asr.corrector: {name!r}. "
+            f"Expected 'bert' | 'opencc' | 'none'."
+        )
+    # Track C delivers the corrector module. Lazy-import so
+    # whisper_local users don't pull opencc/transformers.
+    from app.voice.corrector.corrector import Corrector  # type: ignore
+
+    return Corrector(corrector=name)
 
 
 __all__ = ["create_asr"]

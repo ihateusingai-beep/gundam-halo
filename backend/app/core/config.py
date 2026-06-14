@@ -150,7 +150,7 @@ class VoiceVADConfig:
 class VoiceASRConfig:
     """ASR (automatic speech recognition) settings."""
 
-    backend: str = "whisper_local"  # only "whisper_local" in v1
+    backend: str = "whisper_local"  # "whisper_local" (Sprint 16) | "yuesub" (Sprint 17b)
     model_size: str = "base"  # tiny|base|small|medium|large
     # M9-E Layer 2 (v0.1.3): when set, points at a local HF-format
     # fine-tuned checkpoint (e.g. ~/.gundam-halo/models/whisper-yue-base/).
@@ -159,6 +159,14 @@ class VoiceASRConfig:
     language: str = "auto"  # auto|en|zh|yue|ja|...
     device: str = "auto"  # auto|cpu|cuda|mps
     compute_type: str = "auto"  # auto|int8|float16|float32
+    # Sprint 17b (yuesub backend only): which corrector to apply to
+    # ASR output before wake detection. One of "bert" | "opencc" | "none".
+    # "bert" requires hon9kon9ize/bert-large-cantonese to be downloaded
+    # (`scripts/setup-yuesub-models.sh` after running
+    # `python download_models.py --with-bert` inside the yuesub-api
+    # repo). "opencc" is regex-only and runs in <5ms per segment.
+    # "none" skips the corrector entirely (raw SenseVoice text).
+    corrector: str = "bert"
 
 
 @dataclass
@@ -429,6 +437,11 @@ def _load_voice_config(toml_data: dict) -> VoiceConfig:
         language=asr_d.get("language", asr_defaults.language),
         device=asr_d.get("device", asr_defaults.device),
         compute_type=asr_d.get("compute_type", asr_defaults.compute_type),
+        # Sprint 17b: corrector backend. Validated at
+        # asr_factory time (not here) so users with whisper_local
+        # don't see a "corrector" error if they accidentally
+        # leave it set.
+        corrector=asr_d.get("corrector", asr_defaults.corrector),
     )
 
     tts_d = d.get("tts", {})
