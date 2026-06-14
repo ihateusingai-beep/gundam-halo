@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Gundam Halo — custom Info.plist merged with the Tauri 2 default
+  Info.plist at build time. Add keys here when the app needs
+  permission to access a protected macOS resource (mic, camera,
+  speech, accessibility, AppleScript automation, etc.).
+
+  IMPORTANT: macOS App Store review will reject any app that
+  requests these keys without a corresponding usage description.
+  All keys below must have a non-empty purpose string.
+
+  See: docs/MICROPHONE-PERMISSION.md for the user-facing guide
+  on how Chrome (browser dashboard) vs Tauri shell (this file)
+  handle mic permission.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Microphone — required for hold-to-talk / push-to-talk.
+         Without this string the macOS dialog will say "(no
+         usage description provided)" and the user is more
+         likely to deny. The string shown here is what they
+         see in the system prompt. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Gundam Halo needs microphone access for voice input (hold-to-talk / push-to-talk). The mic is only active while you are pressing the mic button in the cockpit.</string>
+
+    <!-- Speech recognition — required for offline Whisper ASR
+         fallback (whisper.cpp / sherpa-onnx). Even when we
+         transcribe entirely in the backend, the WebView's
+         SpeechRecognition interface still needs this on some
+         macOS versions. -->
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Gundam Halo uses speech recognition to transcribe your voice locally (Whisper) before sending the text to the agent. Audio never leaves your Mac without your explicit action.</string>
+
+    <!-- Camera — reserved for future image-input features (e.g.
+         "describe what's on my screen"). Currently unused but
+         declared so that adding the feature later doesn't
+         require a re-install / re-grant cycle. -->
+    <key>NSCameraUsageDescription</key>
+    <string>Reserved for future image-input features. Currently unused.</string>
+
+    <!-- Accessibility — required for the macOS a11y tool
+         (reads on-screen text on demand) and for some window
+         management commands. Without this, the A11yTool is
+         silently no-op. -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Gundam Halo uses accessibility APIs to read UI text from other apps when you ask the agent to summarise on-screen content.</string>
+
+    <!-- AppleScript — enables the AppleScript tool (run AppleScript
+         source from the agent). macOS Big Sur+ requires this
+         key + the host process to be a scriptable bundle. -->
+    <key>NSAppleScriptEnabled</key>
+    <true/>
+
+    <!-- LSApplicationCategoryType — used by Launchpad and the
+         App Store to group the app. "public.app-category.developer-tools"
+         puts it in the Developer Tools section. -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+
+    <!-- Minimum macOS version — match Tauri 2's default (10.15).
+         Tauri injects a higher LSMinimumSystemVersion on
+         macOS 11+ anyway; this is the floor. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15.0</string>
+</dict>
+</plist>

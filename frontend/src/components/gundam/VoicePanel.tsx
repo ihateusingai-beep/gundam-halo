@@ -252,9 +252,55 @@ export function VoicePanel() {
       </div>
 
       {mic.error && (
-        <p className="text-[10px] text-[var(--danger)] font-mono leading-tight">
-          ⚠ {mic.error}
-        </p>
+        <div className="space-y-1.5 pt-1.5 border-t border-[var(--border-color)]/50">
+          <p className="text-[10px] text-[var(--danger)] font-mono leading-tight">
+            ⚠ {mic.error}
+          </p>
+          {/* When mic permission was denied, surface a recovery
+              affordance: a one-click retry that re-asks Chrome
+              (Chrome only re-prompts on a user gesture), and a
+              link to the full setup guide. The retry button is
+              hidden for non-permission errors (NotFoundError,
+              OverconstrainedError, etc.) because re-clicking won't
+              help there. */}
+          {mic.state === "denied" && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                onClick={() => void mic.start()}
+                className="px-2 py-0.5 text-[9px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors"
+                title="Chrome re-prompts for mic permission on user gesture"
+              >
+                Retry
+              </button>
+              <a
+                href="/docs/MICROPHONE-PERMISSION.md"
+                target="_blank"
+                rel="noreferrer"
+                className="px-2 py-0.5 text-[9px] uppercase tracking-wider font-[Rajdhani] border border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
+              >
+                Setup guide ↗
+              </a>
+              <button
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(
+                      "chrome://settings/content/microphone"
+                    );
+                    toast.success("URL copied", {
+                      description: "Paste into Chrome to open mic settings.",
+                    });
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                className="px-2 py-0.5 text-[9px] uppercase tracking-wider font-[Rajdhani] border border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
+                title="Copy the Chrome mic settings URL"
+              >
+                Copy settings URL
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Last exchange (ASR ↔ reply) */}

@@ -46,6 +46,9 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "Personal AI agent on Mac",
-    "longDescription": "Gundam Halo — personal AI agent on Mac. Hermes-like feel, MiniMax brain, deep Mac control, per-project isolation."
+    "longDescription": "Gundam Halo — personal AI agent on Mac. Hermes-like feel, MiniMax brain, deep Mac control, per-project isolation.",
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
   }
 }
