@@ -70,6 +70,29 @@ train = [
 signal = [
     # signal-cli daemon client (TBD — v2)
 ]
+# Sprint 17b: Cantonese ASR via yuesub-api (SenseVoice + fsmn-vad +
+# hon9kon9ize BERT corrector). Lifted into Gundam Halo as a second
+# ASR backend selectable via `voice.asr.backend = "yuesub"`. Models
+# (~2GB) are NOT downloaded by `uv sync` — the user runs
+# `scripts/setup-yuesub-models.sh` once to symlink the pre-downloaded
+# yuesub-api model dir. See docs/FEATURE-SPEC-SPRINT17b.md §5.6.
+#
+# NOTE: `funasr_onnx` on PyPI is at 0.4.1 (yuesub-api's inner
+# `__version__` reports 1.1.13+ but that's a different namespace).
+voice-yuesub = [
+    "funasr_onnx>=0.4.1,<1",          # SenseVoiceSmall + Fsmn_vad_online ONNX bindings
+    "librosa>=0.10,<1",               # Audio array + STFT (for denoiser)
+    "resampy>=0.4,<1",                # 16kHz resampling
+    "transformers[onnx]>=4.40",       # BERT corrector + ONNX export
+    "opencc>=1.1,<2",                 # OpenCC t2s (Corrector.py imports this)
+    "tqdm>=4.66",                     # SenseVoice progress bars
+    "modelscope>=1.10,<2",            # Optional: model re-download via download_models.py
+    # funasr_onnx 0.4.1 imports `jieba` internally for Chinese
+    # tokenization in utils/utils.py (used by Paraformer's BPE
+    # tokenizer). PyPI's funasr_onnx install_requires does NOT list
+    # jieba (a known packaging gap), so we declare it here.
+    "jieba>=0.42,<1",
+]
 
 [project.scripts]
 gundam-halo = "gundam_halo.cli:main"

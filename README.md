@@ -222,6 +222,55 @@ The backend reads `config.toml` at startup; env vars override individual
 fields (e.g. `MINIMAX_API_KEY` overrides `[llm] api_key_env`'s named
 variable).
 
+### Cantonese ASR (yuesub backend) — Sprint 17b
+
+The default ASR backend is `whisper_local` (Sprint 16, works for
+English / Mandarin / mixed). For higher-fidelity **Cantonese** ASR
+with the SenseVoiceSmall model + fsmn-vad streaming + Cantonese
+BERT post-corrector, switch to the `yuesub` backend. This is the
+Sprint 17b feature — see [`docs/FEATURE-SPEC-SPRINT17b.md`](./docs/FEATURE-SPEC-SPRINT17b.md)
+for the full design.
+
+**One-time setup** (assumes you have `~/workspace/yuesub-api/` already
+cloned and `python download_models.py` already run there):
+
+```bash
+# 1. Install the yuesub Python dependencies
+cd backend
+uv sync --extra voice --extra voice-yuesub
+
+# 2. Symlink the yuesub-api model files into Gundam Halo's expected layout
+cd ..
+bash scripts/setup-yuesub-models.sh
+# (Optional) verify no symlink is missing
+bash scripts/setup-yuesub-models.sh --check
+
+# 3. For the BERT corrector (recommended for Cantonese):
+cd ~/workspace/yuesub-api
+python download_models.py --with-bert
+bash scripts/setup-yuesub-models.sh
+```
+
+Then in `~/.gundam-halo/config.toml`:
+
+```toml
+[voice.asr]
+backend = "yuesub"          # was "whisper_local"
+language = "auto"           # "auto" | "yue" | "zh" | "en"
+corrector = "bert"          # "bert" | "opencc" | "none"
+device = "auto"             # "auto" (mps on mac) | "mps" | "cpu"
+```
+
+Restart the backend to pick up the new backend. The first voice
+turn after the switch pays a one-time model load (~2-5s); subsequent
+turns are real-time.
+
+Disk footprint: the symlinked `iic/` directory is ~2GB (SenseVoice
+~2GB + fsmn-vad ~6MB). The BERT corrector is **another ~1.4GB** if
+you enable it. The script doesn't copy files — it points Gundam
+Halo at the yuesub-api checkout, so updating yuesub-api's models
+later is just a `git pull` there.
+
 ### Tailscale (for phone access)
 
 ```bash
