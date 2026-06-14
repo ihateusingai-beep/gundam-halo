@@ -2,8 +2,23 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
+import { execSync } from "node:child_process";
 
 // https://vite.dev/config/
+
+/** Read the current git short SHA, falling back to "unknown" outside a repo. */
+function readGitSha(): string {
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -57,6 +72,15 @@ export default defineConfig(async () => ({
       process.env.VITE_APP_VERSION ??
         process.env.npm_package_version ??
         "0.0.0-dev",
+    ),
+    // M15: inject build-time git SHA so the cockpit can detect when
+    // the backend is running a different commit (e.g. user pulled
+    // new code but the uvicorn process is still on the old one).
+    // Read once at config-eval time — Vite's HMR won't refresh it
+    // for the same dev session, but the user has to actually change
+    // git SHA to see a mismatch, so that's fine.
+    __GIT_SHA__: JSON.stringify(
+      process.env.VITE_GIT_SHA ?? readGitSha()
     ),
   },
   build: {

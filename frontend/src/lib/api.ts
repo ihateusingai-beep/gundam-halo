@@ -80,7 +80,15 @@ async function request<T>(
 export const api = {
   health: () => request<HealthResponse>("/health"),
   getGauges: () => request<Gauges>("/api/system/gauges"),
-  getSystemInfo: () => request<{ platform: string; python_version: string; app_version: string }>("/api/system/info"),
+  getSystemInfo: () =>
+    request<{
+      platform: string;
+      python_version: string;
+      app_version: string;
+      git_sha: string;
+      build_id: number;
+      features: string[];
+    }>("/api/system/info"),
 
   // Projects
   listProjects: () => request<ProjectSummary[]>("/api/projects"),

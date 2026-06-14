@@ -7,6 +7,8 @@ import { Gauge } from "@/components/gundam/Gauge";
 import { ConnectionStatus } from "@/components/gundam/ConnectionStatus";
 import { MissionLog } from "@/components/gundam/MissionLog";
 import { ProjectCard } from "@/components/gundam/ProjectCard";
+import { MaybeBackendOutdatedBanner } from "@/components/gundam/BackendOutdatedBanner";
+import { useBackendVersion } from "@/hooks/use-backend-version";
 import { useProjectsStore } from "@/stores/projects";
 import { useSystemStore } from "@/stores/system";
 import { useWsEvent, useWsStatus } from "@/lib/ws";
@@ -75,6 +77,7 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   const location = useLocation();
   const { state: live2dState } = useHaloLive2D();
   const [avatarMode, setAvatarMode] = useAvatarMode();
+  const { backend, outdated, missingFeatures } = useBackendVersion();
 
   useEffect(() => {
     fetchProjects();
@@ -129,6 +132,14 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
         {mode === "active" ? "MISSION ACTIVE" : "STANDBY"} · v{APP_VERSION}
       </div>
       <div className="gundam-scan" aria-hidden="true" />
+
+      {/* Backend-outdated banner — only renders when git SHA mismatches
+          or required features are missing. Polled every 30s. */}
+      <MaybeBackendOutdatedBanner
+        outdated={outdated}
+        backend={backend}
+        missingFeatures={missingFeatures}
+      />
 
       {/* Top bar — project nav. Responsive padding for chrome. */}
       <header className="border-b border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 md:pl-48 md:pr-44 py-3 mt-2 flex items-center justify-between">

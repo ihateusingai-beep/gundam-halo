@@ -7,12 +7,14 @@
 //! for design rationale.
 
 use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use include_dir::{include_dir, Dir};
+use serde::Serialize;
 use tauri::{
     image::Image as TauriImage,
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -196,6 +198,117 @@ fn get_animation_speed() -> u32 {
 }
 
 // ============================================================================
+// Backend lifecycle
+// ============================================================================
+
+#[derive(Serialize)]
+struct RestartResult {
+    ok: bool,
+    /// PID of the backend that was running before (or None if nothing
+    /// was on the port).
+    old_pid: Option<u32>,
+    /// PID of the newly-spawned uvicorn process (or None on failure).
+    new_pid: Option<u32>,
+    /// Human-readable message — surfaced as a toast on the frontend.
+    message: String,
+}
+
+/// Kill the uvicorn process bound to `port` and respawn it under
+/// `uv` in the project backend. Used by the cockpit "Restart
+/// backend" button on the backend-outdated banner.
+///
+/// Important: this command only kills the *uvicorn* on the given
+/// port — it never touches the Tauri shell itself, so the dashboard
+/// survives the restart. After the kill we sleep ~500ms before
+/// spawning so the kernel can release the port.
+#[tauri::command]
+fn restart_backend(
+    port: Option<u16>,
+    repo_dir: Option<String>,
+) -> RestartResult {
+    let port = port.unwrap_or(8000);
+    let repo_dir = repo_dir.unwrap_or_else(|| {
+        // Default to the install.sh convention: $HOME/workspace/gundam-halo
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        format!("{}/workspace/gundam-halo", home)
+    });
+
+    // 1) Find the pid listening on `port` via lsof
+    let old_pid = match Command::new("lsof")
+        .args(["-ti", &format!("tcp:{}", port)])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let s = String::from_utf8_lossy(&out.stdout);
+            s.trim().lines().next().and_then(|p| p.trim().parse::<u32>().ok())
+        }
+        Ok(_) => None, // lsof returned no rows — nothing on the port
+        Err(e) => {
+            return RestartResult {
+                ok: false,
+                old_pid: None,
+                new_pid: None,
+                message: format!("lsof not available: {}", e),
+            };
+        }
+    };
+
+    // 2) Kill the old process (if any)
+    if let Some(pid) = old_pid {
+        let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
+        // Wait for the port to actually free up
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    // 3) Spawn a fresh uvicorn in the background. Detach it from
+    //    this process so it survives the Tauri shell.
+    let backend_dir = format!("{}/backend", repo_dir);
+    let spawn = Command::new("uv")
+        .args([
+            "run",
+            "--project",
+            &backend_dir,
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            &port.to_string(),
+        ])
+        .current_dir(&backend_dir)
+        // Detach: stdout/stderr to /dev/null, don't keep a tty
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    match spawn {
+        Ok(child) => {
+            let new_pid = Some(child.id());
+            // Intentionally drop `child` — Rust will not wait on
+            // the killed `Command` because we don't keep the handle.
+            std::mem::forget(child);
+            RestartResult {
+                ok: true,
+                old_pid,
+                new_pid,
+                message: format!(
+                    "Backend restarting (port {}). New pid: {}",
+                    port,
+                    new_pid.unwrap_or(0)
+                ),
+            }
+        }
+        Err(e) => RestartResult {
+            ok: false,
+            old_pid,
+            new_pid: None,
+            message: format!("Failed to spawn uvicorn: {}", e),
+        },
+    }
+}
+
+// ============================================================================
 // App entry
 // ============================================================================
 
@@ -312,7 +425,8 @@ pub fn run() {
             new_chat,
             open_settings,
             set_animation_speed,
-            get_animation_speed
+            get_animation_speed,
+            restart_backend
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

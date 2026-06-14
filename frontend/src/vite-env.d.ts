@@ -15,3 +15,5 @@ interface ImportMeta {
  * tsc happy.
  */
 declare const APP_VERSION: string;
+/** Build-time git SHA (from `git rev-parse --short HEAD`). */
+declare const __GIT_SHA__: string;
