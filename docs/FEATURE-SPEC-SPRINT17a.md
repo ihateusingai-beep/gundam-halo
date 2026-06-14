@@ -81,6 +81,21 @@ configuration plumbing that 17b will lean on.
   Swift binding work in the Tauri shell.
 - **Work-tab classifier** (close non-work Chrome tabs) — Sprint
   18+. Unrelated to voice hygiene.
+- **Audio-reactive cockpit HUD** (CyberWaveform + GundamAvatar
+  pulse driven by real mic RMS, not idle breathing) — Sprint
+  17b alongside the yuesub-api integration. The
+  `useSharedAmplitude()` hook
+  (`frontend/src/hooks/use-shared-amplitude.ts`) is currently a
+  deterministic placeholder: two slow sines (6.5s + 9.2s) plus
+  a 7-12s "burst" envelope. Its docstring already calls out the
+  planned swap to `AnalyserNode.getByteTimeDomainData()` RMS.
+  When 17b lands the wake-word pipeline, the server will
+  broadcast `vad.audio_level` (or similar) frames; the hook
+  subscribes to that stream and falls back to the idle drift
+  when the voice WS is disconnected. **Discovered 2026-06-14
+  via user screenshot** — the cyber oscilloscope appears
+  static because the audio path was never wired, not because
+  something regressed. User confirmed: defer to 17b.
 
 ---
 
