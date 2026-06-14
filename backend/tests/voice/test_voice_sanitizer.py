@@ -18,6 +18,7 @@ returns nothing.
 from __future__ import annotations
 
 from app.voice.tts.voice_sanitizer import (
+    SanitizerState,
     sanitize_for_tts,
     strip_reasoning,
 )
@@ -225,3 +226,114 @@ def test_full_sanitize_idempotent():
     once = sanitize_for_tts(M9C_REGRESSION_INPUT)
     twice = sanitize_for_tts(once)
     assert once == twice
+
+
+# ---------------------------------------------------------------------------
+# 4. Sprint 17a: cross-sentence `<think>` state threading
+# ---------------------------------------------------------------------------
+#
+# The LLM may open a `<think>` block in one sentence and close it
+# in the next. The single-shot non-greedy `_THINK_RE` cannot
+# suppress the body of an unclosed block — it just leaves the
+# open-tag text in the output. `strip_reasoning()` and
+# `sanitize_for_tts()` therefore accept a `SanitizerState` and
+# thread it across calls. The test cases below exercise the
+# cross-sentence paths and the state-cleanup guarantees.
+
+
+def test_think_block_open_then_close_across_sentences():
+    """`<think>` opens in sentence 1, closes in sentence 2.
+
+    Sentence 1 should be empty (open tag, no body to keep).
+    Sentence 2 should contain the text AFTER the close tag
+    (the body between open and close is reasoning, suppressed).
+    """
+    state = SanitizerState()
+    s1 = strip_reasoning("<think>The user wants X.", state)
+    assert s1 == ""
+    assert state.think_open is True
+
+    # Real-world pattern: sentence 2 carries the answer
+    # followed by the close tag. Body between open (in
+    # sentence 1) and close (in sentence 2) is reasoning and
+    # is suppressed; only the text AFTER the close tag is
+    # returned.
+    s2 = strip_reasoning("</think>Y is the answer.", state)
+    assert s2 == "Y is the answer."
+    assert "</think>" not in s2
+    assert state.think_open is False
+
+
+def test_think_block_open_across_three_sentences():
+    """`<think>` opens in sentence 1, stays open through 2, closes in 3."""
+    state = SanitizerState()
+    assert strip_reasoning("<think>planning", state) == ""
+    assert state.think_open is True
+    assert strip_reasoning("still planning", state) == ""
+    assert state.think_open is True
+    out = strip_reasoning("done now.</think>real reply text", state)
+    assert out == "real reply text"
+    assert state.think_open is False
+
+
+def test_think_state_resets_between_independent_calls():
+    """A fresh SanitizerState is a hermetic starting point.
+
+    Two independent strip_reasoning() calls in sequence (each
+    with a fresh state) should both see the close tag in the
+    same chunk and behave like the legacy single-shot path.
+    """
+    state_a = SanitizerState()
+    state_b = SanitizerState()
+    # State A handles a complete in-sentence block.
+    assert strip_reasoning("<think>r</think>plain", state_a) == "plain"
+    assert state_a.think_open is False
+    # State B handles an open block; same text on its own would
+    # have been suppressed had state_b inherited state_a.
+    assert strip_reasoning("<think>r</think>plain", state_b) == "plain"
+    assert state_b.think_open is False
+
+
+def test_sanitize_for_tts_with_cross_sentence_state():
+    """sanitize_for_tts() also threads the state."""
+    state = SanitizerState()
+    assert sanitize_for_tts("<think>reasoning", state) == ""
+    assert state.think_open is True
+    out = sanitize_for_tts("more reasoning</think>visible answer", state)
+    assert out == "visible answer"
+    assert state.think_open is False
+
+
+def test_sanitize_for_tts_drops_chunks_while_think_open():
+    """While the state has think_open=True, sanitize_for_tts
+    returns "" for any chunk (not just strip_reasoning's
+    narrow path). This prevents a stray `<think>…` body from
+    leaking via the fence-rewrite step."""
+    state = SanitizerState()
+    # First chunk opens the block.
+    assert sanitize_for_tts("<think>step 1", state) == ""
+    # Second chunk contains a code fence — but we're mid-block,
+    # so the whole chunk is suppressed.
+    assert sanitize_for_tts("```\nsecret\n```", state) == ""
+    assert state.think_open is True
+    # Third chunk closes the block.
+    out = sanitize_for_tts("ok now.</think>final answer", state)
+    assert out == "final answer"
+    assert state.think_open is False
+
+
+def test_state_none_still_works_legacy_compat():
+    """Calling strip_reasoning(text) with no state argument
+    should not break (Sprint 16 callers + one-shot tests)."""
+    assert strip_reasoning("<think>r</think>ok") == "ok"
+    assert sanitize_for_tts("<think>r</think>ok") == "ok"
+
+
+def test_think_open_with_no_body_then_close_in_same_chunk():
+    """Edge case: `<think></think>` and then more text in the
+    same chunk. The close is right after the open, so the
+    in-sentence path catches it (no state needed)."""
+    state = SanitizerState()
+    out = strip_reasoning("<think></think>real text", state)
+    assert out == "real text"
+    assert state.think_open is False

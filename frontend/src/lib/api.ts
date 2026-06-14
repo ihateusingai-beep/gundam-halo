@@ -90,17 +90,34 @@ export const api = {
       features: string[];
     }>("/api/system/info"),
 
-  // Sprint 16: voice config GET / PUT (currently just wake_phrases).
+  // Sprint 16 + 17a: voice config GET / PUT.
+  //   - `wake_phrases` (Sprint 16) — list of strings, multi-line
+  //     textarea in Settings → Voice.
+  //   - `strict_wake_phrase` (Sprint 17a) — boolean. When true,
+  //     voice turns whose ASR transcript does not start with a
+  //     configured wake phrase are discarded. The PUT endpoint
+  //     requires both fields; the dashboard is the source of
+  //     truth for both.
   // The PUT persists to ~/.gundam-halo/config.toml so the next
-  // server start also picks it up. The in-process config is updated
-  // immediately so the very next voice turn benefits.
+  // server start also picks it up. The in-process config is
+  // updated immediately so the very next voice turn benefits.
   getVoiceConfig: () =>
-    request<{ wake_phrases: string[] }>("/voice/config"),
-  setVoiceConfig: (payload: { wake_phrases: string[] }) =>
-    request<{ wake_phrases: string[]; persisted: boolean; error?: string }>(
+    request<{ wake_phrases: string[]; strict_wake_phrase: boolean }>(
       "/voice/config",
-      { method: "PUT", body: JSON.stringify(payload) },
     ),
+  setVoiceConfig: (payload: {
+    wake_phrases: string[];
+    strict_wake_phrase: boolean;
+  }) =>
+    request<{
+      wake_phrases: string[];
+      strict_wake_phrase: boolean;
+      persisted: boolean;
+      error?: string;
+    }>("/voice/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
 
   // Projects
   listProjects: () => request<ProjectSummary[]>("/api/projects"),

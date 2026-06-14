@@ -36,7 +36,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from app.core.config import get_config
 from app.voice.asr.asr_factory import create_asr
@@ -49,7 +49,7 @@ from app.voice.halo_responder import (
 from app.voice.live2d.live2d_factory import create_live2d
 from app.voice.pipeline import VoicePipeline
 from app.voice.tts.tts_factory import create_tts
-from app.voice.tts.voice_sanitizer import sanitize_for_tts
+from app.voice.tts.voice_sanitizer import SanitizerState, sanitize_for_tts
 from app.voice.vad.vad_factory import create_vad
 from app.voice.wake_phrase import detect_wake_phrase, first_wake_phrase
 
@@ -207,6 +207,11 @@ async def voice_websocket(websocket: WebSocket) -> None:
             "live2d_enabled": (
                 responder is not None and responder._live2d is not None
             ),
+            # Sprint 17a: ship the strict-mode flag in the hello
+            # frame too so the frontend knows on connect whether
+            # the gate is on (avoids an extra GET /voice/config
+            # round-trip on the first page load).
+            "strict_wake_phrase": cfg.strict_wake_phrase,
         },
     })
 
@@ -217,6 +222,7 @@ async def voice_websocket(websocket: WebSocket) -> None:
         sid: str,
         sentence_iter: AsyncIterator[str],
         wake_phrase: str = "",
+        sanitizer_state: "SanitizerState | None" = None,
     ) -> None:
         """Consume the agent's sentence stream and forward each chunk
         to the client immediately.
@@ -232,9 +238,18 @@ async def voice_websocket(websocket: WebSocket) -> None:
           4. Run TTS for the single sentence and stream the audio
              chunks as `tts.audio` + binary frames
 
+        Sprint 17a: the optional `sanitizer_state` argument is the
+        per-turn `SanitizerState` used to thread cross-sentence
+        `<think>` open/close state. If None, a fresh state is
+        created (legacy behaviour, also used by tests). The caller
+        is responsible for allocating one per turn and discarding
+        it afterwards.
+
         After the stream is exhausted we send a final
         `agent.message` (is_final=True) and a `tts.end`.
         """
+        if sanitizer_state is None:
+            sanitizer_state = SanitizerState()
         accumulated = ""
         chunk_count = 0
         emotion: str = DEFAULT_EMOTION
@@ -246,7 +261,7 @@ async def voice_websocket(websocket: WebSocket) -> None:
             async for sentence in sentence_iter:
                 if not sentence or not sentence.strip():
                     continue
-                sanitized = sanitize_for_tts(sentence)
+                sanitized = sanitize_for_tts(sentence, sanitizer_state)
                 if not sanitized:
                     continue
                 # Parse emotion from the very first sentence. We
@@ -449,6 +464,34 @@ async def voice_websocket(websocket: WebSocket) -> None:
                                 "wake_triggered": wake.matched,
                             },
                         })
+                        # Sprint 17a: strict wake-phrase mode. If
+                        # the user has strict mode on AND the
+                        # transcript did not start with a
+                        # recognized wake phrase, drop the turn
+                        # here. We still emitted `asr.result` so the
+                        # cockpit shows what was heard (with
+                        # `wake_triggered: false`), but we skip
+                        # the agent invocation + TTS path and
+                        # surface a `voice.turn_ended` with
+                        # `discarded: true` and `reason: "no_wake_phrase"`
+                        # so the frontend can show a brief
+                        # "Listening for **Unicorn**…" hint.
+                        cfg_voice = get_config().voice
+                        if (
+                            cfg_voice.strict_wake_phrase
+                            and not wake.matched
+                        ):
+                            await _send_json(websocket, {
+                                "type": "voice.turn_ended",
+                                "data": {
+                                    "session_id": result.session_id,
+                                    "discarded": True,
+                                    "reason": "no_wake_phrase",
+                                    "total_duration_ms":
+                                        result.ended_at_ms - result.started_at_ms,
+                                },
+                            })
+                            continue
                         # M15: re-run agent in streaming mode.
                         # The pipeline's _on_user_text already ran
                         # the batch agent and discarded its reply
@@ -470,16 +513,22 @@ async def voice_websocket(websocket: WebSocket) -> None:
                                 )
                                 sentence_iter = None
                             if sentence_iter is not None:
+                                # Sprint 17a: fresh per-turn
+                                # SanitizerState so cross-sentence
+                                # `<think>` open/close state never
+                                # leaks between voice turns.
                                 await _emit_agent_response_streaming(
                                     result.session_id,
                                     sentence_iter,
                                     wake_phrase=wake.phrase,
+                                    sanitizer_state=SanitizerState(),
                                 )
                         await _send_json(websocket, {
                             "type": "voice.turn_ended",
                             "data": {
                                 "session_id": result.session_id,
                                 "discarded": False,
+                                "reason": None,
                                 "total_duration_ms":
                                     result.ended_at_ms - result.started_at_ms,
                             },
@@ -512,6 +561,40 @@ async def voice_websocket(websocket: WebSocket) -> None:
                         display_text = (
                             wake.stripped if wake.matched else text
                         )
+                        # Sprint 17a: strict wake-phrase gate also
+                        # applies to the text-bypass path. We emit
+                        # an `asr.result` frame (so the cockpit
+                        # transcript shows the text the user
+                        # typed) but skip the agent + TTS path
+                        # when strict mode is on and no wake was
+                        # matched. The "wake_triggered: false"
+                        # chip in the cockpit lets the user see
+                        # why their turn was dropped.
+                        await _send_json(websocket, {
+                            "type": "asr.result",
+                            "data": {
+                                "session_id": sid,
+                                "text": display_text,
+                                "duration_ms": 0,
+                                "wake_phrase": wake.phrase,
+                                "wake_triggered": wake.matched,
+                            },
+                        })
+                        cfg_voice = get_config().voice
+                        if (
+                            cfg_voice.strict_wake_phrase
+                            and not wake.matched
+                        ):
+                            await _send_json(websocket, {
+                                "type": "voice.turn_ended",
+                                "data": {
+                                    "session_id": sid,
+                                    "discarded": True,
+                                    "reason": "no_wake_phrase",
+                                    "total_duration_ms": 0,
+                                },
+                            })
+                            continue
                         try:
                             sentence_iter = await _resolve_stream_iter(
                                 _agent_callback(sid, display_text)
@@ -520,10 +603,14 @@ async def voice_websocket(websocket: WebSocket) -> None:
                             logger.error(f"Agent callback error: {e}")
                             sentence_iter = None
                         if sentence_iter is not None:
+                            # Sprint 17a: fresh per-turn
+                            # SanitizerState (see voice.end
+                            # path above for rationale).
                             await _emit_agent_response_streaming(
                                 sid,
                                 sentence_iter,
                                 wake_phrase=wake.phrase,
+                                sanitizer_state=SanitizerState(),
                             )
                         # M9-C follow-up: voice.text path was missing
                         # voice.turn_ended, which left the frontend
@@ -535,6 +622,7 @@ async def voice_websocket(websocket: WebSocket) -> None:
                             "data": {
                                 "session_id": sid,
                                 "discarded": False,
+                                "reason": None,
                                 "total_duration_ms":
                                     int((time.time() - t_turn_start) * 1000),
                             },
@@ -557,11 +645,32 @@ async def voice_websocket(websocket: WebSocket) -> None:
                                 "wake_triggered": wake.matched,
                             },
                         })
+                        # Sprint 17a: strict gate also applies
+                        # here. With no agent wired, "discarding"
+                        # the turn means sending `voice.turn_ended`
+                        # with discarded: true + reason so the
+                        # frontend can show the same hint.
+                        cfg_voice = get_config().voice
+                        if (
+                            cfg_voice.strict_wake_phrase
+                            and not wake.matched
+                        ):
+                            await _send_json(websocket, {
+                                "type": "voice.turn_ended",
+                                "data": {
+                                    "session_id": sid,
+                                    "discarded": True,
+                                    "reason": "no_wake_phrase",
+                                    "total_duration_ms": 0,
+                                },
+                            })
+                            continue
                         await _send_json(websocket, {
                             "type": "voice.turn_ended",
                             "data": {
                                 "session_id": sid,
                                 "discarded": False,
+                                "reason": None,
                                 "total_duration_ms": 0,
                             },
                         })
@@ -611,26 +720,38 @@ async def voice_status() -> dict[str, Any]:
 
 @router.get("/voice/config")
 async def get_voice_config() -> dict[str, Any]:
-    """Sprint 16: get the voice config (currently just wake_phrases).
+    """Sprint 16 + 17a: get the voice config (wake_phrases +
+    strict_wake_phrase).
 
     Kept separate from `/voice/status` so the dashboard can fetch
     the full config in one round-trip without paying for the VAD /
     ASR / TTS / Live2D fields it doesn't need to edit.
     """
     cfg = get_config().voice
-    return {"wake_phrases": list(cfg.wake_phrases)}
+    return {
+        "wake_phrases": list(cfg.wake_phrases),
+        "strict_wake_phrase": cfg.strict_wake_phrase,
+    }
 
 
 @router.put("/voice/config")
 async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
-    """Sprint 16: update the voice config in-memory + persist to
-    config.toml. Only `wake_phrases` is currently editable; future
-    fields (e.g. strict_mode toggle) will be added here.
+    """Sprint 16 + 17a: update the voice config in-memory + persist
+    to config.toml. Both `wake_phrases` and `strict_wake_phrase`
+    are editable. Other [voice] keys are not touched.
+
+    Payload (both fields required; send the current value of
+    whichever one you don't want to change):
+      - `wake_phrases: list[str]` — non-empty list of non-empty strings.
+      - `strict_wake_phrase: bool` — if true, voice turns are
+        discarded unless the ASR transcript starts with a
+        configured wake phrase.
 
     Persistence:
       - Edit `~/.gundam-halo/config.toml` [voice] section to add
-        the new `wake_phrases` list (we don't blow away the user's
-        other [voice] settings — we only touch the key we own).
+        the new `wake_phrases` list AND the `strict_wake_phrase`
+        line (we don't blow away the user's other [voice] settings
+        — we only touch the keys we own).
       - The in-process config is updated immediately so the next
         voice turn picks up the change without a server restart.
     """
@@ -638,6 +759,7 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
     import re
     from pathlib import Path
 
+    # ---- wake_phrases validation (unchanged from Sprint 16) ----
     new_phrases = payload.get("wake_phrases")
     if not isinstance(new_phrases, list) or not all(
         isinstance(p, str) and p.strip() for p in new_phrases
@@ -660,15 +782,33 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
             detail="`wake_phrases` must contain at least one non-empty string",
         )
 
+    # ---- Sprint 17a: strict_wake_phrase validation ----
+    # The field is required in the payload. We don't accept
+    # implicit "use the current value" — the dashboard is the
+    # source of truth for the user's intent and should always
+    # send the form's current state.
+    if "strict_wake_phrase" not in payload:
+        raise HTTPException(
+            status_code=400,
+            detail="`strict_wake_phrase` is required (send the current toggle state)",
+        )
+    new_strict = payload["strict_wake_phrase"]
+    if not isinstance(new_strict, bool):
+        raise HTTPException(
+            status_code=400,
+            detail="`strict_wake_phrase` must be a boolean",
+        )
+
     # Update in-memory config (so the next turn picks it up).
     cfg = get_config()
     cfg.voice.wake_phrases = normalized
+    cfg.voice.strict_wake_phrase = new_strict
     # Invalidate the cache so future get_config() reloads from disk.
     from app.core import config as config_mod
     config_mod._config = None
 
     # Persist to config.toml. We use a simple, targeted edit that
-    # only touches the [voice] wake_phrases line. Other [voice]
+    # only touches the [voice] lines we own. Other [voice]
     # keys are left alone.
     config_path = Path(cfg.home) / "config.toml"
     try:
@@ -676,30 +816,43 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
             text = config_path.read_text(encoding="utf-8")
         else:
             text = ""
-        new_line = f"wake_phrases = {_toml_list(normalized)}\n"
+
+        # ---- wake_phrases line ----
+        new_phrases_line = f"wake_phrases = {_toml_list(normalized)}\n"
         text, n = re.subn(
             r"(?m)^wake_phrases\s*=\s*\[.*?\]\s*$",
-            new_line.rstrip(),
+            new_phrases_line.rstrip(),
             text,
             count=1,
         )
         if n == 0:
-            # No existing line — append a [voice] block. We use a
-            # minimal section header; if [voice] already exists in
-            # the file, the user will see two sections, which is
-            # still valid TOML (last value wins). For a cleaner
-            # append, we check first.
             if "[voice]" not in text:
                 if not text.endswith("\n"):
                     text += "\n"
-                text += "\n[voice]\n" + new_line
+                text += "\n[voice]\n" + new_phrases_line
             else:
-                # [voice] exists but no wake_phrases line — append
-                # at the end of the file as a fallback. TOML is
-                # forgiving here.
                 if not text.endswith("\n"):
                     text += "\n"
-                text += new_line
+                text += new_phrases_line
+
+        # ---- strict_wake_phrase line (Sprint 17a) ----
+        new_strict_line = f"strict_wake_phrase = {str(new_strict).lower()}\n"
+        text, n = re.subn(
+            r"(?m)^strict_wake_phrase\s*=\s*(?:true|false)\s*$",
+            new_strict_line.rstrip(),
+            text,
+            count=1,
+        )
+        if n == 0:
+            # No existing strict_wake_phrase line — append. If
+            # [voice] exists in the file we drop the key right
+            # after the wake_phrases line; otherwise we create
+            # a [voice] section. For simplicity we just append
+            # at end of file; TOML is forgiving about ordering.
+            if not text.endswith("\n"):
+                text += "\n"
+            text += new_strict_line
+
         config_path.write_text(text, encoding="utf-8")
     except Exception as e:
         logger.error(f"failed to persist voice config: {e}")
@@ -707,12 +860,14 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
         # write error so the dashboard can show a warning.
         return {
             "wake_phrases": normalized,
+            "strict_wake_phrase": new_strict,
             "persisted": False,
             "error": str(e),
         }
 
     return {
         "wake_phrases": normalized,
+        "strict_wake_phrase": new_strict,
         "persisted": True,
     }
 

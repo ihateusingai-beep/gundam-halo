@@ -14,10 +14,18 @@ This is the M9-D fix for two regression paths observed in M9-C:
      cuts on the boundary right after the first fence line and
      yields a sentence consisting of bare ` ``` `. Edge TTS
      returns 0 bytes for that "sentence" and logs
-     `TTS stream failed for '\\`\\`\\`': No audio was received`.
+     `TTS stream failed for '\`\`\`': No audio was received`.
      The audio the user hears becomes fragmented. We rewrite
      fenced code blocks into a single voice-friendly summary
      so they pass through the segmenter without empty chunks.
+
+Sprint 17a adds cross-sentence `<think>` sanitization. The LLM may
+open a `<think>` block in one sentence and close it in the next
+(this happens with sentence-streamed agents that buffer 1-3
+sentences at a time). The single-shot non-greedy regex on its
+own cannot suppress the open-tag body — we need a per-turn
+state flag threaded through each `sanitize_for_tts()` call.
+See `SanitizerState` and the `state` parameter below.
 
 Design:
 
@@ -26,11 +34,14 @@ Design:
     reasoning or the original markdown (debug panel, log
     scrollback); the server decides what gets *spoken*.
 
-  - **Pure functions** (`strip_reasoning`, `sanitize_for_tts`)
-    so the test suite can exercise the rules without spinning
-    up the responder. The M9-D acceptance criteria is exactly
-    this: `pytest tests/voice/test_sanitize.py` covers the
-    known M9-C fixtures.
+  - **Pure-ish functions** (`strip_reasoning`, `sanitize_for_tts`).
+    Sprint 17a threads a `SanitizerState` object through both
+    functions so the `<think>` state can survive across calls.
+    The state is allocated **per turn** by `voice_ws.py`; tests
+    pass a fresh `SanitizerState()` per case for hermeticity.
+    The state default is `None` (a fresh state is created on
+    demand) for backwards-compat with one-shot callers like the
+    test suite.
 
   - **Conservative**: when in doubt, we pass the text through
     untouched. The strip only removes content that matches a
@@ -41,8 +52,40 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 17a: per-turn sanitizer state
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class SanitizerState:
+    """Per-turn state carried across `sanitize_for_tts()` calls.
+
+    Attributes:
+        think_open: True after we have seen the opening `<think>`
+            tag of a reasoning block but not yet the matching
+            `</think>`. While True, the next call to
+            `strip_reasoning()` short-circuits and returns "" until
+            the close tag is found, after which the state is
+            cleared and the text AFTER the close tag is returned.
+
+    `voice_ws._emit_agent_response_streaming` allocates one
+    `SanitizerState` per turn and passes it into every
+    `sanitize_for_tts(text, state)` call. The state is discarded
+    when the turn ends (or is cancelled), so there is no leak
+    between turns.
+
+    Mutable on purpose: we need to flip `think_open` from True
+    back to False when the close tag is found. Slots keeps the
+    object tiny (one bool) so the per-turn allocation is free.
+    """
+
+    think_open: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +96,18 @@ logger = logging.getLogger(__name__)
 # matches the *outer* fences, so consecutive blocks (`<think>a</think>
 # <think>b</think>`) are both caught.
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+# Match a stray `<think>` opening tag (no close tag in the same
+# sentence). Used for cross-sentence state: if we see an open tag
+# without a matching close, we set `state.think_open = True` and
+# suppress everything until the close arrives.
+_THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
+
+# Match a stray `</think>` closing tag with no preceding open tag
+# in the same sentence. The body AFTER this tag is real reply text
+# and should be returned; the body BEFORE is reasoning and should
+# be suppressed.
+_THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
 
 # Defensive: Anthropic-style tool calls embedded in visible text. Most
 # OpenAI-compatible paths use the `tool_calls` field rather than
@@ -73,7 +128,7 @@ _REASONING_PREFIX_RE = re.compile(
 )
 
 
-def strip_reasoning(text: str) -> str:
+def strip_reasoning(text: str, state: SanitizerState | None = None) -> str:
     """Remove LLM reasoning blocks from *text*.
 
     Strips, in order:
@@ -81,13 +136,72 @@ def strip_reasoning(text: str) -> str:
       - `<tool_call>…</tool_call>` blocks (defensive, Anthropic-style)
       - Leading "Reasoning: …" prose blocks
 
+    Sprint 17a: the optional `state` argument is the per-turn
+    `SanitizerState`. If the previous call left `state.think_open`
+    set, this call is a no-op (returns "") until a `</think>` tag
+    is found, at which point `state.think_open` is cleared and
+    the text after the close tag is returned. Callers in
+    `voice_ws.py` allocate one state per turn; the test suite
+    passes a fresh state per case.
+
     Returns the input with leading/trailing whitespace collapsed.
     If nothing matched, returns *text* unchanged.
     """
     if not text:
         return text
 
-    out = _THINK_RE.sub("", text)
+    # Lazy-init the state so one-shot callers (legacy tests) work
+    # without thinking about threading.
+    if state is None:
+        state = SanitizerState()
+
+    # ---- Cross-sentence <think> (Sprint 17a) ----
+    # If a previous call left the block open, we're inside a
+    # reasoning section right now. Look only for the close tag.
+    if state.think_open:
+        m = _THINK_CLOSE_RE.search(text)
+        if not m:
+            # Still inside the block; drop the entire chunk.
+            return ""
+        # Close tag found — clear the flag and return the text
+        # AFTER the close tag (reasoning body is suppressed).
+        state.think_open = False
+        return text[m.end():].strip()
+
+    # ---- Standard in-sentence reasoning strip ----
+    # Walk the text left-to-right tracking <think> open/close
+    # boundaries manually. The non-greedy `_THINK_RE` would happily
+    # chew through any stray `<think>` to the next `</think>` (or
+    # end-of-string), which is wrong for our use case: we want
+    # to detect when the block is *unclosed* and defer the body
+    # to the next call.
+    out_parts: list[str] = []
+    cursor = 0
+    n = len(text)
+    while cursor < n:
+        open_m = _THINK_OPEN_RE.search(text, cursor)
+        if not open_m:
+            # No more opens in this chunk. Append the tail and
+            # we're done.
+            out_parts.append(text[cursor:])
+            break
+        # Append the prefix between cursor and the open tag.
+        out_parts.append(text[cursor:open_m.start()])
+        # Look for the matching close tag starting AT the open.
+        close_m = _THINK_CLOSE_RE.search(text, open_m.end())
+        if not close_m:
+            # Open tag with no close in this chunk — record state
+            # and stop. The body is in the next sentence(s).
+            state.think_open = True
+            # The text AFTER the open tag is also reasoning and
+            # should be suppressed. The out_parts so far are the
+            # safe text we want to keep.
+            break
+        # Skip past the entire `<think>…</think>` block and
+        # continue scanning from the close tag's end.
+        cursor = close_m.end()
+    out = "".join(out_parts)
+
     out = _TOOL_CALL_RE.sub("", out)
 
     m = _REASONING_PREFIX_RE.match(out)
@@ -153,20 +267,33 @@ def _rewrite_fences(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def sanitize_for_tts(text: str) -> str:
+def sanitize_for_tts(text: str, state: SanitizerState | None = None) -> str:
     """Apply the M9-D voice-text sanitisation pipeline.
 
     Order matters:
       1. Strip reasoning blocks (so the segmenter doesn't see them).
+         Cross-sentence `<think>` state is read from / written to
+         `state` (Sprint 17a).
       2. Rewrite fenced code blocks to `[Code: ...]` summaries.
       3. Collapse the whitespace that step 2 may have left behind.
 
     This is the function `HaloResponder.respond_stream` calls
-    between `parse_emotion` and `split_sentences`.
+    between `parse_emotion` and `split_sentences`. `voice_ws.py`
+    allocates a fresh `SanitizerState` per turn and passes it
+    into every call within the turn.
+
+    Tests may call this with `state=None` for hermetic one-shot
+    use — the function lazily creates a throwaway state.
     """
     if not text:
         return text
-    out = strip_reasoning(text)
+    if state is None:
+        state = SanitizerState()
+    out = strip_reasoning(text, state)
+    # If we're mid-think-block, skip fence rewriting too — the
+    # entire chunk is reasoning and should be suppressed.
+    if state.think_open:
+        return ""
     out = _rewrite_fences(out)
     out = re.sub(r"[ \t]+\n", "\n", out)  # trailing whitespace on lines
     out = re.sub(r"\n{3,}", "\n\n", out)
@@ -176,4 +303,5 @@ def sanitize_for_tts(text: str) -> str:
 __all__ = [
     "sanitize_for_tts",
     "strip_reasoning",
+    "SanitizerState",
 ]

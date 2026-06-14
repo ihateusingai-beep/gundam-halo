@@ -95,6 +95,8 @@ def test_voice_status_endpoint(voice_client):
 def test_voice_text_bypass_returns_agent_message(voice_client):
     """voice.text frame triggers the agent callback without ASR.
     M15: callback now yields sentence-sized chunks (async iterator).
+    Sprint 17a: the test now uses a wake phrase so the strict-mode
+    default (True) does not discard the turn.
     """
     from typing import AsyncIterator
 
@@ -112,7 +114,7 @@ def test_voice_text_bypass_returns_agent_message(voice_client):
         ws.send_text(json.dumps({
             "type": "voice.text",
             "session_id": "test-1",
-            "text": "hello there",
+            "text": "Unicorn, hello there",
         }))
 
         # M15 streaming protocol: with responder wired (default
@@ -139,6 +141,10 @@ def test_voice_text_bypass_returns_agent_message(voice_client):
             elif msg.get("type") == "voice.turn_ended":
                 break
 
+    # Sprint 17a: the wake-phrase detector strips "Unicorn," from
+    # the front, so the agent sees "hello there" (the rest of the
+    # phrase). Echo it back so the assertion below matches the
+    # stripped form.
     assert len(agent_messages) == 3, f"expected 3 agent.message frames, got {len(agent_messages)}: {agent_messages}"
     # First: incremental, single sentence
     assert agent_messages[0]["data"]["text"] == "echo part 1 of: hello there"
@@ -200,3 +206,223 @@ def test_voice_end_without_active_turn_returns_error(voice_client):
         msg = ws.receive_json()
         assert msg["type"] == "voice.error"
         assert msg["data"]["error"] == "no_active_turn"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 17a: strict wake-phrase mode
+# ---------------------------------------------------------------------------
+#
+# The /voice/config endpoint exposes a `strict_wake_phrase` bool
+# (default True post-Sprint 17a). When strict mode is on and a
+# voice turn's ASR transcript does not start with a recognized
+# wake phrase, the server should:
+#   - still emit `asr.result` (so the cockpit shows what was heard)
+#   - skip the agent invocation entirely
+#   - emit `voice.turn_ended` with `discarded: true` and
+#     `reason: "no_wake_phrase"`
+#
+# The matching wake-phrase path (turn is processed normally) is
+# covered by the existing test_voice_text_bypass_returns_agent_message
+# test (which uses "hello there" — no wake phrase — and only
+# passes because strict mode is currently False in CI; we
+# explicitly flip it on/off in the new tests below).
+
+
+def _set_strict(cfg_value: bool) -> None:
+    """Helper: flip the global voice config's strict_wake_phrase
+    flag in-memory for the duration of a test. The test fixture
+    restores the original value on teardown (see voice_enabled_app)."""
+    cfg = _config_module.get_config()
+    cfg.voice.strict_wake_phrase = cfg_value
+
+
+def test_voice_text_strict_mode_discards_no_wake(voice_client):
+    """Strict mode ON + text without wake phrase → discarded.
+
+    The server should still emit `asr.result` (so the cockpit
+    transcript shows the text) and then immediately a
+    `voice.turn_ended` with discarded=true and reason
+    "no_wake_phrase". NO agent.message frames should follow.
+    """
+    from typing import AsyncIterator
+
+    agent_invocations: list[tuple[str, str]] = []
+
+    async def should_not_run(sid: str, text: str) -> AsyncIterator[str]:
+        agent_invocations.append((sid, text))
+        yield f"echo {text}"
+
+    voice_ws.set_agent_callback(should_not_run)
+    _set_strict(True)
+    try:
+        with voice_client.websocket_connect("/ws/voice") as ws:
+            ws.receive_json()  # hello
+
+            ws.send_text(json.dumps({
+                "type": "voice.text",
+                "text": "what's the weather in Hong Kong",
+            }))
+
+            frames: list[dict] = []
+            # Bound the receive loop — strict-discard path is short.
+            for _ in range(5):
+                msg = ws.receive_json()
+                frames.append(msg)
+                if msg.get("type") == "voice.turn_ended":
+                    break
+    finally:
+        _set_strict(False)
+        voice_ws.set_agent_callback(None)
+
+    # We expect: asr.result (wake_triggered=false) + voice.turn_ended
+    # (discarded=true, reason="no_wake_phrase").
+    types = [f["type"] for f in frames]
+    assert "asr.result" in types, f"missing asr.result in {types}"
+    assert "voice.turn_ended" in types, f"missing voice.turn_ended in {types}"
+    # And the agent must NOT have been invoked.
+    assert agent_invocations == [], (
+        f"agent should not be invoked in strict mode without wake, "
+        f"but was called with: {agent_invocations}"
+    )
+    ended = next(f for f in frames if f["type"] == "voice.turn_ended")
+    assert ended["data"]["discarded"] is True
+    assert ended["data"]["reason"] == "no_wake_phrase"
+    # asr.result should report wake_triggered=False.
+    asr = next(f for f in frames if f["type"] == "asr.result")
+    assert asr["data"]["wake_triggered"] is False
+
+
+def test_voice_text_strict_mode_allows_wake_phrase(voice_client):
+    """Strict mode ON + wake phrase present → agent runs normally."""
+    from typing import AsyncIterator
+
+    agent_invocations: list[tuple[str, str]] = []
+
+    async def fake_agent(sid: str, text: str) -> AsyncIterator[str]:
+        agent_invocations.append((sid, text))
+        yield f"echo: {text}"
+
+    voice_ws.set_agent_callback(fake_agent)
+    _set_strict(True)
+    try:
+        with voice_client.websocket_connect("/ws/voice") as ws:
+            ws.receive_json()  # hello
+
+            ws.send_text(json.dumps({
+                "type": "voice.text",
+                "text": "Unicorn, what's the weather",
+            }))
+
+            frames: list[dict] = []
+            for _ in range(10):
+                try:
+                    msg = ws.receive_json()
+                except Exception:
+                    break
+                frames.append(msg)
+                if msg.get("type") == "voice.turn_ended":
+                    break
+    finally:
+        _set_strict(False)
+        voice_ws.set_agent_callback(None)
+
+    # Agent should have been called with the STRIPPED text (no
+    # wake phrase prefix), so the LLM sees a clean command.
+    assert len(agent_invocations) == 1, (
+        f"expected 1 agent invocation, got {len(agent_invocations)}"
+    )
+    sid, text = agent_invocations[0]
+    assert text == "what's the weather", (
+        f"expected stripped text, got {text!r}"
+    )
+    # voice.turn_ended should be discarded=False, reason=None.
+    ended = next(f for f in frames if f["type"] == "voice.turn_ended")
+    assert ended["data"]["discarded"] is False
+    assert ended["data"].get("reason") in (None, "null"), (
+        f"expected reason=null, got {ended['data'].get('reason')!r}"
+    )
+
+
+def test_voice_text_strict_off_allows_no_wake(voice_client):
+    """Strict mode OFF (permissive) + no wake phrase → agent runs
+    (legacy behavior, Sprint 16). The flag defaults to True after
+    Sprint 17a, so we explicitly flip it off here."""
+    from typing import AsyncIterator
+
+    agent_invocations: list[tuple[str, str]] = []
+
+    async def fake_agent(sid: str, text: str) -> AsyncIterator[str]:
+        agent_invocations.append((sid, text))
+        yield f"echo: {text}"
+
+    voice_ws.set_agent_callback(fake_agent)
+    _set_strict(False)
+    try:
+        with voice_client.websocket_connect("/ws/voice") as ws:
+            ws.receive_json()  # hello
+            ws.send_text(json.dumps({
+                "type": "voice.text",
+                "text": "what's the weather in Hong Kong",
+            }))
+            for _ in range(10):
+                try:
+                    msg = ws.receive_json()
+                except Exception:
+                    break
+                if msg.get("type") == "voice.turn_ended":
+                    break
+    finally:
+        _set_strict(True)  # restore default
+        voice_ws.set_agent_callback(None)
+
+    assert len(agent_invocations) == 1
+    assert agent_invocations[0][1] == "what's the weather in Hong Kong"
+
+
+def test_get_voice_config_includes_strict_flag(voice_client):
+    """GET /voice/config returns strict_wake_phrase alongside wake_phrases."""
+    _set_strict(True)
+    try:
+        resp = voice_client.get("/voice/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "wake_phrases" in data
+        assert data["strict_wake_phrase"] is True
+    finally:
+        _set_strict(False)
+        resp = voice_client.get("/voice/config")
+        assert resp.json()["strict_wake_phrase"] is False
+
+
+def test_put_voice_config_persists_strict_flag(voice_client, tmp_path):
+    """PUT /voice/config accepts strict_wake_phrase and persists it.
+
+    We pass a custom `home` config_path by writing a temp file
+    and pointing the config at it. We use the in-memory config
+    directly for the round-trip — the toml persistence is
+    exercised by the existing Sprint 16 tests for wake_phrases.
+    """
+    _set_strict(True)
+    try:
+        resp = voice_client.put("/voice/config", json={
+            "wake_phrases": ["Unicorn", "NTD", "gundam", "獨角獸", "高達"],
+            "strict_wake_phrase": False,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["strict_wake_phrase"] is False
+        assert data["wake_phrases"] == ["Unicorn", "NTD", "gundam", "獨角獸", "高達"]
+        assert data["persisted"] is True
+
+        # GET should now reflect the new value.
+        get_resp = voice_client.get("/voice/config")
+        assert get_resp.json()["strict_wake_phrase"] is False
+
+        # And the missing-field validation rejects the request.
+        bad = voice_client.put("/voice/config", json={
+            "wake_phrases": ["Unicorn"],
+        })
+        assert bad.status_code == 400
+        assert "strict_wake_phrase" in bad.json()["detail"]
+    finally:
+        _set_strict(True)  # restore default

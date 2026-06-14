@@ -63,7 +63,19 @@ export interface VoiceStatus {
 
 export interface VoiceTranscriptEvent {
   type: "asr.result";
-  data: { session_id: string; text: string; duration_ms: number };
+  data: {
+    session_id: string;
+    text: string;
+    duration_ms: number;
+    // Sprint 16: the wake phrase the backend matched (empty string
+    // if none). e.g. "Unicorn" / "NTD" / "gundam" / "獨角獸" / "高達".
+    wake_phrase: string;
+    // Sprint 16: true when a wake phrase was matched at the start
+    // of the transcript. In strict mode (Sprint 17a) the agent
+    // is only invoked when this is true; otherwise the turn is
+    // discarded.
+    wake_triggered: boolean;
+  };
 }
 export interface VoiceAgentMessageEvent {
   type: "agent.message";
@@ -96,6 +108,11 @@ export interface VoiceHelloEvent {
     asr_model: string;
     tts_enabled: boolean;
     live2d_enabled: boolean;
+    // Sprint 17a: strict wake-phrase mode flag. When true, the
+    // cockpit should pre-emptively show the "Listening for **X**…"
+    // hint so the user knows why no agent reply is happening
+    // if they speak without a wake phrase.
+    strict_wake_phrase: boolean;
   };
 }
 export interface VoiceErrorEvent {
@@ -104,7 +121,20 @@ export interface VoiceErrorEvent {
 }
 export interface VoiceTurnEndedEvent {
   type: "voice.turn_ended";
-  data: { session_id: string; discarded: boolean; total_duration_ms?: number };
+  data: {
+    session_id: string;
+    discarded: boolean;
+    total_duration_ms?: number;
+    // Sprint 17a: optional reason code explaining why a turn
+    // was discarded (or `null` for a normal completion). The
+    // frontend can use this to show a brief toast:
+    //   - "no_wake_phrase": strict mode on, transcript didn't
+    //      start with a wake phrase
+    //   - "user_cancel": user sent a `voice.cancel` mid-stream
+    //   - "no_agent": no agent callback wired (debug-only)
+    //   - null: normal turn completion
+    reason?: "no_wake_phrase" | "user_cancel" | "no_agent" | null;
+  };
 }
 export interface VoiceCancelledEvent {
   type: "voice.cancelled";
