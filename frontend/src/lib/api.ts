@@ -90,21 +90,31 @@ export const api = {
       features: string[];
     }>("/api/system/info"),
 
-  // Sprint 16 + 17a: voice config GET / PUT.
+  // Sprint 16 + 17a + 17b: voice config GET / PUT.
   //   - `wake_phrases` (Sprint 16) — list of strings, multi-line
   //     textarea in Settings → Voice.
   //   - `strict_wake_phrase` (Sprint 17a) — boolean. When true,
   //     voice turns whose ASR transcript does not start with a
-  //     configured wake phrase are discarded. The PUT endpoint
-  //     requires both fields; the dashboard is the source of
-  //     truth for both.
+  //     configured wake phrase are discarded.
   // The PUT persists to ~/.gundam-halo/config.toml so the next
   // server start also picks it up. The in-process config is
   // updated immediately so the very next voice turn benefits.
+  //
+  // Sprint 17b also adds read-only fields on the GET response
+  // (asr_backend, asr_corrector, restart_required) — those are
+  // surfaced by the Settings → Voice tab so the user can see
+  // which engine is loaded. Changing them requires editing
+  // config.toml and restarting the backend (Sprint 17b
+  // §4.1 — the ASR engine is 2GB+ and shouldn't reload on
+  // every config PUT).
   getVoiceConfig: () =>
-    request<{ wake_phrases: string[]; strict_wake_phrase: boolean }>(
-      "/voice/config",
-    ),
+    request<{
+      wake_phrases: string[];
+      strict_wake_phrase: boolean;
+      asr_backend?: string;
+      asr_corrector?: string;
+      restart_required?: boolean;
+    }>("/voice/config"),
   setVoiceConfig: (payload: {
     wake_phrases: string[];
     strict_wake_phrase: boolean;
@@ -112,6 +122,9 @@ export const api = {
     request<{
       wake_phrases: string[];
       strict_wake_phrase: boolean;
+      asr_backend?: string;
+      asr_corrector?: string;
+      restart_required?: boolean;
       persisted: boolean;
       error?: string;
     }>("/voice/config", {

@@ -29,6 +29,16 @@ import { KV, Section } from "./shared";
 interface VoiceConfig {
   wake_phrases: string[];
   strict_wake_phrase: boolean;
+  // Sprint 17b: the current ASR backend + corrector, so the
+  // dashboard can show "Current ASR engine: yuesub (Cantonese)"
+  // and surface a "restart required" hint when the user
+  // changes either field (the ASR engine + corrector are
+  // loaded at backend startup; a config PUT updates
+  // in-memory state but the running pipeline still uses the
+  // pre-restart instance).
+  asr_backend?: string;
+  asr_corrector?: string;
+  restart_required?: boolean;
 }
 
 const UPGRADE_BANNER_KEY = "halo.voice.strict-banner-dismissed-at";
@@ -237,6 +247,55 @@ export function VoiceTab() {
             value={voiceStatus.error}
             danger
           />
+        )}
+      </Section>
+
+      <Section title="Current ASR engine (Sprint 17b)">
+        {/* Sprint 17b: show the user which ASR engine is
+            currently loaded, plus the corrector. The
+            dashboard does NOT expose a UI to change these
+            in Sprint 17b — the user edits config.toml and
+            restarts the backend (see docs/FEATURE-SPEC-
+            SPRINT17b.md §4.1 for the rationale: the ASR
+            engine is 2GB+ and shouldn't reload on every
+            config PUT). We do surface the "restart
+            required" hint if the user changes the field
+            via config.toml and the server reports a
+            mismatch. */}
+        <KV
+          label="ASR backend"
+          value={config?.asr_backend ?? "—"}
+          mono
+          hint={
+            config?.asr_backend === "yuesub"
+              ? "SenseVoiceSmall + fsmn-vad (Cantonese)"
+              : config?.asr_backend === "whisper_local"
+              ? "openai-whisper base (English/Mandarin)"
+              : "Edit config.toml [voice.asr] backend"
+          }
+        />
+        <KV
+          label="Corrector"
+          value={config?.asr_corrector ?? "—"}
+          mono
+          hint={
+            config?.asr_corrector === "bert"
+              ? "OpenCC + BERT masked-LM (slow but high quality)"
+              : config?.asr_corrector === "opencc"
+              ? "OpenCC + regex rules (fast)"
+              : "Raw ASR output"
+          }
+        />
+        {config?.restart_required && (
+          <div className="mt-2 border border-[var(--warning)] bg-[var(--bg-elevated)] px-3 py-2 text-xs font-mono">
+            <span className="text-[var(--warning)]">⚠ Restart required:</span>{" "}
+            <span className="text-[var(--text-primary)]">
+              config.toml changed but the running backend still
+              uses the pre-restart instance. Restart with{" "}
+              <code>pkill -f &apos;uvicorn app.main:app&apos; &amp;&amp; uv run --project . uvicorn app.main:app</code>{" "}
+              for the new ASR engine / corrector to take effect.
+            </span>
+          </div>
         )}
       </Section>
 

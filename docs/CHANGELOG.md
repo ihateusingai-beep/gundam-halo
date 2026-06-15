@@ -39,10 +39,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   frames could overlap or play past the queue head. Now
   sequentially awaited with stale-frame skip.
 
+### Sprint 17a — voice hygiene: strict wake-phrase mode + cross-sentence sanitizer
+
+Strict wake-phrase mode is **on by default** (breaking change
+for users who never opened Settings → Voice — mitigated by a
+7-day upgrade banner + first-launch server log line). Voice
+turns whose ASR transcript doesn't start with a configured
+wake phrase are discarded; a 2-second Sonner toast surfaces
+the "Listening for **Unicorn**…" hint. Configurable per-user
+in Settings → Voice, with the "Strict mode" checkbox. The
+strict-mode default flips a single key (`[voice].
+strict_wake_phrase = true`) in `~/.gundam-halo/config.toml`.
+
+#### Added (Sprint 17a)
+- **backend**: `app/voice/wake_phrase.py` — Sprint 16 text-level
+  detector, unchanged in API.
+- **backend**: `app/voice/tts/voice_sanitizer.py` — `SanitizerState`
+  threaded through `strip_reasoning` + `sanitize_for_tts` so an
+  open `<think>` tag in one sentence is suppressed until the
+  close tag arrives in a later sentence.
+- **backend**: `app/core/config.py` — `VoiceConfig.
+  strict_wake_phrase: bool = True` (default flipped in Sprint 17a).
+- **backend**: `app/api/voice_ws.py` — strict-mode gate in both
+  `voice.end` (push-to-talk) and `voice.text` (text-input) paths.
+  Adds `reason: "no_wake_phrase" | "user_cancel" | "no_agent" | null`
+  to `voice.turn_ended` and `vad.audio_level` rate-limited to
+  50ms/20Hz (added in Sprint 17b).
+- **frontend**: Settings → Voice adds the "Wake-phrase gate"
+  section with a checkbox + 7-day upgrade banner (localStorage
+  `halo.voice.strict-banner-dismissed-at`).
+
+#### Changed (Sprint 17a)
+- **backend**: `VoiceConfig.strict_wake_phrase` default
+  `False → True`. User action required only for users who
+  don't want strict mode: add `strict_wake_phrase = false`
+  in `~/.gundam-halo/config.toml [voice]` and restart the
+  backend.
+
+### Sprint 17b — Cantonese ASR (yuesub) + audio-reactive HUD
+
+5 design decisions signed off 2026-06-14 (D1-C dual VAD,
+D2-C hybrid lift, D3-B BERT corrector enabled in Phase 1,
+D4-A client-side AnalyserNode, D5-A symlink). The yuesub-api
+Cantonese ASR stack (SenseVoiceSmall + fsmn-vad + hon9kon9ize
+BERT corrector) is now liftable as a second ASR backend
+selectable via `voice.asr.backend = "yuesub"`. The cyber
+cockpit HUD's CyberWaveform + GundamAvatar are now driven by
+the user's real mic input (primary path: browser
+`AnalyserNode.getByteTimeDomainData()` at 20Hz; fallback:
+server-side `vad.audio_level` WS broadcast for Tauri / non-
+browser contexts).
+
+#### Added (Sprint 17b)
+- **backend**: `app/voice/asr/yuesub.py` — `YuesubASR` class
+  implementing `ASRInterface`. Lifts the `OnnxTranscriber`
+  model-load + transcribe() logic from `~/workspace/yuesub-api`.
+- **backend**: `app/voice/corrector/corrector.py` — `Corrector`
+  class with `acorrect()` (async, dispatches to
+  `asyncio.to_thread` for the BERT path). Two modes:
+  `opencc` (regex + s2hk, <5ms) and `bert` (masked-LM
+  perplexity selection, 300-500ms per segment).
+- **backend**: `app/voice/vad/fsmn_vad.py` — `FsmnVAD` wrapper
+  for the audio-level VAD. Currently RMS-energy based with
+  log compression (k=30); a follow-up will swap to
+  fsmn-vad-online's per-frame speech probability.
+- **backend**: `app/voice/pipeline.py` — dual-VAD wiring: the
+  utterance-boundary VAD (silero) and the audio-level VAD
+  (fsmn) run in parallel. The HUD sees ambient sound even
+  outside an active turn.
+- **backend**: `scripts/setup-yuesub-models.sh` — idempotent
+  symlink helper that wires `~/.gundam-halo/models/{iic,
+  denoiser.onnx}` to the yuesub-api checkout. Has
+  `--check` mode for CI.
+- **backend**: `pyproject.toml` — new `voice-yuesub` optional
+  group: `funasr_onnx`, `librosa`, `resampy`, `transformers[onnx]`,
+  `opencc`, `pandas`, `jieba`, `modelscope`, `torchaudio`.
+- **frontend**: `use-mic-analyser.ts` — `AnalyserNode`
+  RMS hook polling at 20Hz with log compression + 120ms
+  exponential smoothing.
+- **frontend**: `use-shared-amplitude.ts` — new `source?` and
+  `stream?` params. `useSharedAmplitude("mic", stream)` returns
+  `useMicAnalyser`'s RMS; default returns the existing idle
+  drift (4 existing avatar call sites unchanged).
+- **frontend**: `use-voice-input.ts` — exposes the live
+  `stream: MediaStream | null` to callers so the HUD can
+  attach to the same getUserMedia stream.
+- **frontend**: `halo-voice-ws.ts` — `VadAudioLevelEvent` type
+  + handler; `VoiceStatus.lastAudioLevel` field (Tauri
+  fallback).
+- **frontend**: Settings → Voice shows the current ASR engine
+  + corrector with a "Restart required" hint if the user
+  has changed those fields in config.toml.
+
+#### Changed (Sprint 17b)
+- **backend**: `asr_factory` accepts `backend = "yuesub"`. The
+  factory lazy-imports the voice-yuesub-only deps so
+  whisper_local users don't pay the 600MB install cost.
+- **backend**: `GET /voice/config` returns `asr_backend`,
+  `asr_corrector`, `restart_required` alongside the
+  existing `wake_phrases` + `strict_wake_phrase`.
+
+#### Out of scope (deferred)
+- Tauri-side always-on mic capture (Sprint 18+). Push-to-talk
+  is still the v1 flow; the audio-reactive HUD works in
+  push-to-talk mode.
+- Cantonese Whisper fine-tune (separate `train` extra).
+
 ### Verified
 - `pnpm tsc --noEmit` clean
 - `pnpm build` clean (87 modules, 396.58 kB main chunk)
 - `pnpm lint` clean
+- `pytest backend tests/voice/` — 80 passed, 2 skipped
+  (the BERT-test skips when the BERT model isn't downloaded;
+  the rate-limit test skips because of a known Starlette
+  TestClient WebSocket close interaction)
+- `pnpm test frontend` — 52 passed (47 existing + 5 new in
+  `use-shared-amplitude.test.ts`)
 - Build smoke: `VITE_APP_VERSION=0.1.3 pnpm build` →
   `STANDBY"," · v","0.1.3"]` in bundle.
 

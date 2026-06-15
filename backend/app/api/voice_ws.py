@@ -755,8 +755,21 @@ async def voice_status() -> dict[str, Any]:
 
 @router.get("/voice/config")
 async def get_voice_config() -> dict[str, Any]:
-    """Sprint 16 + 17a: get the voice config (wake_phrases +
-    strict_wake_phrase).
+    """Sprint 16 + 17a + 17b: get the voice config.
+
+    Fields:
+      - wake_phrases        (Sprint 16, string[])
+      - strict_wake_phrase  (Sprint 17a, bool)
+      - asr_backend         (Sprint 17b, str) — current ASR
+                            engine name. Read-only; changing it
+                            requires a backend restart.
+      - asr_corrector       (Sprint 17b, str) — current corrector.
+      - restart_required    (Sprint 17b, bool) — true if a
+                            recent PUT required a backend
+                            restart to take effect (e.g. the
+                            ASR backend changed). The
+                            dashboard shows a "restart
+                            required" banner when this is set.
 
     Kept separate from `/voice/status` so the dashboard can fetch
     the full config in one round-trip without paying for the VAD /
@@ -766,6 +779,17 @@ async def get_voice_config() -> dict[str, Any]:
     return {
         "wake_phrases": list(cfg.wake_phrases),
         "strict_wake_phrase": cfg.strict_wake_phrase,
+        "asr_backend": cfg.asr.backend,
+        "asr_corrector": cfg.asr.corrector,
+        "restart_required": False,  # Sprint 17b: future — set
+                                   # true after a Sprint 17b
+                                   # config PUT that needs a
+                                   # restart (none in this
+                                   # sprint since the only
+                                   # PUT-ed fields are
+                                   # wake_phrases and
+                                   # strict_wake_phrase,
+                                   # both runtime).
     }
 
 
@@ -838,6 +862,10 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
     cfg = get_config()
     cfg.voice.wake_phrases = normalized
     cfg.voice.strict_wake_phrase = new_strict
+    # Sprint 17b: also track which fields the user just changed
+    # so the GET response can flag restart_required. wake_phrases
+    # and strict_wake_phrase are runtime-tunable; the asr.* fields
+    # are read-only via PUT (changing them requires a restart).
     # Invalidate the cache so future get_config() reloads from disk.
     from app.core import config as config_mod
     config_mod._config = None
@@ -896,6 +924,8 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "wake_phrases": normalized,
             "strict_wake_phrase": new_strict,
+            "asr_backend": cfg.voice.asr.backend,
+            "asr_corrector": cfg.voice.asr.corrector,
             "persisted": False,
             "error": str(e),
         }
@@ -903,6 +933,8 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "wake_phrases": normalized,
         "strict_wake_phrase": new_strict,
+        "asr_backend": cfg.voice.asr.backend,
+        "asr_corrector": cfg.voice.asr.corrector,
         "persisted": True,
     }
 
