@@ -16,6 +16,22 @@ export interface CyberWaveformProps {
   className?: string;
   /** How much the amplitude drives the trace's vertical scale. 0..1. Default 1. */
   amplitudeScale?: number;
+  /**
+   * Sprint 17b Track E: when set to "mic", the waveform pulses
+   * to the real-time RMS of the user's mic stream (via
+   * useSharedAmplitude's "mic" branch). When "idle" (default),
+   * uses the deterministic breath animation. VoicePanel flips
+   * this to "mic" while the user holds the mic button and
+   * back to "idle" on release.
+   */
+  source?: "idle" | "mic";
+  /**
+   * Sprint 17b Track E: the user's mic stream, used when
+   * `source === "mic"`. VoicePanel passes the stream it
+   * already has open from `useVoiceInput`'s getUserMedia call.
+   * When source is "idle", this is ignored.
+   */
+  stream?: MediaStream | null;
 }
 
 export function CyberWaveform({
@@ -26,10 +42,12 @@ export function CyberWaveform({
   resolution = 200,
   className = "",
   amplitudeScale = 1.0,
+  source = "idle",
+  stream = null,
 }: CyberWaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
-  const amp = useSharedAmplitude();
+  const amp = useSharedAmplitude(source, stream);
 
   useEffect(() => {
     const canvas = canvasRef.current;

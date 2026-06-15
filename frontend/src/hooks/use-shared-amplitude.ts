@@ -1,20 +1,27 @@
 // Shared amplitude source for the cyber cockpit.
 //
-// Drives a smooth, slowly-drifting amplitude value. Components
-// (CyberWaveform, CSSAvatar, future voice-reactive HUD elements)
-// all subscribe to the same value so visual pulses stay in sync.
+// Sprint 17b Track E: the hook now accepts a `source` argument
+// to switch between the deterministic idle drift and the
+// real mic RMS via `useMicAnalyser`. See the file-level
+// comment for the dual-source rationale.
 //
-// The amplitude is **deterministic + smooth**, not random-walk:
-// we layer two slow sine waves (~6.5s and ~9.2s periods) and add
-// a sparse "burst" envelope that fires every 7-12s. The result
-// feels organic and breathy rather than "starts slow, then
-// accelerates" — which is what a uniform-random + lerp produces.
+// In the original Sprint 16 design, the amplitude was
+// deterministic + smooth (two slow sines plus a 7-12s
+// "burst" envelope). The cyber waveform and avatar pulse
+// subscribe to the same value so visual pulses stay in sync.
+// That drift is still the default fallback (`source: "idle"`).
 //
-// If a real audio source is wired in later, replace the `computeAmp`
-// body with an AnalyserNode RMS readout; the public hook signature
-// stays the same.
+// When `source: "mic"`, the hook transparently subscribes to
+// a sibling `useMicAnalyser()` instance that reads the
+// browser's `AnalyserNode` from the user's mic stream. The
+// voice panel flips the source to "mic" while the user holds
+// the mic button and back to "idle" on release.
 
 import { useEffect, useState } from "react";
+
+import { useMicAnalyser } from "./use-mic-analyser";
+
+export type AmplitudeSource = "idle" | "mic";
 
 const FRAME_BUDGET_MS = 50; // 20Hz tick — lazy on purpose, allows the visual to "breathe"
 
@@ -60,11 +67,11 @@ function smoothStep(t: number): number {
   return x * x * x * (x * (x * 6 - 15) + 10);
 }
 
-let subscribers = new Set<(v: number) => void>();
+let idleSubscribers = new Set<(v: number) => void>();
 let timerId: number | null = null;
 let startMs: number = Date.now();
 
-function computeAmp(now: number): number {
+function computeIdleAmp(now: number): number {
   const t = now - startMs;
   // Two slow sines, combined additively, clamped to envelope.
   const primary = Math.sin((t / PRIMARY_PERIOD_MS) * 2 * Math.PI) * PRIMARY_AMP;
@@ -81,21 +88,21 @@ function computeAmp(now: number): number {
   return Math.max(0.15, Math.min(1.0, amp));
 }
 
-function loop() {
+function idleLoop() {
   const now = Date.now();
-  const amp = computeAmp(now);
-  for (const cb of subscribers) cb(amp);
-  timerId = window.setTimeout(loop, FRAME_BUDGET_MS) as unknown as number;
+  const amp = computeIdleAmp(now);
+  for (const cb of idleSubscribers) cb(amp);
+  timerId = window.setTimeout(idleLoop, FRAME_BUDGET_MS) as unknown as number;
 }
 
-function ensureLoopRunning() {
+function ensureIdleLoopRunning() {
   if (timerId === null) {
     startMs = Date.now();
-    timerId = window.setTimeout(loop, FRAME_BUDGET_MS) as unknown as number;
+    timerId = window.setTimeout(idleLoop, FRAME_BUDGET_MS) as unknown as number;
   }
 }
 
-function stopLoop() {
+function stopIdleLoop() {
   if (timerId !== null) {
     clearTimeout(timerId);
     timerId = null;
@@ -103,19 +110,59 @@ function stopLoop() {
 }
 
 /**
- * useSharedAmplitude — subscribes to the global amplitude tick.
- * Returns a value in [0, 1] that the caller can use to scale any
- * size / opacity / glow variable.
+ * useSharedAmplitude — subscribes to the amplitude tick.
+ *
+ * @param source  "idle" (default) — deterministic breath
+ *                animation. "mic" — live RMS from the user's
+ *                mic via `useMicAnalyser`. The mic path
+ *                requires a stream; pass it as the second
+ *                argument. Without a stream, "mic" returns 0.
+ *
+ * Returns a value in [0, 1] that the caller uses to scale
+ * size / opacity / glow.
  */
-export function useSharedAmplitude(): number {
+// Internal helper: idle-drift amplitude. Always called by
+// useSharedAmplitude on every render so the rule of hooks
+// (same number of hooks in the same order on every render)
+// is satisfied even when `source` flips between renders.
+function useIdleAmplitude(): number {
   const [amp, setAmp] = useState(BASELINE);
   useEffect(() => {
-    ensureLoopRunning();
-    subscribers.add(setAmp);
+    ensureIdleLoopRunning();
+    idleSubscribers.add(setAmp);
     return () => {
-      subscribers.delete(setAmp);
-      if (subscribers.size === 0) stopLoop();
+      idleSubscribers.delete(setAmp);
+      if (idleSubscribers.size === 0) stopIdleLoop();
     };
   }, []);
   return amp;
+}
+
+/**
+ * useSharedAmplitude — subscribes to the amplitude tick.
+ *
+ * @param source  "idle" (default) — deterministic breath
+ *                animation. "mic" — live RMS from the user's
+ *                mic via `useMicAnalyser`. The mic path
+ *                requires a stream; pass it as the second
+ *                argument. Without a stream, "mic" returns 0.
+ *
+ * Returns a value in [0, 1] that the caller uses to scale
+ * size / opacity / glow.
+ *
+ * Implementation note: both branches always invoke the same
+ * number of hooks in the same order (`useIdleAmplitude` is
+ * always called, then `useMicAnalyser` is always called).
+ * The active source is picked at the end. This avoids the
+ * rules-of-hooks violation that would come from a
+ * conditional `if (source === ...) { useX() } else { useY() }`.
+ */
+export function useSharedAmplitude(
+  source: AmplitudeSource = "idle",
+  stream?: MediaStream | null,
+): number {
+  // Always run both hooks — same order on every render.
+  const idleAmp = useIdleAmplitude();
+  const { amplitude: micAmp } = useMicAnalyser(stream ?? null);
+  return source === "mic" ? micAmp : idleAmp;
 }

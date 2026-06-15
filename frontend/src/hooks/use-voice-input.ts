@@ -47,12 +47,23 @@ export interface UseVoiceInputResult {
   error: string | null;
   start: () => Promise<void>;
   stop: () => void;
+  /**
+   * Sprint 17b Track E: the live MediaStream from getUserMedia.
+   * Null until `start()` resolves. The cockpit HUD uses this
+   * to wire `useMicAnalyser` (and thus the cyber waveform +
+   * avatar pulse) directly to the user's mic without opening
+   * a second `getUserMedia` stream.
+   */
+  stream: MediaStream | null;
 }
 
 export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
   const { onFrame, onStart, onStop } = opts;
   const [state, setState] = useState<MicState>("idle");
   const [error, setError] = useState<string | null>(null);
+  // Sprint 17b Track E: expose the live stream to callers
+  // (the cyber waveform needs it to drive the audio HUD).
+  const [stream, setStream] = useState<MediaStream | null>(null);
 
   // Refs keep the latest callbacks / state without re-creating closures
   const onFrameRef = useRef(onFrame);
@@ -97,6 +108,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
     }
     bufferRef.current = new Float32Array(FRAME_SAMPLES);
     bufferFillRef.current = 0;
+    setStream(null);  // Sprint 17b Track E — clear public stream
     setState((prev) => (prev === "capturing" ? "ready" : prev));
   }, []);
 
@@ -179,6 +191,10 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
       sourceNodeRef.current = source;
       source.connect(worklet);
 
+      // Sprint 17b Track E: surface the live stream so the
+      // cockpit HUD (useMicAnalyser) can attach to the same
+      // MediaStream without opening a second getUserMedia.
+      setStream(stream);
       setState("capturing");
       onStartRef.current?.();
     } catch (e) {
@@ -194,7 +210,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stop]);
 
-  return { state, error, start, stop };
+  return { state, error, start, stop, stream };
 }
 
 // ---------------------------------------------------------------------------

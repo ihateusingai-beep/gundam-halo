@@ -59,6 +59,14 @@ export interface VoiceStatus {
   error: string | null;
   /** AudioContext sample rate (0 if no mic). */
   sampleRate: number;
+  /**
+   * Sprint 17b Track E: latest server-side audio level
+   * (0.0-1.0). FALLBACK source for the cockpit HUD — the
+   * primary path is the browser's AnalyserNode. Used only
+   * in Tauri or other non-browser contexts where the
+   * AnalyserNode isn't available.
+   */
+  lastAudioLevel: number;
 }
 
 export interface VoiceTranscriptEvent {
@@ -96,6 +104,18 @@ export interface VoiceTtsEndEvent {
 export interface VoiceVadStateEvent {
   type: "vad.state";
   data: { state: "speech_start" | "speech_end"; session_id?: string };
+}
+// Sprint 17b Track E: server broadcasts a per-frame audio
+// level (0.0-1.0) at 20Hz when the voice WS is active and
+// the server-side dual-VAD (silero + fsmn) is wired. This is
+// the FALLBACK source for the cockpit HUD — the primary
+// path is the browser's AnalyserNode via `useMicAnalyser`,
+// which has lower latency. The fallback fires in Tauri or
+// other non-browser contexts where the AnalyserNode isn't
+// available. See docs/FEATURE-SPEC-SPRINT17b.md §5.4.
+export interface VoiceVadAudioLevelEvent {
+  type: "vad.audio_level";
+  data: { session_id: string; level: number; ts_ms: number };
 }
 export interface VoiceHelloEvent {
   type: "voice.hello";
@@ -144,6 +164,7 @@ export interface VoiceCancelledEvent {
 export type VoiceWSEvent =
   | VoiceHelloEvent
   | VoiceVadStateEvent
+  | VoiceVadAudioLevelEvent
   | VoiceTranscriptEvent
   | VoiceAgentMessageEvent
   | VoiceTtsStartEvent
@@ -170,6 +191,7 @@ interface VoiceState_ {
   serverEnabled: boolean;
   error: string | null;
   sampleRate: number;
+  lastAudioLevel: number;
   currentSession: string | null;
   listeners: Map<string | "*", Set<VoiceEventHandler>>;
   binaryListeners: Set<BinaryHandler>;
@@ -185,6 +207,7 @@ const state: VoiceState_ = {
   serverEnabled: false,
   error: null,
   sampleRate: 0,
+  lastAudioLevel: 0,
   currentSession: null,
   listeners: new Map(),
   binaryListeners: new Set(),
@@ -200,6 +223,7 @@ function snapshot(): VoiceStatus {
     serverEnabled: state.serverEnabled,
     error: state.error,
     sampleRate: state.sampleRate,
+    lastAudioLevel: state.lastAudioLevel,
   };
 }
 
@@ -448,6 +472,16 @@ function handleEvent(event: VoiceWSEvent) {
         // (caller will see "thinking" once we get asr.result + agent processing).
         setState({ state: "listening" });
       }
+      break;
+    }
+    case "vad.audio_level": {
+      // Sprint 17b Track E: per-frame audio level broadcast
+      // at 20Hz. We surface it via VoiceStatus.lastAudioLevel
+      // (the primary path is the browser's AnalyserNode; this
+      // server-broadcast value is the fallback for Tauri
+      // and other non-browser contexts).
+      const d = (event as VoiceVadAudioLevelEvent).data;
+      setState({ lastAudioLevel: d.level });
       break;
     }
     case "asr.result": {
