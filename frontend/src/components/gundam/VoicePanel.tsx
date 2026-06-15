@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { useVoiceInput } from "@/hooks/use-voice-input";
+import type { UseVoiceInputResult } from "@/hooks/use-voice-input";
 import { api } from "@/lib/api";
 import { WakePhraseHint } from "@/components/gundam/WakePhraseHint";
 import {
@@ -21,12 +21,9 @@ import {
   onVoiceBinary,
   onVoiceStatusChange,
   subscribeToVoiceEvent,
-  voiceBegin,
   voiceCancel,
-  voiceEnd,
   voiceText as sendTextTurn,
   type VoiceStatus,
-  type VoiceWSEvent,
 } from "@/services/halo-voice-ws";
 
 const STATE_LABEL: Record<VoiceStatus["state"], string> = {
@@ -59,7 +56,19 @@ const STATE_GLYPH: Record<VoiceStatus["state"], string> = {
   error: "✕",
 };
 
-export function VoicePanel() {
+export interface VoicePanelProps {
+  /**
+   * Sprint 18 Track A: the mic hook is hoisted to CockpitLayout
+   * so the right column can share the stream with the audio-reactive
+   * CyberWaveform above. VoicePanel receives the `mic` object
+   * (state / error / start / stop / stream) as a prop and uses it
+   * for the push-to-talk button. The contract of `useVoiceInput`
+   * is unchanged — we just moved ownership up one level.
+   */
+  mic: UseVoiceInputResult;
+}
+
+export function VoicePanel({ mic }: VoicePanelProps) {
   const [status, setStatus] = useState<VoiceStatus>(() => getVoiceStatus());
   const [textInput, setTextInput] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -190,26 +199,15 @@ export function VoicePanel() {
     };
   }, []);
 
-  const mic = useVoiceInput({
-    onFrame: (pcm) => {
-      // Lazily lazy-import to avoid a circular dep at module load
-      import("@/services/halo-voice-ws").then((m) => m.voiceSendAudio(pcm));
-    },
-    onStart: () => {
-      try {
-        voiceBegin();
-      } catch (e) {
-        toast.error("Voice WS not connected", { description: String(e) });
-      }
-    },
-    onStop: () => {
-      try {
-        voiceEnd();
-      } catch (e) {
-        toast.error("Voice WS send failed", { description: String(e) });
-      }
-    },
-  });
+  // Sprint 18 Track A: `mic` is now provided as a prop from
+  // CockpitLayout (see VoicePanelProps). The hook used to live
+  // here; ownership moved up so the right column's CyberWaveform
+  // can subscribe to the same `mic.stream` without opening a
+  // second getUserMedia. The contract of `useVoiceInput` is
+  // unchanged — we still expose {state, error, start, stop, stream}.
+  // The voiceBegin/voiceEnd/voiceSendAudio callbacks are wired
+  // inside the parent so the lifecycle of the WS turn is
+  // co-located with the lifecycle of the mic stream.
 
   // Pressable in any state where the mic system can accept a new
   // press. `reconnecting` covers the case where the voice WS died

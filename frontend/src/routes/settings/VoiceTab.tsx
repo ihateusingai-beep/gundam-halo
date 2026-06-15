@@ -1,5 +1,5 @@
 /**
- * Settings → Voice tab (Sprint 16 + 17a).
+ * Settings → Voice tab (Sprint 16 + 17a + 18).
  *
  * Sprint 16: lets the user edit the list of text-level wake
  * phrases the voice pipeline matches at the start of every ASR
@@ -12,6 +12,16 @@
  * start with a configured wake phrase are discarded server-side
  * and the cockpit shows a brief toast. Both `wake_phrases` and
  * `strict_wake_phrase` are persisted in one PUT round-trip.
+ *
+ * Sprint 18 adds two radio groups for the ASR engine and the
+ * corrector (formerly read-only in Sprint 17b). The user can
+ * now pick `whisper_local` vs `yuesub` for the engine, and
+ * `bert` / `opencc` / `none` for the corrector, and Save
+ * persists all four fields in one PUT round-trip. Changing
+ * either asr field flips a `restart_required` flag in the
+ * response; the dashboard shows the "Restart required"
+ * banner. See docs/FEATURE-SPEC-SPRINT18.md §3.2 for the
+ * UX wireframe.
  *
  * The current voice WS state (idle / ready / etc.) is shown at
  * the top so the user can confirm the connection is alive before
@@ -40,6 +50,13 @@ interface VoiceConfig {
   asr_corrector?: string;
   restart_required?: boolean;
 }
+
+// Sprint 18: keep the asr_backend / asr_corrector draft
+// state in sync with the current config. The radio groups
+// bind to these drafts so the form is a controlled component
+// (Reset re-syncs the drafts to the loaded config).
+type AsrBackendDraft = "whisper_local" | "yuesub";
+type AsrCorrectorDraft = "bert" | "opencc" | "none";
 
 const UPGRADE_BANNER_KEY = "halo.voice.strict-banner-dismissed-at";
 const UPGRADE_BANNER_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -81,6 +98,16 @@ export function VoiceTab() {
   const [config, setConfig] = useState<VoiceConfig | null>(null);
   const [draft, setDraft] = useState<string>("");
   const [strictDraft, setStrictDraft] = useState<boolean>(true);
+  // Sprint 18: drafts for the ASR engine + corrector. The
+  // server validates the value and persists to config.toml;
+  // we just need to send the user's choice in the PUT.
+  // Defaults match the backend config defaults so the radio
+  // is in a known state if the user reloads before the GET
+  // resolves.
+  const [asrBackendDraft, setAsrBackendDraft] =
+    useState<AsrBackendDraft>("whisper_local");
+  const [asrCorrectorDraft, setAsrCorrectorDraft] =
+    useState<AsrCorrectorDraft>("bert");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>(
@@ -104,6 +131,21 @@ export function VoiceTab() {
         setConfig(data);
         setDraft(data.wake_phrases.join("\n"));
         setStrictDraft(data.strict_wake_phrase);
+        // Sprint 18: hydrate the radio drafts from the GET
+        // response. The server may report an unknown value
+        // (e.g. if config.toml was hand-edited) — in that
+        // case we fall back to the defaults so the radios
+        // are still selectable.
+        if (data.asr_backend === "whisper_local" || data.asr_backend === "yuesub") {
+          setAsrBackendDraft(data.asr_backend);
+        }
+        if (
+          data.asr_corrector === "bert" ||
+          data.asr_corrector === "opencc" ||
+          data.asr_corrector === "none"
+        ) {
+          setAsrCorrectorDraft(data.asr_corrector);
+        }
       })
       .catch((e: unknown) => {
         const msg = e instanceof ApiError ? e.message : String(e);
@@ -141,18 +183,36 @@ export function VoiceTab() {
       const result = await api.setVoiceConfig({
         wake_phrases: deduped,
         strict_wake_phrase: strictDraft,
+        // Sprint 18: include the ASR engine + corrector in the
+        // same PUT. The backend validates the values, persists
+        // to config.toml, and flips restart_required in the
+        // response if either actually changed.
+        asr_backend: asrBackendDraft,
+        asr_corrector: asrCorrectorDraft,
       });
       setConfig({
         wake_phrases: result.wake_phrases,
         strict_wake_phrase: result.strict_wake_phrase,
+        asr_backend: result.asr_backend,
+        asr_corrector: result.asr_corrector,
+        restart_required: result.restart_required,
       });
       setDraft(result.wake_phrases.join("\n"));
       setStrictDraft(result.strict_wake_phrase);
+      if (result.asr_backend) setAsrBackendDraft(result.asr_backend as AsrBackendDraft);
+      if (result.asr_corrector) setAsrCorrectorDraft(result.asr_corrector as AsrCorrectorDraft);
       if (result.persisted) {
-        toast.success("Voice settings saved", {
-          description:
-            "The next voice turn uses the new wake-phrase list and gate. No restart needed.",
-        });
+        if (result.restart_required) {
+          toast.success("Voice settings saved", {
+            description:
+              "Restart the backend to load the new ASR engine / corrector. pkill -f 'uvicorn app.main:app' && uv run --project . uvicorn app.main:app",
+          });
+        } else {
+          toast.success("Voice settings saved", {
+            description:
+              "The next voice turn uses the new wake-phrase list and gate. No restart needed.",
+          });
+        }
       } else {
         toast.warning("Saved in memory only", {
           description:
@@ -250,54 +310,129 @@ export function VoiceTab() {
         )}
       </Section>
 
-      <Section title="Current ASR engine (Sprint 17b)">
-        {/* Sprint 17b: show the user which ASR engine is
-            currently loaded, plus the corrector. The
-            dashboard does NOT expose a UI to change these
-            in Sprint 17b — the user edits config.toml and
-            restarts the backend (see docs/FEATURE-SPEC-
-            SPRINT17b.md §4.1 for the rationale: the ASR
-            engine is 2GB+ and shouldn't reload on every
-            config PUT). We do surface the "restart
-            required" hint if the user changes the field
-            via config.toml and the server reports a
-            mismatch. */}
-        <KV
-          label="ASR backend"
-          value={config?.asr_backend ?? "—"}
-          mono
-          hint={
-            config?.asr_backend === "yuesub"
-              ? "SenseVoiceSmall + fsmn-vad (Cantonese)"
-              : config?.asr_backend === "whisper_local"
-              ? "openai-whisper base (English/Mandarin)"
-              : "Edit config.toml [voice.asr] backend"
-          }
-        />
-        <KV
-          label="Corrector"
-          value={config?.asr_corrector ?? "—"}
-          mono
-          hint={
-            config?.asr_corrector === "bert"
-              ? "OpenCC + BERT masked-LM (slow but high quality)"
-              : config?.asr_corrector === "opencc"
-              ? "OpenCC + regex rules (fast)"
-              : "Raw ASR output"
-          }
-        />
-        {config?.restart_required && (
-          <div className="mt-2 border border-[var(--warning)] bg-[var(--bg-elevated)] px-3 py-2 text-xs font-mono">
-            <span className="text-[var(--warning)]">⚠ Restart required:</span>{" "}
-            <span className="text-[var(--text-primary)]">
-              config.toml changed but the running backend still
-              uses the pre-restart instance. Restart with{" "}
-              <code>pkill -f &apos;uvicorn app.main:app&apos; &amp;&amp; uv run --project . uvicorn app.main:app</code>{" "}
-              for the new ASR engine / corrector to take effect.
+      <Section title="ASR engine (Sprint 18)">
+        {/* Sprint 17b: read-only display of the current ASR engine
+            and corrector.
+            Sprint 18: the section is now EDITABLE. Two radio
+            groups — one for the engine, one for the corrector —
+            bound to asrBackendDraft / asrCorrectorDraft. Save
+            (at the bottom of the form) dispatches all four
+            fields in one PUT; the backend persists, validates,
+            and flips the `restart_required` flag if either asr
+            field actually changed. */}
+        <p className="text-xs text-[var(--text-secondary)] font-mono mb-2">
+          Choose the speech-recognition backend. <strong>whisper_local</strong>{" "}
+          is the default (openai-whisper base, English / Mandarin).
+          <strong> yuesub</strong> uses SenseVoiceSmall + fsmn-vad for
+          Cantonese. Changing this requires a backend restart.
+        </p>
+        <div className="flex flex-col gap-1.5" data-testid="asr-backend-radios">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="radio"
+              name="asr-backend"
+              value="whisper_local"
+              checked={asrBackendDraft === "whisper_local"}
+              onChange={() => setAsrBackendDraft("whisper_local")}
+              className="accent-[var(--accent)] cursor-pointer"
+            />
+            <span className="text-xs font-mono text-[var(--text-primary)]">
+              whisper_local
             </span>
-          </div>
-        )}
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              — openai-whisper (English / Mandarin)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="radio"
+              name="asr-backend"
+              value="yuesub"
+              checked={asrBackendDraft === "yuesub"}
+              onChange={() => setAsrBackendDraft("yuesub")}
+              className="accent-[var(--accent)] cursor-pointer"
+            />
+            <span className="text-xs font-mono text-[var(--text-primary)]">
+              yuesub
+            </span>
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              — SenseVoiceSmall + fsmn-vad (Cantonese)
+            </span>
+          </label>
+        </div>
       </Section>
+
+      <Section title="Corrector (Sprint 18)">
+        <p className="text-xs text-[var(--text-secondary)] font-mono mb-2">
+          Post-process the ASR output. <strong>bert</strong> uses
+          OpenCC + BERT masked-LM (slow, 300-500ms per segment but
+          high quality). <strong>opencc</strong> uses OpenCC + regex
+          rules (fast, &lt;5ms). <strong>none</strong> skips the
+          corrector entirely. Only applies to the yuesub backend.
+        </p>
+        <div className="flex flex-col gap-1.5" data-testid="asr-corrector-radios">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="radio"
+              name="asr-corrector"
+              value="bert"
+              checked={asrCorrectorDraft === "bert"}
+              onChange={() => setAsrCorrectorDraft("bert")}
+              className="accent-[var(--accent)] cursor-pointer"
+            />
+            <span className="text-xs font-mono text-[var(--text-primary)]">
+              bert
+            </span>
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              — OpenCC + BERT masked-LM (slow but high quality)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="radio"
+              name="asr-corrector"
+              value="opencc"
+              checked={asrCorrectorDraft === "opencc"}
+              onChange={() => setAsrCorrectorDraft("opencc")}
+              className="accent-[var(--accent)] cursor-pointer"
+            />
+            <span className="text-xs font-mono text-[var(--text-primary)]">
+              opencc
+            </span>
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              — OpenCC + regex rules (fast)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="radio"
+              name="asr-corrector"
+              value="none"
+              checked={asrCorrectorDraft === "none"}
+              onChange={() => setAsrCorrectorDraft("none")}
+              className="accent-[var(--accent)] cursor-pointer"
+            />
+            <span className="text-xs font-mono text-[var(--text-primary)]">
+              none
+            </span>
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              — Raw ASR output
+            </span>
+          </label>
+        </div>
+      </Section>
+
+      {config?.restart_required && (
+        <div className="mt-2 mb-3 border border-[var(--warning)] bg-[var(--bg-elevated)] px-3 py-2 text-xs font-mono">
+          <span className="text-[var(--warning)]">⚠ Restart required:</span>{" "}
+          <span className="text-[var(--text-primary)]">
+            config.toml changed but the running backend still
+            uses the pre-restart instance. Restart with{" "}
+            <code>pkill -f &apos;uvicorn app.main:app&apos; &amp;&amp; uv run --project . uvicorn app.main:app</code>{" "}
+            for the new ASR engine / corrector to take effect.
+          </span>
+        </div>
+      )}
 
       <Section title="Wake phrases (Sprint 16)">
         <p className="text-xs text-[var(--text-secondary)] font-mono mb-2">
@@ -351,6 +486,20 @@ export function VoiceTab() {
           onClick={() => {
             setDraft(config?.wake_phrases.join("\n") ?? "");
             setStrictDraft(config?.strict_wake_phrase ?? true);
+            // Sprint 18: reset the asr drafts too. Falls back
+            // to the default ("whisper_local" / "bert") if the
+            // server hasn't returned a value yet (loading
+            // state).
+            if (config?.asr_backend === "whisper_local" || config?.asr_backend === "yuesub") {
+              setAsrBackendDraft(config.asr_backend);
+            }
+            if (
+              config?.asr_corrector === "bert" ||
+              config?.asr_corrector === "opencc" ||
+              config?.asr_corrector === "none"
+            ) {
+              setAsrCorrectorDraft(config.asr_corrector);
+            }
           }}
           disabled={saving}
           className="px-3 py-1 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors disabled:opacity-40"

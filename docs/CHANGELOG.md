@@ -39,6 +39,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   frames could overlap or play past the queue head. Now
   sequentially awaited with stale-frame skip.
 
+### Sprint 18 — cockpit audio-reactive HUD + ASR switcher (read-only → editable)
+
+Sprint 18 closes two open follow-ups from Sprint 16 + 17b:
+the cockpit HUD now actually renders the audio-reactive
+CyberWaveform wired to the user's live mic stream (Sprint
+17b Track E shipped the plumbing but no caller), and the
+Settings → Voice tab exposes the ASR engine and corrector
+as radio groups (formerly read-only). No new dependencies,
+no model downloads, no backend service rewrites — a
+surgical 1-day sprint.
+
+#### Track A — CyberWaveform mounted in the cockpit
+- **frontend**: `components/gundam/SignalCard.tsx` — new
+  component encapsulating the audio-reactive oscilloscope
+  (4 layers, 80px height, 1.2x amplitude scale). Owns the
+  source flag (`"idle"` ↔ `"mic"`) derived from
+  `mic.state === "capturing"` and forwards the live
+  `MediaStream` to the underlying `CyberWaveform`. Unit
+  tested in `SignalCard.test.tsx` (5 tests: idle, mic,
+  defaults, overrides, source reversion on release).
+- **frontend**: `components/layout/CockpitLayout.tsx` —
+  the `useVoiceInput` hook is hoisted from `VoicePanel`
+  to the cockpit layout so the right column can share the
+  same stream with the new `<SignalCard mic={mic} />`
+  above the avatar. Lifecycle of the voice WS turn
+  (`voiceBegin` / `voiceEnd` / `voiceSendAudio`) is now
+  co-located with the mic lifecycle in the parent.
+- **frontend**: `components/gundam/VoicePanel.tsx` —
+  refactored to accept the `mic` hook result as a prop
+  (was owned locally). No behavior change for the
+  push-to-talk button or the WS turn flow; just a hoisted
+  hook.
+- **frontend**: `components/gundam/CyberWaveform.tsx` —
+  no change. The component already accepted `source` and
+  `stream` props from Sprint 17b Track E; Sprint 18 is the
+  first caller.
+
+#### Track B — ASR engine + corrector switcher in Settings
+- **backend**: `app/api/voice_ws.py` `put_voice_config` —
+  now accepts optional `asr_backend` ("whisper_local" |
+  "yuesub") and `asr_corrector` ("bert" | "opencc" | "none")
+  fields in the PUT payload. Validates values (400 on
+  unknown), diffs against the in-memory config, and sets
+  a process-local `restart_required` flag when either
+  field actually changed. Persists to
+  `~/.gundam-halo/config.toml` `[voice.asr]` section via a
+  new `_replace_section_key` helper that anchors to the
+  section header and stops at the next section (no
+  section-agnostic regex bugs). On the GET response,
+  `restart_required` now reflects the in-process flag
+  (was hardcoded `False` in Sprint 17b Track F).
+- **backend**: `tests/voice/test_voice_config_asr.py` —
+  10 new tests covering: legacy payload (no asr fields)
+  round-trip, asr_backend change flips restart, asr_corrector
+  change flips restart, same-value PUT doesn't flip restart,
+  unknown asr_backend/corrector returns 400, non-string
+  asr_backend returns 400, GET reflects the flag, stale
+  flag cleared by a non-asr PUT, and toml persistence
+  (writes the new `[voice.asr]` block without disturbing
+  the user's other `[voice]` keys).
+- **frontend**: `lib/api.ts` `setVoiceConfig` payload type
+  — adds optional `asr_backend` + `asr_corrector`. The GET
+  response type already accepted them (Sprint 17b Track F);
+  this closes the round-trip.
+- **frontend**: `routes/settings/VoiceTab.tsx` — the
+  "Current ASR engine (Sprint 17b)" read-only section is
+  split into two new editable sections: "ASR engine
+  (Sprint 18)" with `whisper_local` / `yuesub` radios,
+  and "Corrector (Sprint 18)" with `bert` / `opencc` /
+  `none` radios. The existing Save button dispatches all
+  four fields in one PUT; the "Restart required" banner
+  is rendered below the form (was at the bottom of the
+  read-only section in Sprint 17b Track F). Reset
+  re-syncs both the wake-phrase draft and the asr drafts
+  to the loaded config.
+
+#### Fixed
+- **backend**: `app/api/voice_ws.py` `_replace_section_key`
+  — earlier draft returned `(text, 0)` when the section
+  existed but the key was missing, causing the caller to
+  append a *new* `[section]` header. Real config.toml
+  files where the user already had `[voice.asr]` but no
+  `corrector` line would then collide with a duplicate
+  `[voice.asr]` on the next read. The helper now appends
+  the missing key *inside* the existing section body.
+  Caught by `test_put_voice_config_persists_asr_to_toml`
+  on the first iteration of Track B.
+
+#### Spec
+- **docs**: `FEATURE-SPEC-SPRINT18.md` — new spec, signed
+  off by the user (scope C: Track A + B + C, 1.5 days).
+  Inherits Sprint 17b §4.1's "ASR engine should not
+  reload on every PUT" rationale and supersedes its
+  "17b does not expose a UI to change asr backend"
+  commitment — Sprint 18 makes those fields editable
+  via the dashboard, with `restart_required` driving a
+  banner so the user knows when a restart is needed.
+
+#### Verified
+- `cd frontend && pnpm tsc --noEmit` — 0 errors
+- `cd frontend && pnpm vitest run` — 57/57 tests pass
+  (52 from Sprint 17b + 5 new SignalCard tests)
+- `cd frontend && pnpm build` — built in 2.23s, no new
+  warnings (the existing dynamic-import warnings for
+  `halo-voice-ws`, `halo-live2d-bridge`, and
+  `@tauri-apps/api` are pre-existing and unrelated to
+  Sprint 18)
+- `cd backend && .venv/bin/pytest tests/voice/
+  test_voice_config_asr.py tests/voice/test_voice_ws.py`
+  — 22/22 tests pass (10 new + 12 prior). Full voice
+  suite has 80 tests total; the Sprint 17b WS rate-limit
+  test remains skipped (Starlette 0.41+ WS hang, see
+  memory `starlette-async-patterns.md`).
+- Manual smoke: open `/`, see the layered sine wave in
+  the right panel above the avatar (idle drift). Hold
+  the mic button — wave pulses to your voice. Release —
+  wave decays to idle drift over ~1s. Open Settings →
+  Voice — see the new "ASR engine" + "Corrector"
+  sections with radios. Save — toast confirms
+  persistence; if asr changed, the "Restart required"
+  banner appears and the next GET keeps it.
+
+#### Out of scope (deferred to Sprint 19+)
+- Tauri always-on mic capture (push-to-talk remains)
+- fsmn-vad-online real per-frame speech probability
+  (we still use RMS-energy as the cockpit level source)
+- Cantonese Whisper fine-tune training (M9-E Layer 2)
+- Auto-restart of the backend on ASR change (would
+  require a separate reliability sprint)
+
 ### Sprint 17a — voice hygiene: strict wake-phrase mode + cross-sentence sanitizer
 
 Strict wake-phrase mode is **on by default** (breaking change

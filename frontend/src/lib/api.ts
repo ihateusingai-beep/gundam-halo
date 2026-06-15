@@ -103,10 +103,15 @@ export const api = {
   // Sprint 17b also adds read-only fields on the GET response
   // (asr_backend, asr_corrector, restart_required) — those are
   // surfaced by the Settings → Voice tab so the user can see
-  // which engine is loaded. Changing them requires editing
-  // config.toml and restarting the backend (Sprint 17b
-  // §4.1 — the ASR engine is 2GB+ and shouldn't reload on
-  // every config PUT).
+  // which engine is loaded.
+  //
+  // Sprint 18 Track B: the ASR engine and corrector are now
+  // **editable** via the Settings → Voice tab. Both are optional
+  // in the PUT payload; the backend validates the value, persists
+  // it to config.toml, and flips `restart_required: true` in the
+  // response when either field actually changed. Changing either
+  // requires a backend restart (the 2GB SenseVoice + fsmn-vad
+  // pipeline is loaded once at voice WS connect time).
   getVoiceConfig: () =>
     request<{
       wake_phrases: string[];
@@ -118,6 +123,8 @@ export const api = {
   setVoiceConfig: (payload: {
     wake_phrases: string[];
     strict_wake_phrase: boolean;
+    asr_backend?: string;
+    asr_corrector?: string;
   }) =>
     request<{
       wake_phrases: string[];

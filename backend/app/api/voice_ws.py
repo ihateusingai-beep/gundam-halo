@@ -781,38 +781,61 @@ async def get_voice_config() -> dict[str, Any]:
         "strict_wake_phrase": cfg.strict_wake_phrase,
         "asr_backend": cfg.asr.backend,
         "asr_corrector": cfg.asr.corrector,
-        "restart_required": False,  # Sprint 17b: future — set
-                                   # true after a Sprint 17b
-                                   # config PUT that needs a
-                                   # restart (none in this
-                                   # sprint since the only
-                                   # PUT-ed fields are
-                                   # wake_phrases and
-                                   # strict_wake_phrase,
-                                   # both runtime).
+        # Sprint 18: read the in-process flag set by
+        # `put_voice_config` when the user just changed the
+        # asr_backend or asr_corrector. The flag is cleared
+        # by any subsequent PUT that doesn't change either
+        # field (see put_voice_config).
+        "restart_required": _voice_restart_required_flag(),
     }
+
+
+# Sprint 18: module-level flag for the in-process "did the
+# last PUT change the ASR engine / corrector?" state. This
+# is process-local and resets on backend restart (which is
+# the right semantic — after a restart, the new value has
+# been picked up by the voice WS pipeline).
+_voice_restart_required: bool = False
+
+
+def _voice_restart_required_flag() -> bool:
+    return _voice_restart_required
 
 
 @router.put("/voice/config")
 async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
-    """Sprint 16 + 17a: update the voice config in-memory + persist
-    to config.toml. Both `wake_phrases` and `strict_wake_phrase`
-    are editable. Other [voice] keys are not touched.
+    """Sprint 16 + 17a + 18: update the voice config in-memory + persist
+    to config.toml.
 
-    Payload (both fields required; send the current value of
-    whichever one you don't want to change):
+    Required payload fields (the dashboard always sends the current
+    form state, so we don't accept implicit "use the current value"):
       - `wake_phrases: list[str]` — non-empty list of non-empty strings.
       - `strict_wake_phrase: bool` — if true, voice turns are
         discarded unless the ASR transcript starts with a
         configured wake phrase.
 
+    Optional payload fields (Sprint 18):
+      - `asr_backend: "whisper_local" | "yuesub"` — the ASR engine
+        to load on the next voice WS connect. Omit to leave the
+        current value untouched. Changing this sets
+        `restart_required: true` in the response.
+      - `asr_corrector: "bert" | "opencc" | "none"` — which text
+        corrector to apply (yuesub backend only). Omit to leave
+        the current value untouched. Changing this sets
+        `restart_required: true` in the response.
+
     Persistence:
       - Edit `~/.gundam-halo/config.toml` [voice] section to add
-        the new `wake_phrases` list AND the `strict_wake_phrase`
-        line (we don't blow away the user's other [voice] settings
-        — we only touch the keys we own).
+        the new keys (we don't blow away the user's other [voice]
+        settings — we only touch the keys we own).
       - The in-process config is updated immediately so the next
         voice turn picks up the change without a server restart.
+      - For asr_backend / asr_corrector the in-process change does
+        NOT affect the already-built pipeline (the voice pipeline
+        is constructed at WS connect time; the new value will be
+        picked up the next time the user reconnects, but we
+        surface `restart_required: true` so the dashboard can
+        prompt the user explicitly).
     """
     import asyncio
     import re
@@ -858,14 +881,88 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
             detail="`strict_wake_phrase` must be a boolean",
         )
 
+    # ---- Sprint 18: optional asr_backend / asr_corrector validation ----
+    # Both are optional. If absent, the current value is left
+    # untouched and `restart_required` is not flipped for that
+    # field. If present, the value must be one of the known
+    # engines / correctors; otherwise we return 400.
+    new_asr_backend: str | None = None
+    if "asr_backend" in payload:
+        raw = payload["asr_backend"]
+        if not isinstance(raw, str):
+            raise HTTPException(
+                status_code=400,
+                detail="`asr_backend` must be a string",
+            )
+        if raw not in ("whisper_local", "yuesub"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"`asr_backend` must be one of: whisper_local, yuesub "
+                    f"(got {raw!r})"
+                ),
+            )
+        new_asr_backend = raw
+
+    new_asr_corrector: str | None = None
+    if "asr_corrector" in payload:
+        raw = payload["asr_corrector"]
+        if not isinstance(raw, str):
+            raise HTTPException(
+                status_code=400,
+                detail="`asr_corrector` must be a string",
+            )
+        if raw not in ("bert", "opencc", "none"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"`asr_corrector` must be one of: bert, opencc, none "
+                    f"(got {raw!r})"
+                ),
+            )
+        new_asr_corrector = raw
+
     # Update in-memory config (so the next turn picks it up).
     cfg = get_config()
     cfg.voice.wake_phrases = normalized
     cfg.voice.strict_wake_phrase = new_strict
-    # Sprint 17b: also track which fields the user just changed
-    # so the GET response can flag restart_required. wake_phrases
-    # and strict_wake_phrase are runtime-tunable; the asr.* fields
-    # are read-only via PUT (changing them requires a restart).
+
+    # Sprint 18: diff vs current for restart_required. If the
+    # user actually changed asr_backend or asr_corrector (i.e.
+    # sent a value AND that value differs from the in-memory
+    # value), the dashboard should prompt the user to restart
+    # the backend. wake_phrases and strict_wake_phrase are
+    # runtime-tunable and don't require a restart.
+    prev_asr_backend = cfg.voice.asr.backend
+    prev_asr_corrector = cfg.voice.asr.corrector
+
+    if new_asr_backend is not None:
+        cfg.voice.asr.backend = new_asr_backend
+    if new_asr_corrector is not None:
+        cfg.voice.asr.corrector = new_asr_corrector
+
+    restart_required = (
+        (new_asr_backend is not None and new_asr_backend != prev_asr_backend)
+        or (new_asr_corrector is not None and new_asr_corrector != prev_asr_corrector)
+    )
+
+    # Persist the in-process flag for the GET endpoint. If the
+    # user just changed either asr field, set the flag. If
+    # they sent a PUT that *didn't* touch either asr field,
+    # clear it (the previous banner is now stale — they
+    # already restarted or decided to keep the old value).
+    # Note: this is process-local; the flag clears on backend
+    # restart, which is the right semantic (the restart picks
+    # up the new value).
+    global _voice_restart_required
+    if restart_required:
+        _voice_restart_required = True
+    else:
+        # PUT did not change the ASR fields — clear any stale
+        # banner so the dashboard doesn't keep nagging the user
+        # after they restart.
+        _voice_restart_required = False
+
     # Invalidate the cache so future get_config() reloads from disk.
     from app.core import config as config_mod
     config_mod._config = None
@@ -916,6 +1013,40 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
                 text += "\n"
             text += new_strict_line
 
+        # ---- Sprint 18: asr_backend line (under [voice.asr]) ----
+        # Only edit if the user actually sent a value. We
+        # target a line starting with `backend = ...` inside
+        # the [voice.asr] section by anchoring to the section
+        # header (use a lazy match: from [voice.asr] up to the
+        # next section header).
+        if new_asr_backend is not None:
+            new_asr_backend_line = f"backend = {json.dumps(new_asr_backend)}"
+            text, n = _replace_section_key(
+                text,
+                section="voice.asr",
+                key="backend",
+                new_value=new_asr_backend_line,
+            )
+            if n == 0:
+                # No [voice.asr] section yet — append a new one.
+                if not text.endswith("\n"):
+                    text += "\n"
+                text += "\n[voice.asr]\n" + new_asr_backend_line + "\n"
+
+        # ---- Sprint 18: asr_corrector line (under [voice.asr]) ----
+        if new_asr_corrector is not None:
+            new_asr_corrector_line = f"corrector = {json.dumps(new_asr_corrector)}"
+            text, n = _replace_section_key(
+                text,
+                section="voice.asr",
+                key="corrector",
+                new_value=new_asr_corrector_line,
+            )
+            if n == 0:
+                if not text.endswith("\n"):
+                    text += "\n"
+                text += "\n[voice.asr]\n" + new_asr_corrector_line + "\n"
+
         config_path.write_text(text, encoding="utf-8")
     except Exception as e:
         logger.error(f"failed to persist voice config: {e}")
@@ -926,6 +1057,7 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
             "strict_wake_phrase": new_strict,
             "asr_backend": cfg.voice.asr.backend,
             "asr_corrector": cfg.voice.asr.corrector,
+            "restart_required": restart_required,
             "persisted": False,
             "error": str(e),
         }
@@ -935,6 +1067,7 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
         "strict_wake_phrase": new_strict,
         "asr_backend": cfg.voice.asr.backend,
         "asr_corrector": cfg.voice.asr.corrector,
+        "restart_required": restart_required,
         "persisted": True,
     }
 
@@ -943,3 +1076,68 @@ def _toml_list(items: list[str]) -> str:
     """Render a Python list[str] as a TOML array literal."""
     inner = ", ".join(f'"{s}"' for s in items)
     return f"[{inner}]"
+
+
+def _replace_section_key(
+    text: str, section: str, key: str, new_value: str
+) -> tuple[str, int]:
+    """Replace `key = ...` inside the [section] block.
+
+    Anchors to the `[section]` header and stops at the next
+    `[other_section]` header. Returns (text, replacement_count).
+
+    Behavior:
+      - If the section exists AND the key exists inside it:
+        replace the key's value. Returns (new_text, 1).
+      - If the section exists AND the key does NOT exist:
+        append the key inside the section (before the next
+        section header or EOF). Returns (new_text, 1).
+      - If the section does NOT exist: return (text, 0) and let
+        the caller append a new section. (Sprint 18: this is
+        the "first-time config save" path.)
+
+    We don't use a full TOML parser here because config.toml is
+    small and we want a minimal-edit, no-surprise diff. The
+    pattern handles inline strings (`backend = "yuesub"`) and
+    scalars (`corrector = "bert"`); we don't expect arrays or
+    tables on these particular lines.
+
+    Sprint 18: this is used by `put_voice_config` to write
+    `voice.asr.backend` and `voice.asr.corrector` to disk
+    without disturbing the user's other [voice] keys. The
+    "append key inside existing section" branch fixes the
+    early-2026-06-15 bug where the previous impl returned
+    (text, 0) for a missing key, causing the caller to append
+    a *new* [section] header, which then collided with the
+    existing one in real config.toml files (where the user
+    already has [voice.asr] but no `corrector` line).
+    """
+    import re
+
+    # Match the section header, then any lines until the next
+    # [section] header (or EOF). Inside that block, replace
+    # the key = value line.
+    # Pattern: `^[\s]*\[section\][\s]*\n` ... up to next `^[\s]*\[` or EOF
+    section_pat = re.compile(
+        rf"(?ms)^\s*\[{re.escape(section)}\]\s*\n(?P<body>.*?)(?=^\s*\[|\Z)"
+    )
+    m = section_pat.search(text)
+    if m is None:
+        return text, 0
+    body = m.group("body")
+    # Replace key = value inside the body
+    key_pat = re.compile(
+        rf"(?m)^\s*{re.escape(key)}\s*=\s*.*?$"
+    )
+    new_body, n = key_pat.subn(new_value, body, count=1)
+    if n == 1:
+        new_text = text[:m.start("body")] + new_body + text[m.end("body"):]
+        return new_text, 1
+    # Key not present in the section. Append it inside the
+    # section body (so we don't accidentally create a
+    # duplicate [section] header downstream). Trim trailing
+    # whitespace from the body and add a newline before the
+    # new key.
+    body_with_new = body.rstrip() + "\n" + new_value + "\n"
+    new_text = text[:m.start("body")] + body_with_new + text[m.end("body"):]
+    return new_text, 1
