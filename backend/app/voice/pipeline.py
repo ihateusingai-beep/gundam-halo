@@ -68,7 +68,6 @@ class VoicePipeline:
             await pipeline.feed_frame(frame)
         result = await pipeline.finalize_turn()
     """
-
     def __init__(
         self,
         vad: VADInterface,
@@ -80,20 +79,31 @@ class VoicePipeline:
         min_silence_ms: int = 700,
         sample_rate: int = 16000,
         on_user_text: Callable[[str, str], asyncio.Future] | None = None,
+        # Sprint 17b: optional second VAD for per-frame audio-level
+        # broadcasting. When set, the pipeline calls
+        # audio_level_vad.process_frame() for every audio frame
+        # (in addition to vad.process_frame()) and surfaces the
+        # resulting probability via last_audio_level. The
+        # utterance-boundary logic still uses vad exclusively.
+        audio_level_vad: VADInterface | None = None,
     ) -> None:
         """Build a pipeline.
 
         Args:
-            vad: VAD engine
+            vad: VAD engine (silero in v1, used for utterance boundary)
             asr: ASR engine
-            speech_threshold_start: VAD prob ≥ this → speech start
-            speech_threshold_end: VAD prob < this → silence (end)
+            speech_threshold_start: VAD prob >= this -> speech start
+            speech_threshold_end: VAD prob < this -> silence (end)
             min_speech_ms: ignore utterances shorter than this
-            min_silence_ms: continuous silence ≥ this triggers end-of-utterance
+            min_silence_ms: continuous silence >= this triggers end-of-utterance
             sample_rate: audio sample rate (Hz)
-            on_user_text: async callback (session_id, text) → agent_reply.
-                If None, the pipeline just emits the ASR event and doesn't
-                call any agent. Useful for tests.
+            on_user_text: async callback (session_id, text) -> agent_reply.
+                If None, the pipeline just emits the ASR event and
+                doesn't call any agent. Useful for tests.
+            audio_level_vad: Sprint 17b -- optional second VAD whose
+                probability is broadcast on every frame as a
+                vad.audio_level event. Default None (no audio-level
+                frames; existing callers see no change).
         """
         self._vad = vad
         self._asr = asr
@@ -103,6 +113,35 @@ class VoicePipeline:
         self._min_silence_ms = min_silence_ms
         self._sample_rate = sample_rate
         self._on_user_text = on_user_text
+        # Sprint 17b: dual-VAD wiring. The audio-level VAD doesn't
+        # drive utterance boundaries -- it's a passive level source
+        # for the cockpit HUD.
+        self._audio_level_vad = audio_level_vad
+        # The last per-frame audio level (0.0-1.0). voice_ws reads
+        # this after each feed_frame call to broadcast a
+        # vad.audio_level WS frame.
+        self.last_audio_level: float = 0.0
+
+        # Per-turn state (reset on each turn)
+        self._state = TurnState.IDLE
+        self._buffer: bytearray = bytearray()
+        self._silence_frames: int = 0  # consecutive silence frames since last speech
+        self._speech_start_ms: int | None = None
+        self._turn_started_at_ms: int = 0
+        self._last_session_id: str = ""
+        self._frames_processed = 0
+        self._frames_speech = 0
+        # Convert min_silence_ms to frame count. Default frame is 250ms
+        # (= sample_rate * 2 bytes * 0.25 / 1000); user config supplies
+        # frame_duration_ms. We pre-compute the threshold here.
+        frame_ms = 1000.0 * (sample_rate * 2 * 0.25) / sample_rate / 1000
+        # sample_rate cancels; the "frame is 250ms" assumption is baked
+        # into our spec (see ARCHITECTURE §15.4).
+        frame_ms = 250.0
+        self._silence_frames_threshold = max(
+            1, int(round(self._min_silence_ms / frame_ms))
+        )
+
 
         # Per-turn state (reset on each turn)
         self._state = TurnState.IDLE
@@ -128,6 +167,12 @@ class VoicePipeline:
         """Load VAD + ASR models."""
         await self._vad.warmup()
         await self._asr.warmup()
+        # Sprint 17b: dual-VAD. Warm up the audio-level VAD
+        # too (no-op for the energy-based FsmnVAD; will load
+        # the fsmn-vad ONNX bundle once we swap the level
+        # source in a follow-up sprint).
+        if self._audio_level_vad is not None:
+            await self._audio_level_vad.warmup()
 
     def reset(self) -> None:
         """Reset all per-turn state. Called between turns or on cancel."""
@@ -137,6 +182,12 @@ class VoicePipeline:
         self._speech_start_ms = None
         self._turn_started_at_ms = 0
         self._vad.reset()
+        # Sprint 17b: also reset the audio-level VAD (clears
+        # any streaming cache state). The energy-based FsmnVAD
+        # has no state to reset; the follow-up fsmn-vad path
+        # will clear its param_dict cache here.
+        if self._audio_level_vad is not None:
+            self._audio_level_vad.reset()
 
     async def begin_turn(self, session_id: str) -> None:
         """Mark a new turn starting. Idempotent."""
@@ -161,13 +212,32 @@ class VoicePipeline:
         we keep streaming and let the caller decide when to finalize.
         """
         if self._state == TurnState.IDLE or self._state == TurnState.AGENT_THINKING:
-            # Ignore frames outside an active turn
+            # Ignore frames outside an active turn. But still
+            # update the audio-level field for HUD if a level
+            # VAD is configured (so the cockpit "sees" ambient
+            # sound even outside a turn). This is a passive
+            # tap, not a turn-state mutation.
+            if self._audio_level_vad is not None:
+                level_event = self._audio_level_vad.process_frame(
+                    audio_frame, sample_rate=self._sample_rate
+                )
+                self.last_audio_level = level_event.probability
             return
 
         self._frames_processed += 1
         event: VADEvent = self._vad.process_frame(
             audio_frame, sample_rate=self._sample_rate
         )
+
+        # Sprint 17b: also run the audio-level VAD (if configured)
+        # and update last_audio_level. voice_ws reads this after
+        # the feed_frame call to broadcast a vad.audio_level
+        # WS frame (rate-limited to 50ms on the WS side).
+        if self._audio_level_vad is not None:
+            level_event = self._audio_level_vad.process_frame(
+                audio_frame, sample_rate=self._sample_rate
+            )
+            self.last_audio_level = level_event.probability
 
         if self._state == TurnState.LISTENING:
             if event.probability >= self._speech_threshold_start:

@@ -1,7 +1,9 @@
 """VAD engine factory.
 
 Picks a VAD backend from `voice.vad.backend` in config.toml.
-v1: only `silero`. Future: `webrtc`, `pyannote`.
+v1: `silero` (utterance boundary). Sprint 17b adds `fsmn`
+(per-frame audio level source for the cockpit HUD; runs in
+parallel with silero in the dual-VAD pipeline).
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import logging
 
 from app.core.config import VoiceVADConfig
+from app.voice.vad.fsmn_vad import FsmnVAD
 from app.voice.vad.silero_vad import SileroVAD
 from app.voice.vad.vad_interface import VADInterface
 
@@ -41,9 +44,17 @@ def create_vad(
     if backend == "silero":
         return SileroVAD(model_path=config.model_path)
 
+    if backend == "fsmn":
+        # Sprint 17b: per-frame audio-level VAD. The FsmnVAD
+        # class currently uses RMS energy as the level source;
+        # a follow-up sprint will swap to fsmn-vad-online's
+        # per-chunk speech probability (see the module
+        # docstring on FsmnVAD for the rationale).
+        return FsmnVAD()
+
     raise ValueError(
         f"Unknown VAD backend: {backend!r}. "
-        f"v1 supports only 'silero'."
+        f"Supported: 'silero' (v1), 'fsmn' (Sprint 17b)."
     )
 
 

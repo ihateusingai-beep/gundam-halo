@@ -50,6 +50,7 @@ from app.voice.live2d.live2d_factory import create_live2d
 from app.voice.pipeline import VoicePipeline
 from app.voice.tts.tts_factory import create_tts
 from app.voice.tts.voice_sanitizer import SanitizerState, sanitize_for_tts
+from app.voice.vad.fsmn_vad import FsmnVAD
 from app.voice.vad.vad_factory import create_vad
 from app.voice.wake_phrase import detect_wake_phrase, first_wake_phrase
 
@@ -168,6 +169,15 @@ async def voice_websocket(websocket: WebSocket) -> None:
     try:
         vad = create_vad(cfg.vad)
         asr = create_asr(cfg.asr)
+        # Sprint 17b: dual VAD. The audio-level VAD runs in
+        # parallel with the utterance-boundary VAD and feeds
+        # the cockpit HUD's per-frame pulse (see
+        # docs/FEATURE-SPEC-SPRINT17b.md §5.1). Always
+        # created for voice WS connections regardless of the
+        # configured utterance-boundary backend; the level
+        # source itself is currently RMS-energy-based and
+        # ships in the same venv, so no extra dep is required.
+        audio_level_vad = FsmnVAD()
         pipeline = VoicePipeline(
             vad=vad,
             asr=asr,
@@ -177,6 +187,7 @@ async def voice_websocket(websocket: WebSocket) -> None:
             min_silence_ms=cfg.vad.min_silence_ms,
             sample_rate=cfg.sample_rate,
             on_user_text=_agent_callback,
+            audio_level_vad=audio_level_vad,
         )
         await pipeline.warmup()
     except Exception as e:
@@ -384,6 +395,14 @@ async def voice_websocket(websocket: WebSocket) -> None:
                 "data": {"session_id": sid, "chunks": chunk_count},
             })
 
+    # Sprint 17b: rate-limit vad.audio_level broadcasts to
+    # one per 50ms. Without this, a 250ms frame would
+    # broadcast 4-5 frames in quick succession, which floods
+    # the WebSocket and adds nothing the HUD can render (the
+    # pulse interpolation is already sub-50ms via rAF).
+    _last_audio_level_ms: int = 0
+    _AUDIO_LEVEL_MIN_INTERVAL_MS = 50
+
     try:
         while True:
             message = await websocket.receive()
@@ -395,6 +414,22 @@ async def voice_websocket(websocket: WebSocket) -> None:
                 if not turn_active:
                     continue
                 await pipeline.feed_frame(message["bytes"])
+                # Sprint 17b: broadcast vad.audio_level so the
+                # cockpit HUD can follow the user's voice in
+                # real time. Rate-limited to 50ms (20Hz) so we
+                # don't flood the WebSocket; the HUD's rAF
+                # interpolation smooths the rest.
+                now_ms = int(time.time() * 1000)
+                if now_ms - _last_audio_level_ms >= _AUDIO_LEVEL_MIN_INTERVAL_MS:
+                    await _send_json(websocket, {
+                        "type": "vad.audio_level",
+                        "data": {
+                            "session_id": current_session_id,
+                            "level": pipeline.last_audio_level,
+                            "ts_ms": now_ms,
+                        },
+                    })
+                    _last_audio_level_ms = now_ms
                 continue
 
             if "text" in message and message["text"] is not None:
