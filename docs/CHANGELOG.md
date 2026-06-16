@@ -337,6 +337,88 @@ the full design.
   corrector changes trigger a restart; wake_phrases /
   strict_wake_phrase are runtime-tunable.
 
+### Sprint 19c — always-on mic (Phase 1: backend)
+
+Sprint 19c un-wires the existing pipeline VAD
+`speech_start` / `speech_end` events (already published
+to the in-process event bus by `app/voice/pipeline.py`
+but never forwarded to the client) and adds an
+`always_on_mic` runtime-tunable to the voice config.
+The frontend changes (`useVoiceInput` alwaysOn prop,
+`VoicePanel` ⏸ / ▶ toggle, `VoiceTab` voice interaction
+mode radio) ship in Sprint 19c.5 / Sprint 20. See
+`docs/FEATURE-SPEC-SPRINT19c.md` §7a for the
+Phase 1 / Phase 2 split rationale (Starlette 0.41+
+TestClient WS hang, see
+`starlette-async-patterns.md`).
+
+#### Changed
+- **backend**: `app/voice/pipeline.py` already
+  publishes `VOICE_VAD_SPEECH_START` / `_END` to the
+  event bus. Sprint 19c just un-wires the forwarder.
+- **backend**: `app/api/voice_ws.py` `voice_websocket`
+  — subscribes to the two events on connect, forwards
+  them to the client as `vad.state` WS frames
+  (sync subscribers that schedule `loop.create_task
+  (_send_json(...))` so the WS send doesn't block the
+  publisher). The subscriptions are unsubscribed in
+  the `finally` block to prevent leaks across
+  reconnects.
+- **backend**: `app/api/voice_ws.py` `put_voice_config`
+  — accepts the new optional `always_on_mic: bool`
+  field. Validates as bool, persists to
+  `config.toml` under `[voice] always_on_mic`, includes
+  it in both the success and error responses. The
+  field is runtime-tunable — `restart_required` is
+  **not** flipped because the always-on flow is a
+  frontend UX choice, not a backend pipeline change.
+- **backend**: `app/api/voice_ws.py` `get_voice_config`
+  — returns the current `always_on_mic` value.
+- **backend**: `app/core/config.py` `VoiceConfig` —
+  adds the `always_on_mic: bool = False` field plus the
+  matching loader entry under `_load_voice_config`.
+
+#### Tests
+- **backend**: `tests/voice/test_voice_config_asr.py`
+  added 3 new tests: PUT with `always_on_mic: true`
+  persists to config.toml and the GET response
+  reflects it, a non-bool `always_on_mic` value
+  returns 400 with a clear error, GET includes the
+  field. All 13 Sprint 18+19b tests + 3 Sprint 19c
+  tests = 16/16 pass. The `vad.state` WS forwarding
+  test is deferred to Sprint 19c.5 (the Sprint 17b
+  Starlette WS hang on a second concurrent connection
+  makes adding a third WS-level test risky in this
+  session; see `starlette-async-patterns.md`).
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_fsmn_vad.py
+  tests/voice/test_voice_config_asr.py
+  tests/voice/test_voice_ws.py
+  tests/voice/test_pipeline.py
+  tests/voice/test_audio_level_broadcast.py` — 57
+  passed, 1 skipped (the existing Starlette WS
+  rate-limit test from Sprint 17b; Sprint 19c adds
+  no new skips).
+
+#### Out of scope (deferred to 19c.5 / 19d / 20+)
+- **19c.5 / Sprint 20**: Phase 2 frontend — the
+  `useVoiceInput` alwaysOn prop, the `VoicePanel` ⏸ /
+  ▶ toggle, the `VoiceTab` voice interaction mode
+  radio, the `api.ts` type additions. Phase 2 is a
+  0.5-1 day sprint.
+- **19d**: Cantonese Whisper fine-tune.
+- **Tauri Swift binding for system-tray mic-active
+  indicator** — the Tauri config + Info.plist are
+  already set up for mic access; the Swift binding
+  for a tray-icon animation while always-on is
+  running is a separate task.
+- **Global hotkey to toggle** (e.g. ⌥Space) — the
+  Tauri `global-shortcut` plugin is configured but
+  not bound to this flow.
+- **iOS / iPadOS** — Tauri 2 iOS is experimental.
+
 ### Sprint 17a — voice hygiene: strict wake-phrase mode + cross-sentence sanitizer
 
 Strict wake-phrase mode is **on by default** (breaking change

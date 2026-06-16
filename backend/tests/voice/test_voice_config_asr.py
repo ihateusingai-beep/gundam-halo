@@ -508,3 +508,88 @@ def test_schedule_restart_module_is_importable_and_handles_no_loop(caplog):
     assert restart_mod.is_restart_scheduled() is False
     # Cleanup
     restart_mod._set_restart_scheduled(False, reason="test_cleanup")
+
+
+# ---------------------------------------------------------------------------
+# Sprint 19c: always_on_mic runtime-tunable
+# ---------------------------------------------------------------------------
+
+
+def test_put_voice_config_persists_always_on_mic(voice_client, monkeypatch, tmp_path):
+    """Sprint 19c: PUT with always_on_mic=true writes
+    the value to config.toml and the GET response
+    reflects it. The field is runtime-tunable (no
+    restart_required flip)."""
+    cfg = _config_module.get_config()
+    cfg.voice.strict_wake_phrase = True
+    cfg.voice.always_on_mic = False
+    _reset_home_to_tmp(monkeypatch, tmp_path)
+    config_path = tmp_path / "config.toml"
+    try:
+        # Seed config.toml with a [voice] section so the
+        # strict_wake_phrase / always_on_mic sub matches
+        # target the existing block.
+        config_path.write_text(
+            "[voice]\n"
+            "wake_phrases = [\"Unicorn\"]\n"
+            "strict_wake_phrase = true\n",
+            encoding="utf-8",
+        )
+
+        resp = voice_client.put("/voice/config", json={
+            "wake_phrases": ["Unicorn"],
+            "strict_wake_phrase": True,
+            "always_on_mic": True,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["always_on_mic"] is True
+        # always_on_mic is runtime-tunable — no restart
+        assert data["restart_required"] is False
+        assert data["restart_scheduled"] is False
+        assert data["persisted"] is True
+
+        # GET reflects the new value
+        get_resp = voice_client.get("/voice/config")
+        assert get_resp.json()["always_on_mic"] is True
+
+        # config.toml has the new line
+        text = config_path.read_text(encoding="utf-8")
+        assert "always_on_mic = true" in text
+    finally:
+        cfg.voice.always_on_mic = False
+
+
+def test_put_voice_config_always_on_mic_validation(voice_client, monkeypatch, tmp_path):
+    """Sprint 19c: a non-bool always_on_mic value
+    returns 400. The dashboard's radio group is
+    controlled, but a hand-crafted PUT could send
+    anything — we validate before applying."""
+    cfg = _config_module.get_config()
+    cfg.voice.strict_wake_phrase = True
+    _reset_home_to_tmp(monkeypatch, tmp_path)
+    try:
+        resp = voice_client.put("/voice/config", json={
+            "wake_phrases": ["Unicorn"],
+            "strict_wake_phrase": True,
+            "always_on_mic": "yes",  # not a bool
+        })
+        assert resp.status_code == 400
+        assert "always_on_mic" in resp.json()["detail"]
+    finally:
+        cfg.voice.always_on_mic = False
+
+
+def test_get_voice_config_includes_always_on_mic(voice_client):
+    """Sprint 19c: the GET /voice/config response
+    includes the always_on_mic field so the dashboard
+    can hydrate its radio on mount."""
+    cfg = _config_module.get_config()
+    cfg.voice.always_on_mic = True
+    try:
+        resp = voice_client.get("/voice/config")
+        assert resp.status_code == 200
+        assert "always_on_mic" in resp.json()
+        assert resp.json()["always_on_mic"] is True
+    finally:
+        cfg.voice.always_on_mic = False

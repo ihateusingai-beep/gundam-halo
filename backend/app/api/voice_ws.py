@@ -30,6 +30,7 @@ their config flags are enabled.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -164,6 +165,51 @@ async def voice_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
     client_id = id(websocket)
     logger.info(f"Voice WS {client_id} connected")
+
+    # Sprint 19c: subscribe to the pipeline's VAD
+    # speech_start / speech_end events so the cockpit's
+    # always-on mic mode can auto-fire the agent when
+    # the user starts talking. The event bus calls
+    # subscribers synchronously (see
+    # app/core/events.py), so we schedule the WS send
+    # on the running loop rather than awaiting inline.
+    from app.core.events import EventType, get_event_bus
+
+    _bus = get_event_bus()
+
+    def _on_speech_start(payload):
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_send_json(websocket, {
+                "type": "vad.state",
+                "data": {
+                    "state": "speech_start",
+                    "session_id": payload.get("session_id"),
+                    "ts_ms": payload.get("ts_ms"),
+                },
+            }))
+        except RuntimeError:
+            # Loop closed (e.g. during shutdown). Drop
+            # the event — the WS is gone anyway.
+            pass
+
+    def _on_speech_end(payload):
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_send_json(websocket, {
+                "type": "vad.state",
+                "data": {
+                    "state": "speech_end",
+                    "session_id": payload.get("session_id"),
+                    "ts_ms": payload.get("ts_ms"),
+                    "speech_ms": payload.get("speech_ms"),
+                },
+            }))
+        except RuntimeError:
+            pass
+
+    _bus.subscribe(EventType.VOICE_VAD_SPEECH_START, _on_speech_start)
+    _bus.subscribe(EventType.VOICE_VAD_SPEECH_END, _on_speech_end)
 
     # Build the pipeline (VAD + ASR engines)
     try:
@@ -733,6 +779,16 @@ async def voice_websocket(websocket: WebSocket) -> None:
     except Exception as e:
         logger.exception(f"Voice WS {client_id} error: {e}")
     finally:
+        # Sprint 19c: unsubscribe from the VAD event
+        # bus so a reconnect doesn't accumulate stale
+        # listeners. The pipeline.reset() below runs
+        # regardless of whether the connection ended
+        # cleanly or crashed.
+        try:
+            _bus.unsubscribe(EventType.VOICE_VAD_SPEECH_START, _on_speech_start)
+            _bus.unsubscribe(EventType.VOICE_VAD_SPEECH_END, _on_speech_end)
+        except Exception as e:
+            logger.warning(f"Voice WS {client_id} bus unsubscribe error: {e}")
         if turn_active:
             pipeline.reset()
 
@@ -787,6 +843,10 @@ async def get_voice_config() -> dict[str, Any]:
         "strict_wake_phrase": cfg.strict_wake_phrase,
         "asr_backend": cfg.asr.backend,
         "asr_corrector": cfg.asr.corrector,
+        # Sprint 19c: always-on mic toggle. Runtime-tunable;
+        # the dashboard reads it to decide which UI to show
+        # (push-to-talk button vs ⏸ / ▶ toggle).
+        "always_on_mic": cfg.always_on_mic,
         # Sprint 18: read the in-process flag set by
         # `put_voice_config` when the user just changed the
         # asr_backend or asr_corrector. The flag is cleared
@@ -887,6 +947,19 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
             detail="`strict_wake_phrase` must be a boolean",
         )
 
+    # ---- Sprint 19c: optional always_on_mic ----
+    # Runtime-tunable (no restart). If absent, the current
+    # value is left untouched. If present, must be a bool.
+    new_always_on_mic: bool | None = None
+    if "always_on_mic" in payload:
+        raw = payload["always_on_mic"]
+        if not isinstance(raw, bool):
+            raise HTTPException(
+                status_code=400,
+                detail="`always_on_mic` must be a boolean",
+            )
+        new_always_on_mic = raw
+
     # ---- Sprint 18: optional asr_backend / asr_corrector validation ----
     # Both are optional. If absent, the current value is left
     # untouched and `restart_required` is not flipped for that
@@ -932,6 +1005,11 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
     cfg = get_config()
     cfg.voice.wake_phrases = normalized
     cfg.voice.strict_wake_phrase = new_strict
+    # Sprint 19c: always_on_mic is runtime-tunable; apply
+    # in-memory immediately so the next /voice/config GET
+    # reflects the new value.
+    if new_always_on_mic is not None:
+        cfg.voice.always_on_mic = new_always_on_mic
 
     # Sprint 18: diff vs current for restart_required. If the
     # user actually changed asr_backend or asr_corrector (i.e.
@@ -1050,6 +1128,27 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
                 text += "\n"
             text += new_strict_line
 
+        # ---- Sprint 19c: always_on_mic line (under [voice]) ----
+        # Only edit if the user actually sent a value. Uses
+        # the same pattern as strict_wake_phrase (a flat
+        # bool under [voice]) since both are top-level
+        # voice preferences.
+        if new_always_on_mic is not None:
+            new_aom_line = f"always_on_mic = {str(new_always_on_mic).lower()}\n"
+            text, n = re.subn(
+                r"(?m)^always_on_mic\s*=\s*(?:true|false)\s*$",
+                new_aom_line.rstrip(),
+                text,
+                count=1,
+            )
+            if n == 0:
+                # No existing line — append at the end of
+                # the file (TOML is forgiving about
+                # ordering).
+                if not text.endswith("\n"):
+                    text += "\n"
+                text += new_aom_line
+
         # ---- Sprint 18: asr_backend line (under [voice.asr]) ----
         # Only edit if the user actually sent a value. We
         # target a line starting with `backend = ...` inside
@@ -1094,6 +1193,7 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
             "strict_wake_phrase": new_strict,
             "asr_backend": cfg.voice.asr.backend,
             "asr_corrector": cfg.voice.asr.corrector,
+            "always_on_mic": cfg.voice.always_on_mic,
             "restart_required": restart_required,
             "restart_scheduled": restart_scheduled,
             "persisted": False,
@@ -1105,6 +1205,7 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
         "strict_wake_phrase": new_strict,
         "asr_backend": cfg.voice.asr.backend,
         "asr_corrector": cfg.voice.asr.corrector,
+        "always_on_mic": cfg.voice.always_on_mic,
         "restart_required": restart_required,
         "restart_scheduled": restart_scheduled,
         "persisted": True,

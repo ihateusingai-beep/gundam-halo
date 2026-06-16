@@ -233,6 +233,13 @@ class VoiceConfig:
     # ~/.gundam-halo/config.toml under [voice] or via the
     # Settings → Voice tab.
     strict_wake_phrase: bool = True
+    # Sprint 19c: always-on mic mode. When True, the cockpit
+    # auto-fires the agent on the backend's VAD speech_start
+    # event instead of requiring a push-to-talk hold gesture.
+    # Runtime-tunable (no restart required) because the
+    # always-on flow is a frontend UX choice — the backend
+    # always forwards VAD events either way.
+    always_on_mic: bool = False
 
 
 @dataclass
@@ -483,6 +490,13 @@ def _load_voice_config(toml_data: dict) -> VoiceConfig:
         # pure data; the user-experience nudge lives elsewhere.
         strict_wake_phrase=d.get(
             "strict_wake_phrase", defaults.strict_wake_phrase
+        ),
+        # Sprint 19c: always-on mic toggle. Runtime-tunable
+        # (no restart needed) — the field lives under [voice]
+        # alongside strict_wake_phrase so the user has a
+        # single section to look at for voice preferences.
+        always_on_mic=d.get(
+            "always_on_mic", defaults.always_on_mic
         ),
     )
 
