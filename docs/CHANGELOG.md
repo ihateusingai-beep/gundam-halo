@@ -601,6 +601,107 @@ or training crashes in real time. See
 - **Code-switch tolerance** — mixed Cantonese +
   English + Mandarin in the same turn.
 
+### Sprint 19d addendum — training monitor (background supervision)
+
+Sprint 19d's spec said "actual training run is a
+follow-up session that needs the user present to
+react to WER spikes, OOM, or training crashes in
+real time". The follow-up still needs a
+**monitoring companion** so the user doesn't have
+to sit in front of `tail -f /tmp/cv-yue-train.log`
+for 3 hours. This addendum ships the
+`finetune_whisper_yue_monitor.py` companion script
+plus 7 smoke tests. The actual training run still
+lives in a follow-up session.
+
+#### Added
+- **backend**: `scripts/finetune_whisper_yue_monitor.py`
+  (NEW, ~210 LoC) — background monitor for the
+  M9-E Layer 2 training. Polls the training
+  process + log every 5 minutes (configurable).
+  Exits with a meaningful code on:
+    - 0 — success (process exited AND eval.json
+      found in output_dir)
+    - 1 — bad dataset version (script rejected
+      input — should never happen mid-training)
+    - 2 — WER > threshold (training script's own
+      exit code; process has exited, the model is
+      saved, but the eval failed the acceptance
+      gate)
+    - 3 — process crashed / OOM (process exited
+      but no eval.json was written)
+    - 4 — no log activity for 30+ minutes (likely
+      OOM, hang, or stuck in a checkpoint save)
+  Stdlib-only (no `train` extra, no `psutil`).
+  Uses `os.waitpid(pid, WNOHANG)` for reliable
+  process-exit detection — see the long docstring
+  for why `os.kill(pid, 0)` is unreliable for
+  zombie processes on Linux.
+- **backend**: `tests/voice/test_finetune_monitor.py`
+  (NEW) — 7 smoke tests covering: script imports
+  cleanly, `--help` exits 0 with documented args,
+  `_is_process_alive` correctly handles self-pid
+  (via `os.getpid()` short-circuit) and dead PIDs,
+  `_eval_appeared` reports the marker file, `_log_mtime`
+  returns 0.0 for missing files and the real mtime
+  for real files, full e2e "process dies + eval.json
+  appears → exit 0", full e2e "process dies + no
+  eval.json → exit 3". The e2e tests use
+  `subprocess.Popen(['/bin/sleep', '2'])` instead
+  of a Python subinterpreter — the binary
+  doesn't suffer from the PID-reuse race that
+  bit the first iteration of this test.
+
+#### Runbook (follow-up session, NOT this commit)
+```bash
+# Terminal 1 — start the training
+cd ~/workspace/working/gundam-halo/backend
+.venv/bin/python scripts/finetune_whisper_yue.py \\
+    2>&1 | tee /tmp/cv-yue-train.log &
+TRAIN_PID=$!
+
+# Terminal 2 (or a separate mavis session) —
+# start the monitor alongside. The monitor exits
+# when the training process exits (clean or
+# crash), when the log goes stale for 30+ minutes,
+# or when you Ctrl-C the monitor.
+.venv/bin/python scripts/finetune_whisper_yue_monitor.py \\
+    --log /tmp/cv-yue-train.log \\
+    --pid $TRAIN_PID \\
+    --output_dir ~/.gundam-halo/models/whisper-yue-base/ \\
+    --poll_interval_s 300 \\
+    --stall_timeout_s 1800
+
+# Once the monitor exits 0:
+.venv/bin/python -m pytest tests/voice/test_whisper_yue.py -v
+.venv/bin/python scripts/cantonese_eval.py
+```
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_finetune_script.py
+  tests/voice/test_finetune_monitor.py
+  tests/voice/test_fsmn_vad.py
+  tests/voice/test_voice_config_asr.py
+  tests/voice/test_voice_ws.py` — 58 passed, 1
+  skipped. Zero regression on Sprint 18 + 19a +
+  19b + 19c Phase 1 + 19c Phase 2 + 19d prep
+  baseline.
+
+#### Out of scope (deferred to 20+)
+- **Actual training run** — 3h wall clock,
+  user-present session. The monitor is the
+  supervision layer; the user is the escalation
+  layer.
+- **Fill in `prepare_common_voice_yue` impl** —
+  the 180-LOC dataset materialise-and-split
+  function. Out of scope for this addendum
+  (would balloon into its own sprint). The
+  training script raises `NotImplementedError`
+  until the impl lands.
+- **v0.1.4 `WhisperHFASR` backend swap** — the
+  trained weights are forward-compatible.
+
 ### Sprint 17a — voice hygiene: strict wake-phrase mode + cross-sentence sanitizer
 
 Strict wake-phrase mode is **on by default** (breaking change
