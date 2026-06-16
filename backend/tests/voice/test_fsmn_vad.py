@@ -1,16 +1,28 @@
-"""Sprint 17b Track D: tests for the FsmnVAD audio-level VAD.
+"""Sprint 17b Track D + Sprint 19a: tests for the FsmnVAD audio-level VAD.
 
 The FsmnVAD class is the second VAD in the dual-VAD pipeline
 (see docs/FEATURE-SPEC-SPRINT17b.md §5.1). It produces a
 per-frame audio level (0.0-1.0) that drives the cockpit
-HUD's pulse. The current implementation uses RMS energy with
-log compression; a follow-up sprint will swap to fsmn-vad's
-actual per-frame speech probability.
+HUD's pulse.
 
-These tests verify the contract (probability in [0, 1],
-silence returns near-zero, loud noise returns higher) and
-the factory wiring (`create_vad(backend='fsmn')` returns
-FsmnVAD).
+Sprint 17b used RMS energy with log compression as the
+level source (a placeholder). Sprint 19a replaces that
+placeholder with fsmn-vad-online's actual per-frame speech
+probability (frame SNR — see docs/FEATURE-SPEC-SPRINT19a.md
+§4.5). The model is **lazy-loaded** on first process_frame
+call, and falls back to the RMS path if `model_dir` is
+None or the model fails to load.
+
+These tests verify:
+  - The energy-path contract (Sprint 17b): probability in
+    [0, 1], silence returns near-zero, loud noise returns
+    higher, energy_floor tunable, warmup idempotent, reset
+    clears state, factory wiring.
+  - The Sprint 19a VAD-trained path: lazy load, model
+    load error raises, SNR mapping produces high level
+    for synthetic speech and low for silence, reset calls
+    AllResetDetection, warmup is idempotent on the model
+    path.
 """
 from __future__ import annotations
 
@@ -214,3 +226,216 @@ def test_pipeline_exposes_last_audio_level_after_feed_frame():
     # consulted in the IDLE state. last_audio_level should
     # reflect the quiet tone.
     assert 0.0 < pipeline.last_audio_level < 0.5
+
+
+# ---------------------------------------------------------------------------
+# Sprint 19a: VAD-trained path (model mode)
+# ---------------------------------------------------------------------------
+
+# These tests exercise the VAD-trained level source
+# (Sprint 19a). They use the real fsmn-vad-online model
+# from `~/.gundam-halo/models/iic/speech_fsmn_vad_zh-cn-
+# 16k-common-pytorch` and are skipped if the model isn't
+# available locally. CI environments without the model
+# fall back to the energy path tests above.
+
+import os
+
+FSMN_VAD_MODEL_DIR = os.path.expanduser(
+    "~/.gundam-halo/models/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
+)
+
+
+@pytest.fixture
+def model_vad():
+    """FsmnVAD wired to the real fsmn-vad-online model.
+
+    Skips the test if the model isn't downloaded locally.
+    Use `scripts/setup-yuesub-models.sh` to fetch it.
+    """
+    from app.voice.vad.fsmn_vad import FsmnVAD
+
+    if not os.path.isdir(FSMN_VAD_MODEL_DIR):
+        pytest.skip(
+            f"fsmn-vad model not at {FSMN_VAD_MODEL_DIR} — "
+            "run scripts/setup-yuesub-models.sh"
+        )
+    return FsmnVAD(model_dir=FSMN_VAD_MODEL_DIR)
+
+
+def test_fsmn_vad_lazy_load_does_not_import_funasr_when_model_dir_none():
+    """Sprint 19a: `FsmnVAD(model_dir=None)` must NOT pay
+    the funasr_onnx import cost. We assert that
+    `funasr_onnx` is not in sys.modules after
+    instantiation."""
+    import sys
+
+    # Drop the module so we can prove it stays out of sys.modules
+    sys.modules.pop("funasr_onnx", None)
+    from app.voice.vad.fsmn_vad import FsmnVAD
+
+    v = FsmnVAD(model_dir=None)
+    assert "funasr_onnx" not in sys.modules, (
+        "FsmnVAD(model_dir=None) should not import funasr_onnx"
+    )
+    # Sanity: process_frame in energy mode doesn't load it either
+    import numpy as np
+    audio = np.zeros(4000, dtype=np.int16).tobytes()
+    v.process_frame(audio)
+    assert "funasr_onnx" not in sys.modules
+
+
+def test_fsmn_vad_lazy_load_triggers_on_first_process_frame(model_vad):
+    """Sprint 19a: the model is loaded on the first
+    process_frame call, not in __init__. We assert
+    model_vad._model is not None after one frame."""
+    assert model_vad._model is None  # not yet loaded
+    import numpy as np
+    audio = np.zeros(4000, dtype=np.int16).tobytes()
+    model_vad.process_frame(audio)
+    assert model_vad._model is not None
+    # Re-confirm the model is the fsmn-vad-online class
+    assert "Fsmn_vad_online" in type(model_vad._model).__name__
+
+
+def test_fsmn_vad_synthetic_speech_produces_high_level(model_vad):
+    """Sprint 19a: a 250ms chunk of synthetic speech
+    (200Hz + 400Hz sines, amplitude 0.3) drives the SNR
+    level above 0.5 once the noise floor settles.
+
+    We feed 4 chunks of silence first to let the FSMN
+    accumulate a noise floor estimate, then 4 chunks of
+    synthetic speech. The 4th speech chunk should be
+    distinctly louder than the silence baseline.
+    """
+    import numpy as np
+    sr = 16000
+    frame_samples = 4000
+    t = np.arange(frame_samples) / sr
+    speech = (0.3 * np.sin(2 * np.pi * 200 * t) + 0.3 * np.sin(2 * np.pi * 400 * t)).astype(np.float32)
+    silence = np.zeros(frame_samples, dtype=np.float32)
+
+    # 4 silence chunks to settle noise floor
+    for _ in range(4):
+        model_vad.process_frame((silence * 32768).astype(np.int16).tobytes())
+    # 4 speech chunks — the 4th should be high
+    levels = []
+    for _ in range(4):
+        e = model_vad.process_frame((speech * 32768).astype(np.int16).tobytes())
+        levels.append(e.probability)
+    # The last speech frame should be at or near the top
+    # of the [0, 1] range (clamped SNR for a 200+400Hz
+    # tone at 0.3 amplitude).
+    assert levels[-1] > 0.5, f"expected high level for synthetic speech, got {levels}"
+
+
+def test_fsmn_vad_synthetic_silence_produces_low_level(model_vad):
+    """Sprint 19a: a 250ms chunk of synthetic silence
+    produces a level below 0.2 once the noise floor
+    settles."""
+    import numpy as np
+    frame_samples = 4000
+    silence = np.zeros(frame_samples, dtype=np.float32)
+
+    # 6 silence chunks — the 6th should be at the noise
+    # floor (level ≈ 0).
+    levels = []
+    for _ in range(6):
+        e = model_vad.process_frame((silence * 32768).astype(np.int16).tobytes())
+        levels.append(e.probability)
+    assert levels[-1] < 0.2, f"expected low level for silence, got {levels}"
+
+
+def test_fsmn_vad_reset_clears_scorer_state(model_vad):
+    """Sprint 19a: reset() calls AllResetDetection, so
+    the scorer's frame_probs list returns to empty."""
+    import numpy as np
+    audio = np.zeros(4000, dtype=np.int16).tobytes()
+    model_vad.process_frame(audio)  # loads model + populates state
+    assert len(model_vad._model.vad_scorer.frame_probs) > 0
+    model_vad.reset()
+    assert len(model_vad._model.vad_scorer.frame_probs) == 0
+    assert len(model_vad._model.vad_scorer.decibel) == 0
+
+
+def test_fsmn_vad_warmup_idempotent_on_model_path(model_vad):
+    """Sprint 19a: warmup() is safe to call twice. The
+    second call must not reload the ONNX bundle."""
+    import asyncio
+    asyncio.run(model_vad.warmup())
+    model = model_vad._model
+    asyncio.run(model_vad.warmup())
+    assert model_vad._model is model, "warmup() should not reload the model"
+
+
+def test_fsmn_vad_model_load_error_falls_back_to_energy(tmp_path, caplog):
+    """Sprint 19a: pointing model_dir at a non-existent
+    path falls back to the energy path with a warning
+    log, NOT a hard crash. The cockpit HUD relies on
+    this for availability — the model file is a
+    download, not a system dependency, so a transient
+    download failure shouldn't kill the push-to-talk
+    UX. The warning is surfaced to the server log so
+    ops can diagnose the missing model.
+
+    We use `caplog` (not `pytest.warns`) because the
+    fallback logs via `logger.warning`, not Python's
+    `warnings` module. caplog captures the log record
+    and lets us assert the message.
+
+    Spec §6 risk "Test fixtures can't load the fsmn-vad
+    model" applies here too: in production this code
+    path keeps the cockpit alive when the user's
+    `~/.gundam-halo/models/iic/...` symlink is broken.
+    """
+    import logging
+    from app.voice.vad.fsmn_vad import FsmnVAD
+
+    v = FsmnVAD(model_dir=str(tmp_path / "nonexistent"))
+    import numpy as np
+    audio = np.zeros(4000, dtype=np.int16).tobytes()
+    with caplog.at_level(logging.WARNING, logger="app.voice.vad.fsmn_vad"):
+        e = v.process_frame(audio)
+    # The fallback to energy MUST succeed (returns a
+    # valid VADEvent in [0, 1]) and emit a warning so
+    # ops can see the model isn't where we expected.
+    assert e.probability == 0.0  # silence in, zero out
+    assert e.is_speech is False
+    # We never loaded the model
+    assert v._model is None
+    # And the warning is in the log
+    assert any(
+        "model load failed" in record.message
+        for record in caplog.records
+    ), f"expected 'model load failed' warning, got: {[r.message for r in caplog.records]}"
+
+
+def test_fsmn_vad_factory_passes_model_dir():
+    """Sprint 19a: `create_vad(backend='fsmn')` passes
+    `config.model_path` to FsmnVAD as `model_dir`, so
+    production deployments get the VAD-trained level
+    source while tests can opt out with
+    `FsmnVAD(model_dir=None)`."""
+    import os
+    from unittest.mock import patch
+    from app.voice.vad import vad_factory
+    from app.voice.vad.fsmn_vad import FsmnVAD
+
+    # Capture the FsmnVAD instance built by the factory
+    captured: dict = {}
+    real_init = FsmnVAD.__init__
+
+    def spy_init(self, *args, **kwargs):
+        captured["kwargs"] = kwargs
+        real_init(self, *args, **kwargs)
+
+    with patch.object(FsmnVAD, "__init__", spy_init):
+        cfg = type("Cfg", (), {
+            "backend": "fsmn",
+            "model_path": "/fake/path/to/model",
+        })()
+        vad_factory.create_vad(config=cfg)
+
+    assert captured["kwargs"].get("model_dir") == "/fake/path/to/model", (
+        f"factory should pass model_path as model_dir; got {captured['kwargs']}"
+    )

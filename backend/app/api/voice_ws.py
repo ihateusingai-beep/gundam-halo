@@ -174,10 +174,16 @@ async def voice_websocket(websocket: WebSocket) -> None:
         # the cockpit HUD's per-frame pulse (see
         # docs/FEATURE-SPEC-SPRINT17b.md §5.1). Always
         # created for voice WS connections regardless of the
-        # configured utterance-boundary backend; the level
-        # source itself is currently RMS-energy-based and
-        # ships in the same venv, so no extra dep is required.
-        audio_level_vad = FsmnVAD()
+        # configured utterance-boundary backend.
+        # Sprint 19a: the level source is now VAD-trained
+        # (frame SNR from fsmn-vad-online, see
+        # docs/FEATURE-SPEC-SPRINT19a.md). We pass
+        # `cfg.vad.model_path` so the model is lazy-loaded
+        # on first process_frame call. If the model file
+        # isn't available, the FsmnVAD class falls back
+        # to the Sprint 17b energy path with a warning
+        # log — the cockpit HUD stays alive either way.
+        audio_level_vad = FsmnVAD(model_dir=cfg.vad.model_path)
         pipeline = VoicePipeline(
             vad=vad,
             asr=asr,

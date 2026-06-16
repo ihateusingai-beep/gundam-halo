@@ -45,12 +45,15 @@ def create_vad(
         return SileroVAD(model_path=config.model_path)
 
     if backend == "fsmn":
-        # Sprint 17b: per-frame audio-level VAD. The FsmnVAD
-        # class currently uses RMS energy as the level source;
-        # a follow-up sprint will swap to fsmn-vad-online's
-        # per-chunk speech probability (see the module
-        # docstring on FsmnVAD for the rationale).
-        return FsmnVAD()
+        # Sprint 17b: per-frame audio-level VAD.
+        # Sprint 19a: the level source is now VAD-trained
+        # (frame SNR from fsmn-vad-online, see
+        # docs/FEATURE-SPEC-SPRINT19a.md §4.5). We pass
+        # the configured `model_path` so the production
+        # deployment uses the real fsmn-vad model. Tests
+        # that don't ship the model can pass `model_dir=
+        # None` explicitly to stay in energy mode.
+        return FsmnVAD(model_dir=config.model_path)
 
     raise ValueError(
         f"Unknown VAD backend: {backend!r}. "

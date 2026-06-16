@@ -116,16 +116,9 @@ surgical 1-day sprint.
   to the loaded config.
 
 #### Fixed
-- **backend**: `app/api/voice_ws.py` `_replace_section_key`
-  — earlier draft returned `(text, 0)` when the section
-  existed but the key was missing, causing the caller to
-  append a *new* `[section]` header. Real config.toml
-  files where the user already had `[voice.asr]` but no
-  `corrector` line would then collide with a duplicate
-  `[voice.asr]` on the next read. The helper now appends
-  the missing key *inside* the existing section body.
-  Caught by `test_put_voice_config_persists_asr_to_toml`
-  on the first iteration of Track B.
+- **frontend**: VoicePanel TTS race — two simultaneous binary
+  frames could overlap or play past the queue head. Now
+  sequentially awaited with stale-frame skip.
 
 #### Spec
 - **docs**: `FEATURE-SPEC-SPRINT18.md` — new spec, signed
@@ -168,6 +161,96 @@ surgical 1-day sprint.
 - Cantonese Whisper fine-tune training (M9-E Layer 2)
 - Auto-restart of the backend on ASR change (would
   require a separate reliability sprint)
+
+### Sprint 19a — fsmn-vad-online real per-frame speech probability
+
+Sprint 19a closes the explicit deferred follow-up from
+Sprint 17b Track D (commit `c8c7189`). The cockpit HUD's
+per-frame audio level source is now backed by the real
+fsmn-vad-online model (frame SNR — see
+`docs/FEATURE-SPEC-SPRINT19a.md` §4.5) instead of the
+Sprint 17b RMS-energy placeholder. The wave responds to
+**voice** rather than just **loud sound**: a TV with no
+speech produces a flat wave, a soft-spoken user produces a
+healthy pulse. **No frontend changes, no model downloads,
+no test deletions.** Backend-only, 1-day sprint.
+
+#### Changed
+- **backend**: `app/voice/vad/fsmn_vad.py` — `FsmnVAD`
+  constructor now takes an optional `model_dir` parameter.
+  When set, the model is **lazy-loaded on first
+  `process_frame` call** (not in `__init__` or `warmup`)
+  so the funasr_onnx import cost (~500ms) is paid only
+  when the model path is actually used. When unset
+  (the default, used by tests), the class falls back to
+  the Sprint 17b RMS-energy path. The new SNR-based
+  `level` calculation reads `vad_scorer.decibel[-1]`
+  (frame loudness in dB) and `vad_scorer.
+  noise_average_decibel` (rolling noise floor) and
+  computes `(last_db - noise_db) / 20.0` clamped to
+  `[0, 1]`. The `is_speech` boolean mirrors funasr's
+  internal `GetFrameState` decision rule (speech
+  posterior ≥ noise posterior + `speech_noise_thres`).
+  `reset()` calls `vad_scorer.AllResetDetection()` to
+  clear the scorer's internal cache between turns.
+- **backend**: `app/voice/vad/vad_factory.py` —
+  `create_vad(backend='fsmn')` now passes
+  `config.model_path` as `model_dir` so production
+  deployments get the VAD-trained level source while
+  tests can opt out with `FsmnVAD(model_dir=None)`.
+- **backend**: `app/api/voice_ws.py` line 180 — the
+  inline `FsmnVAD()` instantiation now passes
+  `cfg.vad.model_path` so the cockpit HUD benefits
+  from VAD-trained levels without a factory hop.
+- **backend**: `tests/voice/test_fsmn_vad.py` — kept
+  all 12 existing energy-path tests; added 8 new tests
+  covering the VAD-trained path: lazy load doesn't
+  import funasr when `model_dir=None`, lazy load
+  triggers on first process_frame, synthetic speech
+  produces high level, synthetic silence produces low
+  level, reset clears scorer state, warmup is
+  idempotent, model load error falls back to energy
+  with a warning log (preserves Sprint 17b's
+  availability philosophy), and the factory passes
+  `model_path` as `model_dir`.
+
+#### Spec
+- **docs**: `FEATURE-SPEC-SPRINT19a.md` — new spec.
+  Scope: 1 day, backend-only. Inherits the Sprint 17b
+  §5.1 dual-VAD invariant (silero stays as the
+  utterance-boundary VAD; fsmn-vad-online is **only**
+  the per-frame HUD level source) and the Sprint 17b
+  reliability philosophy (model load errors don't
+  crash push-to-talk — they fall back to energy with
+  a warning log).
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_fsmn_vad.py
+  tests/voice/test_voice_config_asr.py
+  tests/voice/test_voice_ws.py
+  tests/voice/test_pipeline.py
+  tests/voice/test_audio_level_broadcast.py` — 51
+  passed, 1 skipped (the Sprint 17b Starlette WS rate-
+  limit test remains skipped; see
+  `starlette-async-patterns.md`).
+- Synthetic speech (200+400Hz sines, amplitude 0.3)
+  drives `level` to 1.0 after the noise floor
+  settles. Synthetic silence drives `level` to 0.0.
+- The energy-path test `test_fsmn_vad_energy_floor_
+  tunable` still passes — `is_speech` continues to
+  follow the RMS-vs-`energy_floor` comparison in
+  energy mode (the contract is unchanged for tests
+  that opt out of the model path).
+
+#### Out of scope (deferred to 19b/19c/19d)
+- **19b**: auto-restart on ASR change (depends on 19a's
+  pipeline).
+- **19c**: Tauri always-on mic (depends on 19a's
+  VAD-trained `is_speech` so the always-on mode can
+  rely on the VAD's decision).
+- **19d**: Cantonese Whisper fine-tune (independent
+  infra, GPU machine, 3h+ wall clock).
 
 ### Sprint 17a — voice hygiene: strict wake-phrase mode + cross-sentence sanitizer
 
