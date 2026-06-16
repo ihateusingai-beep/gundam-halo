@@ -601,6 +601,111 @@ or training crashes in real time. See
 - **Code-switch tolerance** — mixed Cantonese +
   English + Mandarin in the same turn.
 
+### Sprint 20 — M9-E Layer 2 v0.1.4 rollout plan (spec-only)
+
+Sprint 20 is a **spec-only** sprint. The user
+signed off on 30 min scope: document the 4-step
+rollout that follows Sprint 19d's training
+runbook, so Sprint 21+ can land it without
+re-deriving the design. **No code is written in
+this sprint.** The actual implementation lands
+in Sprint 21+ when the user decides to commit
+the time. See `docs/FEATURE-SPEC-SPRINT20.md` for
+the full design.
+
+#### Planned for v0.1.4 (Sprint 21+)
+
+1. **Step 1 — fill in `prepare_common_voice_yue`
+   impl** (`backend/scripts/finetune_whisper_yue.py:193-246`,
+   180 LoC). Currently raises `NotImplementedError`;
+   the impl must stream `mozilla-foundation/
+   common_voice_<ver>_0` `yue` split, split by
+   `client_id` at the speaker level, materialise
+   to local parquet for resumable download,
+   and cap at `max_train_hours` (~45000 samples
+   for 50h at 4s/utterance).
+2. **Step 2 — add `whisper_hf` backend to the
+   factory** (`backend/app/voice/asr/asr_factory.py`).
+   New `WhisperHFASR` class implements
+   `ASRInterface` using `transformers.pipeline(
+   "automatic-speech-recognition", model=str(model_path))`.
+   Lazy import for the `voice-hf` extra.
+3. **Step 3 — wire `VoiceASRConfig.model_path`
+   for `whisper_hf` and remove the warning** in
+   `WhisperLocalASR.warmup` (lines 80-105). The
+   "fully wired in v0.1.4" TODO goes away.
+   `whisper_local` no longer claims to support
+   `model_path`; `whisper_hf` requires it.
+4. **Step 4 — delete the augmented system note**
+   in `scripts/m9c_voice_tools.py:180-195`. This
+   is the **observable acceptance test** for the
+   fine-tune: if the agent still completes the
+   M9-C fixture without the workaround, the
+   fine-tune worked. If not, git revert.
+
+#### WER acceptance criterion (per M9-E §"Layer 2 acceptance")
+
+- WER < 20% on the held-out Common Voice yue
+  test set. The training script exits with
+  code 2 if WER > 20%; the user re-trains with
+  more epochs (3 → 5), larger LoRA (32 → 64),
+  or more data, or rolls back.
+
+#### Config.toml update (one-time, manual)
+
+```toml
+[voice.asr]
+backend = "whisper_hf"
+model_path = "~/.gundam-halo/models/whisper-yue-base/"
+# `whisper_local` remains available as a
+# backward-compat alias; v0.1.4 adds the choice,
+# it doesn't force the swap.
+```
+
+#### Dependency graph
+
+- **Sprint 21** (0.5-1 day): Step 1
+  (`prepare_common_voice_yue` impl)
+- **User session, 3h+ wall clock**: actual
+  training run with the Sprint 19d monitor
+  (runbook in `docs/FEATURE-SPEC-SPRINT19d.md` §6)
+- **Sprint 22** (1.5 days): Steps 2 + 3 + 4
+  (WhisperHFASR + warning removal + augmented
+  note deletion)
+- **Sprint 23+** (deferred): launchd / systemd
+  supervisor (per Sprint 19b §2)
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_finetune_script.py
+  tests/voice/test_finetune_monitor.py
+  tests/voice/test_fsmn_vad.py
+  tests/voice/test_voice_config_asr.py
+  tests/voice/test_voice_ws.py` — 58 passed, 1
+  skipped. Zero regression on Sprint 18 + 19a +
+  19b + 19c + 19d baseline.
+- `cd frontend && pnpm tsc --noEmit` — 0 errors.
+- `cd frontend && pnpm vitest run` — 63/63 pass.
+- Spec verification: `docs/FEATURE-SPEC-SPRINT20.md`
+  cross-references M9-E §"Layer 2 acceptance" and
+  the M9-C fixture / augmented-note locations.
+
+#### Out of scope (deferred to 21+)
+
+- **Step 1 — `prepare_common_voice_yue` impl** —
+  Sprint 21.
+- **Step 2 — `WhisperHFASR` impl** — Sprint 22.
+- **Step 3 — warning removal** — Sprint 22
+  (bundled with Step 2).
+- **Step 4 — augmented system note deletion** —
+  Sprint 22 (bundled with Step 2).
+- **Step 5 — launchd / systemd supervisor** —
+  Sprint 23+ (per Sprint 19b §2).
+- **Self-record corpus + Layer 2 v2** — per
+  M9-E §"v0.1.3 Layer 2 plan".
+- **mlx-whisper inference** — per M9-E §"Fine-tune
+  tooling".
+
 ### Sprint 19d addendum — training monitor (background supervision)
 
 Sprint 19d's spec said "actual training run is a
