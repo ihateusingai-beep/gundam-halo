@@ -512,6 +512,95 @@ Settings → Voice → Voice interaction mode.
   not bound to this flow.
 - **iOS / iPadOS** — Tauri 2 iOS is experimental.
 
+### Sprint 19d — M9-E Layer 2 prep (smoke test + runbook)
+
+Sprint 19d ships the prep layer for the M9-E Layer 2
+Cantonese Whisper fine-tune. The v0.1.3 infrastructure
+(`train` extra, `scripts/finetune_whisper_yue.py` recipe,
+`tests/voice/test_whisper_yue.py` acceptance gate,
+`scripts/cantonese_eval.py` scorer) is already in
+place; this sprint adds a smoke test that catches
+script rot without running the 3h training session.
+The actual training run is a follow-up session that
+needs the user present to react to WER spikes, OOM,
+or training crashes in real time. See
+`docs/FEATURE-SPEC-SPRINT19d.md` §6 for the runbook.
+
+#### Added
+- **backend**: `tests/voice/test_finetune_script.py`
+  (NEW) — 4 smoke tests covering:
+  - Script is importable via `importlib.util.spec_from_file_location`
+    with the backend root on `sys.path` (the script
+    does `from app.* import ...` at module top, which
+    needs the path bootstrap).
+  - `python scripts/finetune_whisper_yue.py --help`
+    exits 0 with the documented args (`--output_dir`,
+    `--lora_r`, `--dataset_version`).
+  - `prepare_common_voice_yue` is still a
+    `NotImplementedError` stub per the v0.1.3
+    contract. Skipped when the `train` extra isn't
+    installed (the function imports `from datasets
+    import ...` at the top).
+  - The default `--output_dir` matches the path the
+    `test_whisper_yue.py` acceptance gate looks for
+    (`~/.gundam-halo/models/whisper-yue-base/`). If
+    you move the path, move both — this test is the
+    tripwire.
+  - The smoke test also handles a subtle importlib
+    + `@dataclass` interaction: `sys.modules[name] = mod`
+    is set BEFORE `spec.loader.exec_module(mod)` runs,
+    because the script's `DatasetPaths` @dataclass
+    inspects `sys.modules[cls.__module__]` and crashes
+    with `'NoneType' object has no attribute
+    '__dict__'` if the module isn't pre-registered.
+
+#### Runbook for the actual training (follow-up session, NOT this sprint)
+- `cd backend && uv sync --extra train --extra voice`
+- `.venv/bin/python scripts/finetune_whisper_yue.py`
+  — downloads Common Voice 13.0 yue (~30 min),
+  materialises train/val/test splits to
+  `~/.gundam-halo/cache/cv-yue/`, LoRA fine-tunes
+  Whisper base for 3 epochs (~2.5 h on M-series
+  Apple Silicon), merges LoRA into the base weights
+  and saves to `~/.gundam-halo/models/whisper-yue-base/`
+  (HF format), runs WER on the held-out test set
+  and exits 2 if WER > 20%.
+- `.venv/bin/python -m pytest tests/voice/test_whisper_yue.py -v`
+  — the acceptance gate that skips when the model
+  doesn't exist.
+- `.venv/bin/python scripts/cantonese_eval.py` —
+  the 25-case LLM-judge-free eval set.
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_finetune_script.py
+  tests/voice/test_fsmn_vad.py
+  tests/voice/test_voice_config_asr.py
+  tests/voice/test_voice_ws.py` — 51 passed, 1
+  skipped. The new smoke test's stub test skips
+  when the `train` extra isn't installed (expected
+  in unit-test environments without ML deps).
+- Zero regression on Sprint 18 + 19a + 19b + 19c
+  Phase 1 + 19c Phase 2 baseline.
+
+#### Out of scope (deferred to 20+)
+- **Actual training run** — the 3h wall clock
+  session. This is a separate, dedicated session
+  with the user present so we can react to WER
+  spikes, OOM, or training crashes in real time.
+- **v0.1.4 `WhisperHFASR` backend** — the
+  `WhisperLocalASR` (openai-whisper) cannot load
+  HF-format model directories. The trained
+  weights from the follow-up session are forward-
+  compatible with the v0.1.4 swap.
+- **Self-recorded corpus** — the M9-E ticket
+  describes a 30-min user-recording path for
+  personalisation. Defer to Layer 2 v2 after the
+  public Common Voice yue baseline works end-to-end.
+- **mlx-whisper** — Apple Silicon native inference.
+- **Code-switch tolerance** — mixed Cantonese +
+  English + Mandarin in the same turn.
+
 ### Sprint 17a — voice hygiene: strict wake-phrase mode + cross-sentence sanitizer
 
 Strict wake-phrase mode is **on by default** (breaking change
