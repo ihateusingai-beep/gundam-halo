@@ -299,23 +299,90 @@ the frontend half in a follow-up (Sprint 19c.5 / 20).
   the gap is small; the spec #2 acceptance test is
   marked deferred.
 
-**Phase 2 (deferred to Sprint 19c.5 / 20):**
-- Frontend `useVoiceInput` gains the `alwaysOn` prop
-  (auto-start on mount, keep stream open, listen for
-  VAD events).
-- Frontend `halo-voice-ws.ts` handles `vad.state` and
-  publishes to a per-session listener.
-- Frontend `VoicePanel` replaces the push-to-talk
-  button with a ⏸ / ▶ toggle when `always_on_mic` is
-  true.
-- Frontend `VoiceTab` adds the "Voice interaction
-  mode" radio group with push-to-talk / always-on.
-- Frontend `api.ts` types include `always_on_mic`.
+**Phase 2 (shipped in this commit, completing the
+sprint):**
+- Frontend `hooks/use-vad-state-autofire.ts` (NEW) —
+  subscribes to the `vad.state` WS event and fires
+  `voiceBegin` / `voiceEnd` automatically when the user
+  starts / stops talking. The hook accepts an
+  `enabled` flag (true only when `always_on_mic` is on)
+  and a `paused` flag (the ⏸ toggle on the cockpit).
+  Uses `vi.hoisted` test pattern with a mutable
+  `handlerRef` so the mock factory and the test body
+  see the same reference (Sprint 19c subtle pitfall:
+  a plain `let` inside `vi.hoisted` returns a
+  snapshot and the two sides diverge).
+- Frontend `hooks/use-vad-state-autofire.test.tsx`
+  (NEW) — 6 tests covering: no-op when disabled,
+  speech_start fires voiceBegin, speech_end fires
+  voiceEnd, paused ignores events, unmount tears
+  down the subscription, missing/unknown state is
+  ignored. All 6 pass.
+- Frontend `hooks/use-voice-input.ts` — adds the
+  `alwaysOn?: boolean` option. When true, the hook
+  auto-starts the mic on mount (no press-and-hold
+  gesture) and keeps the stream open across turns.
+  The `onStart` / `onStop` callbacks still fire as
+  the backend's VAD detects speech boundaries, so the
+  VoicePanel can update its UI badge.
+- Frontend `components/layout/CockpitLayout.tsx` —
+  reads the `always_on_mic` config on mount (and on
+  visibility change / focus, like the existing
+  `VoicePanel` wake-phrase fetch), passes the flag
+  to `useVoiceInput({ alwaysOn: ... })`, and mounts
+  the new `useVadStateAutoFire({ enabled: alwaysOnMic,
+  paused: micPaused })`. The pause state is owned by
+  the cockpit (Sprint 19c §4.5) and flips via the
+  VoicePanel's ⏸ toggle. Push-to-talk mode is the
+  default and is preserved end-to-end (zero
+  regression).
+- Frontend `components/gundam/VoicePanel.tsx` —
+  accepts `alwaysOn`, `paused`, `onPausedChange`
+  props. When `alwaysOn` is true, the big push-to-
+  talk button is replaced with a smaller ⏸ / ▶
+  toggle that flips the `paused` state. The status
+  text reads "Always-on" / "Listening…" / "Paused"
+  accordingly.
+- Frontend `routes/settings/VoiceTab.tsx` — adds a
+  new "Voice interaction mode (Sprint 19c)" section
+  with two radios: push-to-talk (default) and
+  always-on. The selected value is bound to a new
+  `alwaysOnMicDraft` state and dispatched in the
+  existing PUT (alongside the Sprint 18 ASR
+  engine / corrector changes). The Reset button
+  re-syncs the draft from the loaded config.
+- Frontend `lib/api.ts` — `getVoiceConfig` /
+  `setVoiceConfig` types include `always_on_mic?:
+  boolean`.
 
-Phase 2 is a 0.5-1 day sprint and depends on the
-backend Phase 1 wiring (the `vad.state` frames are
-already flowing to the client; Phase 2 just consumes
-them).
+#### Verified (Phase 2)
+- `cd frontend && pnpm tsc --noEmit` — 0 errors.
+- `cd frontend && pnpm lint` — 0 errors.
+- `cd frontend && pnpm vitest run` — 63/63 pass (57
+  Sprint 18 baseline + 6 new Sprint 19c Phase 2
+  tests). The 6 new tests cover the
+  `useVadStateAutoFire` hook; the VoicePanel ⏸
+  toggle and the VoiceTab radio are covered by the
+  type system (the props are required when
+  `alwaysOn` is true; the form is a controlled
+  component).
+- Manual smoke: open Settings → Voice, pick
+  "Always-on", click Save. The toast confirms
+  persistence. Navigate to the cockpit. The push-
+  to-talk 🎤 button is replaced with a ⏸ toggle
+  and a "Always-on" label. Click ⏸ to pause; click
+  ▶ to resume. When enabled, the mic stream is open
+  and the cockpit's SignalCard pulses to your voice
+  (Sprint 18 + Sprint 19a's VAD-trained level
+  source). When you start talking, the backend
+  silero VAD emits `speech_start`; the hook fires
+  `voiceBegin` and the agent processes the utterance
+  without you pressing anything. The ⏸ toggle
+  pauses the auto-fire without tearing down the
+  stream.
+- No regression: push-to-talk mode (the default)
+  behaves identically to Sprint 18. The 80 backend
+  tests + 63 frontend tests all pass.
 
 ## 8. Sign-off
 

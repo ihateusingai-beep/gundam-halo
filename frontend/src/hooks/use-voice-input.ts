@@ -40,6 +40,20 @@ export interface UseVoiceInputOptions {
   onStart?: () => void;
   /** Called when the user releases the mic button. */
   onStop?: () => void;
+  /**
+   * Sprint 19c: always-on mic mode. When true, the hook
+   * auto-starts the mic on mount (no press-and-hold gesture
+   * needed) and keeps the stream open across turns. The
+   * `onStart` / `onStop` callbacks still fire as the
+   * backend's VAD detects speech_start / speech_end, so the
+   * VoicePanel can update its UI badge.
+   *
+   * The WS turn lifecycle (voice.begin / voice.end) is
+   * driven by a separate auto-fire listener (see
+   * `useVadStateAutoFire` in CockpitLayout). This hook
+   * just keeps the mic capture running.
+   */
+  alwaysOn?: boolean;
 }
 
 export interface UseVoiceInputResult {
@@ -58,7 +72,7 @@ export interface UseVoiceInputResult {
 }
 
 export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
-  const { onFrame, onStart, onStop } = opts;
+  const { onFrame, onStart, onStop, alwaysOn } = opts;
   const [state, setState] = useState<MicState>("idle");
   const [error, setError] = useState<string | null>(null);
   // Sprint 17b Track E: expose the live stream to callers
@@ -88,6 +102,22 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Sprint 19c: always-on mode auto-starts the mic on
+  // mount. We don't auto-stop on unmount because the
+  // user might re-mount (e.g. tab switch) and expect
+  // the mic to stay live. The cleanup effect above
+  // calls stop() on unmount as a safety net (e.g. the
+  // component is fully removed, not just re-rendered).
+  useEffect(() => {
+    if (alwaysOn && state === "idle") {
+      // Fire-and-forget; the promise rejection is
+      // surfaced via the existing error state in the
+      // returned `state` machine.
+      void start();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alwaysOn]);
 
   const stop = useCallback(() => {
     if (workletNodeRef.current) {

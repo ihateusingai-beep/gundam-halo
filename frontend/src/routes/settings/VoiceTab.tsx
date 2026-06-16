@@ -48,6 +48,10 @@ interface VoiceConfig {
   // pre-restart instance).
   asr_backend?: string;
   asr_corrector?: string;
+  // Sprint 19c: always-on mic toggle. Runtime-tunable; the
+  // dashboard's Voice interaction mode radio binds to
+  // alwaysOnMicDraft and the GET response hydrates it.
+  always_on_mic?: boolean;
   restart_required?: boolean;
 }
 
@@ -98,6 +102,11 @@ export function VoiceTab() {
   const [config, setConfig] = useState<VoiceConfig | null>(null);
   const [draft, setDraft] = useState<string>("");
   const [strictDraft, setStrictDraft] = useState<boolean>(true);
+  // Sprint 19c: always-on mic draft. Runtime-tunable; the
+  // dashboard reads the GET response to hydrate this. The
+  // default false preserves the Sprint 16 push-to-talk
+  // behavior for users who never open Settings → Voice.
+  const [alwaysOnMicDraft, setAlwaysOnMicDraft] = useState<boolean>(false);
   // Sprint 18: drafts for the ASR engine + corrector. The
   // server validates the value and persists to config.toml;
   // we just need to send the user's choice in the PUT.
@@ -131,6 +140,8 @@ export function VoiceTab() {
         setConfig(data);
         setDraft(data.wake_phrases.join("\n"));
         setStrictDraft(data.strict_wake_phrase);
+        // Sprint 19c: hydrate the always-on mic draft.
+        setAlwaysOnMicDraft(data.always_on_mic ?? false);
         // Sprint 18: hydrate the radio drafts from the GET
         // response. The server may report an unknown value
         // (e.g. if config.toml was hand-edited) — in that
@@ -189,16 +200,21 @@ export function VoiceTab() {
         // response if either actually changed.
         asr_backend: asrBackendDraft,
         asr_corrector: asrCorrectorDraft,
+        // Sprint 19c: include the always-on mic toggle in the
+        // same PUT. Runtime-tunable (no restart_required).
+        always_on_mic: alwaysOnMicDraft,
       });
       setConfig({
         wake_phrases: result.wake_phrases,
         strict_wake_phrase: result.strict_wake_phrase,
         asr_backend: result.asr_backend,
         asr_corrector: result.asr_corrector,
+        always_on_mic: result.always_on_mic,
         restart_required: result.restart_required,
       });
       setDraft(result.wake_phrases.join("\n"));
       setStrictDraft(result.strict_wake_phrase);
+      if (result.always_on_mic !== undefined) setAlwaysOnMicDraft(result.always_on_mic);
       if (result.asr_backend) setAsrBackendDraft(result.asr_backend as AsrBackendDraft);
       if (result.asr_corrector) setAsrCorrectorDraft(result.asr_corrector as AsrCorrectorDraft);
       if (result.persisted) {
@@ -448,6 +464,60 @@ export function VoiceTab() {
         </div>
       )}
 
+      <Section title="Voice interaction mode (Sprint 19c)">
+        {/* Sprint 19c: choose between push-to-talk (the
+            default) and always-on mic. Always-on auto-
+            fires the agent on the backend's VAD
+            speech_start event; the cockpit shows a ⏸
+            toggle to pause. Runtime-tunable — no
+            restart required. */}
+        <p className="text-xs text-[var(--text-secondary)] font-mono mb-2">
+          Choose how the cockpit captures your voice.
+          <strong> Push-to-talk</strong> keeps the mic
+          closed until you press and hold the 🎤 button
+          (lowest power, most private).
+          <strong> Always-on</strong> keeps the mic open
+          and uses the backend's VAD to detect when you
+          start talking; the agent fires automatically.
+          A small ⏸ toggle appears in the cockpit when
+          always-on is enabled.
+        </p>
+        <div className="flex flex-col gap-1.5" data-testid="voice-interaction-mode-radios">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="radio"
+              name="voice-interaction-mode"
+              value="push-to-talk"
+              checked={!alwaysOnMicDraft}
+              onChange={() => setAlwaysOnMicDraft(false)}
+              className="accent-[var(--accent)] cursor-pointer"
+            />
+            <span className="text-xs font-mono text-[var(--text-primary)]">
+              Push-to-talk
+            </span>
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              — hold the mic button to talk (default)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="radio"
+              name="voice-interaction-mode"
+              value="always-on"
+              checked={alwaysOnMicDraft}
+              onChange={() => setAlwaysOnMicDraft(true)}
+              className="accent-[var(--accent)] cursor-pointer"
+            />
+            <span className="text-xs font-mono text-[var(--text-primary)]">
+              Always-on
+            </span>
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              — mic always live; VAD auto-fires the agent
+            </span>
+          </label>
+        </div>
+      </Section>
+
       <Section title="Wake phrases (Sprint 16)">
         <p className="text-xs text-[var(--text-secondary)] font-mono mb-2">
           When you hold the mic button, the ASR transcript is checked
@@ -500,6 +570,12 @@ export function VoiceTab() {
           onClick={() => {
             setDraft(config?.wake_phrases.join("\n") ?? "");
             setStrictDraft(config?.strict_wake_phrase ?? true);
+            // Sprint 19c: reset the always-on mic draft.
+            // Falls back to false (the default) if the
+            // server hasn't returned a value yet.
+            if (config?.always_on_mic !== undefined) {
+              setAlwaysOnMicDraft(config.always_on_mic);
+            }
             // Sprint 18: reset the asr drafts too. Falls back
             // to the default ("whisper_local" / "bert") if the
             // server hasn't returned a value yet (loading

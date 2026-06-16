@@ -66,9 +66,34 @@ export interface VoicePanelProps {
    * is unchanged — we just moved ownership up one level.
    */
   mic: UseVoiceInputResult;
+  /**
+   * Sprint 19c: when true, the cockpit is in always-on
+   * mic mode. The big push-to-talk button is replaced
+   * with a ⏸ / ▶ toggle. The mic capture lifecycle is
+   * owned by the parent (CockpitLayout mounts
+   * useVadStateAutoFire); the button only flips the
+   * pause flag.
+   */
+  alwaysOn?: boolean;
+  /**
+   * Sprint 19c: the current pause state. Read by
+   * useVadStateAutoFire to ignore VAD events when the
+   * user has muted the mic. Paired with onPausedChange.
+   */
+  paused?: boolean;
+  /**
+   * Sprint 19c: setter for the pause state. The ⏸
+   * button in this component calls this with !paused.
+   */
+  onPausedChange?: (paused: boolean) => void;
 }
 
-export function VoicePanel({ mic }: VoicePanelProps) {
+export function VoicePanel({
+  mic,
+  alwaysOn = false,
+  paused = false,
+  onPausedChange,
+}: VoicePanelProps) {
   const [status, setStatus] = useState<VoiceStatus>(() => getVoiceStatus());
   const [textInput, setTextInput] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -241,54 +266,110 @@ export function VoicePanel({ mic }: VoicePanelProps) {
         </span>
       </div>
 
-      {/* Push-to-talk button (big, central) */}
+      {/* Mic control — push-to-talk button OR always-on
+          pause toggle, depending on `alwaysOn` */}
       <div className="flex flex-col items-center gap-1.5 py-2">
-        <button
-          onMouseDown={() => isPressable && mic.start()}
-          onMouseUp={() => isHolding && mic.stop()}
-          onMouseLeave={() => isHolding && mic.stop()}
-          onTouchStart={(e) => {
-            e.preventDefault();
-            isPressable && mic.start();
-          }}
-          onTouchEnd={() => isHolding && mic.stop()}
-          disabled={mic.state === "unsupported" || mic.state === "denied"}
-          className={[
-            "relative w-20 h-20 rounded-full border-2 flex items-center justify-center text-3xl",
-            "transition-all select-none touch-none",
-            "voice-mic",
-            isPressable && "border-[var(--accent)] bg-[var(--bg-elevated)] text-[var(--accent)] hover:scale-105 cursor-pointer",
-            isHolding && "voice-mic--listening border-[var(--accent-secondary)] bg-[var(--accent-secondary)]/20 text-[var(--accent-secondary)] scale-110",
-            status.state === "thinking" && "voice-mic--thinking border-[var(--warning)] text-[var(--warning)]",
-            status.state === "speaking" && "voice-mic--speaking border-[var(--accent-secondary)] text-[var(--accent-secondary)]",
-            mic.state === "denied" && "border-[var(--danger)] text-[var(--danger)] cursor-not-allowed",
-            mic.state === "unsupported" && "border-[var(--text-muted)] text-[var(--text-muted)] cursor-not-allowed",
-            mic.state === "error" && "border-[var(--danger)] text-[var(--danger)]",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          title={
-            mic.state === "denied"
-              ? "Microphone permission denied"
-              : mic.state === "unsupported"
-              ? "Browser doesn't support microphone"
-              : "Hold to talk"
-          }
-        >
-          🎤
-          {isHolding && (
-            <span className="absolute inset-0 rounded-full border-2 border-[var(--accent-secondary)] animate-ping pointer-events-none" />
-          )}
-        </button>
-        <span className="text-[9px] text-[var(--text-muted)] font-mono uppercase tracking-wider">
-          {mic.state === "denied"
-            ? "Mic denied"
-            : mic.state === "unsupported"
-            ? "Not supported"
-            : isHolding
-            ? "Release to send"
-            : "Hold to talk"}
-        </span>
+        {alwaysOn ? (
+          // Sprint 19c: always-on mode. The mic is
+          // always live; this button just flips the
+          // pause flag. The agent fires automatically
+          // on the backend's VAD speech_start events
+          // (useVadStateAutoFire in CockpitLayout).
+          <>
+            <button
+              onClick={() => onPausedChange?.(!paused)}
+              disabled={mic.state === "unsupported" || mic.state === "denied"}
+              data-testid="voice-panel-always-on-toggle"
+              className={[
+                "relative w-20 h-20 rounded-full border-2 flex items-center justify-center text-3xl",
+                "transition-all select-none cursor-pointer",
+                "voice-mic",
+                !paused && mic.state === "capturing" && "border-[var(--success)] bg-[var(--success)]/20 text-[var(--success)] scale-105",
+                !paused && mic.state !== "capturing" && "border-[var(--accent)] bg-[var(--bg-elevated)] text-[var(--accent)]",
+                paused && "border-[var(--warning)] bg-[var(--warning)]/20 text-[var(--warning)]",
+                mic.state === "denied" && "border-[var(--danger)] text-[var(--danger)] cursor-not-allowed",
+                mic.state === "unsupported" && "border-[var(--text-muted)] text-[var(--text-muted)] cursor-not-allowed",
+                mic.state === "error" && "border-[var(--danger)] text-[var(--danger)]",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              title={
+                mic.state === "denied"
+                  ? "Microphone permission denied"
+                  : mic.state === "unsupported"
+                  ? "Browser doesn't support microphone"
+                  : paused
+                  ? "Tap to resume listening"
+                  : "Tap to pause listening"
+              }
+            >
+              {paused ? "▶" : "⏸"}
+            </button>
+            <span className="text-[9px] text-[var(--text-muted)] font-mono uppercase tracking-wider">
+              {mic.state === "denied"
+                ? "Mic denied"
+                : mic.state === "unsupported"
+                ? "Not supported"
+                : paused
+                ? "Paused — tap to resume"
+                : mic.state === "capturing"
+                ? "Listening…"
+                : "Always-on"}
+            </span>
+          </>
+        ) : (
+          // Default: Sprint 16 push-to-talk. The user
+          // presses and holds the big 🎤 button to
+          // talk.
+          <>
+            <button
+              onMouseDown={() => isPressable && mic.start()}
+              onMouseUp={() => isHolding && mic.stop()}
+              onMouseLeave={() => isHolding && mic.stop()}
+              onTouchStart={(e) => {
+                e.preventDefault();
+                isPressable && mic.start();
+              }}
+              onTouchEnd={() => isHolding && mic.stop()}
+              disabled={mic.state === "unsupported" || mic.state === "denied"}
+              className={[
+                "relative w-20 h-20 rounded-full border-2 flex items-center justify-center text-3xl",
+                "transition-all select-none touch-none",
+                "voice-mic",
+                isPressable && "border-[var(--accent)] bg-[var(--bg-elevated)] text-[var(--accent)] hover:scale-105 cursor-pointer",
+                isHolding && "voice-mic--listening border-[var(--accent-secondary)] bg-[var(--accent-secondary)]/20 text-[var(--accent-secondary)] scale-110",
+                status.state === "thinking" && "voice-mic--thinking border-[var(--warning)] text-[var(--warning)]",
+                status.state === "speaking" && "voice-mic--speaking border-[var(--accent-secondary)] text-[var(--accent-secondary)]",
+                mic.state === "denied" && "border-[var(--danger)] text-[var(--danger)] cursor-not-allowed",
+                mic.state === "unsupported" && "border-[var(--text-muted)] text-[var(--text-muted)] cursor-not-allowed",
+                mic.state === "error" && "border-[var(--danger)] text-[var(--danger)]",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              title={
+                mic.state === "denied"
+                  ? "Microphone permission denied"
+                  : mic.state === "unsupported"
+                  ? "Browser doesn't support microphone"
+                  : "Hold to talk"
+              }
+            >
+              🎤
+              {isHolding && (
+                <span className="absolute inset-0 rounded-full border-2 border-[var(--accent-secondary)] animate-ping pointer-events-none" />
+              )}
+            </button>
+            <span className="text-[9px] text-[var(--text-muted)] font-mono uppercase tracking-wider">
+              {mic.state === "denied"
+                ? "Mic denied"
+                : mic.state === "unsupported"
+                ? "Not supported"
+                : isHolding
+                ? "Release to send"
+                : "Hold to talk"}
+            </span>
+          </>
+        )}
         {/* Sprint 16: wake-phrase hint. Hidden when the mic is
             unavailable or the user has cleared the phrase list. */}
         <WakePhraseHint

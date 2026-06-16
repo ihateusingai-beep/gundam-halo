@@ -13,7 +13,9 @@ import { useBackendVersion } from "@/hooks/use-backend-version";
 import { useProjectsStore } from "@/stores/projects";
 import { useSystemStore } from "@/stores/system";
 import { useVoiceInput } from "@/hooks/use-voice-input";
+import { useVadStateAutoFire } from "@/hooks/use-vad-state-autofire";
 import { useWsEvent, useWsStatus } from "@/lib/ws";
+import { api } from "@/lib/api";
 import {
   voiceBegin,
   voiceEnd,
@@ -86,6 +88,50 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   const [avatarMode, setAvatarMode] = useAvatarMode();
   const { backend, outdated, missingFeatures } = useBackendVersion();
 
+  // Sprint 19c: read the always_on_mic config so the
+  // cockpit can auto-fire the agent on VAD events when
+  // the user has enabled always-on mode. The default
+  // is false (push-to-talk) so the existing Sprint 16
+  // / 17a / 17b / 18 behavior is preserved.
+  const [alwaysOnMic, setAlwaysOnMic] = useState<boolean>(false);
+  // Pause state — flips from ⏸ toggle in VoicePanel.
+  // When true, useVadStateAutoFire ignores VAD events.
+  const [micPaused, setMicPaused] = useState<boolean>(false);
+
+  // Fetch the voice config on mount and on Settings save.
+  // We don't subscribe to a store here; the simplest
+  // correct thing is to re-fetch on mount and on the
+  // page-visibility change. The user typically
+  // toggles always-on from the Settings tab; when they
+  // return to the cockpit, the new value will be
+  // applied via this effect's cleanup + remount.
+  useEffect(() => {
+    let alive = true;
+    const fetchCfg = () => {
+      api
+        .getVoiceConfig()
+        .then((d) => {
+          if (alive && d.always_on_mic !== undefined) {
+            setAlwaysOnMic(d.always_on_mic);
+          }
+        })
+        .catch(() => {
+          /* non-fatal — fall back to the default false */
+        });
+    };
+    fetchCfg();
+    const onVis = () => {
+      if (document.visibilityState === "visible") fetchCfg();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", fetchCfg);
+    return () => {
+      alive = false;
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", fetchCfg);
+    };
+  }, []);
+
   // Sprint 18 Track A: hoist the mic hook to the cockpit so the
   // right column can render an audio-reactive CyberWaveform *and*
   // VoicePanel can share the same stream + state. CyberWaveform
@@ -95,9 +141,21 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   // The voice WS turn lifecycle (voiceBegin / voiceEnd / voiceSendAudio)
   // is co-located with the mic lifecycle here, mirroring what
   // VoicePanel used to do in Sprint 17a/17b.
+  //
+  // Sprint 19c: when `alwaysOn` is true, the hook auto-starts
+  // the mic on mount and keeps it open across turns. The
+  // onStart / onStop callbacks are no longer tied to the
+  // press-and-hold button; they're driven by the
+  // useVadStateAutoFire listener below.
   const mic = useVoiceInput({
+    alwaysOn: alwaysOnMic,
     onFrame: voiceSendAudio,
     onStart: () => {
+      // No-op in always-on mode (the WS turn is opened
+      // by useVadStateAutoFire on speech_start). In
+      // push-to-talk mode this still fires on the
+      // press-and-hold gesture and opens the WS turn.
+      if (alwaysOnMic) return;
       try {
         voiceBegin();
       } catch (e) {
@@ -107,6 +165,9 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
       }
     },
     onStop: () => {
+      // No-op in always-on mode (the WS turn is closed
+      // by useVadStateAutoFire on speech_end).
+      if (alwaysOnMic) return;
       try {
         voiceEnd();
       } catch (e) {
@@ -114,6 +175,13 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
       }
     },
   });
+
+  // Sprint 19c: when always-on mode is enabled, subscribe
+  // to the backend's vad.state events and auto-fire the
+  // WS turn. The pause flag lets the user mute the mic
+  // (e.g. during a phone call) without toggling always-on
+  // off entirely.
+  useVadStateAutoFire({ enabled: alwaysOnMic, paused: micPaused });
 
   useEffect(() => {
     fetchProjects();
@@ -366,7 +434,12 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
           </HudCard>
 
           <HudCard>
-            <VoicePanel mic={mic} />
+            <VoicePanel
+              mic={mic}
+              alwaysOn={alwaysOnMic}
+              paused={micPaused}
+              onPausedChange={setMicPaused}
+            />
           </HudCard>
 
           <HudCard>

@@ -112,12 +112,20 @@ export const api = {
   // response when either field actually changed. Changing either
   // requires a backend restart (the 2GB SenseVoice + fsmn-vad
   // pipeline is loaded once at voice WS connect time).
+  //
+  // Sprint 19c: `always_on_mic` is a runtime-tunable flag
+  // (no restart). When true, the cockpit auto-fires the
+  // agent on the backend's VAD speech_start event
+  // (Sprint 19c Phase 1 wires the vad.state WS
+  // forwarding; the frontend auto-fire hook ships in
+  // Phase 2).
   getVoiceConfig: () =>
     request<{
       wake_phrases: string[];
       strict_wake_phrase: boolean;
       asr_backend?: string;
       asr_corrector?: string;
+      always_on_mic?: boolean;
       restart_required?: boolean;
     }>("/voice/config"),
   setVoiceConfig: (payload: {
@@ -125,12 +133,14 @@ export const api = {
     strict_wake_phrase: boolean;
     asr_backend?: string;
     asr_corrector?: string;
+    always_on_mic?: boolean;
   }) =>
     request<{
       wake_phrases: string[];
       strict_wake_phrase: boolean;
       asr_backend?: string;
       asr_corrector?: string;
+      always_on_mic?: boolean;
       restart_required?: boolean;
       // Sprint 19b: when the backend schedules a self-restart
       // in response to an asr change, this is true. The
