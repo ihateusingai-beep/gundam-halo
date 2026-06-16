@@ -969,6 +969,37 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
         # after they restart.
         _voice_restart_required = False
 
+    # Sprint 19b: auto-restart on ASR / corrector change. We
+    # schedule a self-restart in 5 seconds so the new pipeline
+    # (FsmnVAD + YuesubASR + corrector) loads on the new
+    # process. The PUT response returns immediately; the
+    # 5s grace gives in-flight voice turns time to finish.
+    restart_scheduled = False
+    if restart_required:
+        try:
+            from app.core.restart import (
+                _set_restart_scheduled,
+                schedule_restart,
+            )
+            schedule_restart(delay_s=5.0, reason="asr_config_change")
+            _set_restart_scheduled(True, reason="asr_config_change")
+            restart_scheduled = True
+        except Exception as e:
+            # Defensive: if the restart scheduler fails
+            # to import or schedule, we still persist the
+            # config but surface the error to the
+            # dashboard so the user can restart manually.
+            logger.error(f"[voice_ws] failed to schedule restart: {e}")
+    else:
+        # PUT did not change the ASR fields — clear any
+        # pending restart so a previous scheduled restart
+        # is the only signal.
+        try:
+            from app.core.restart import _set_restart_scheduled
+            _set_restart_scheduled(False, reason="non_asr_put")
+        except ImportError:
+            pass
+
     # Invalidate the cache so future get_config() reloads from disk.
     from app.core import config as config_mod
     config_mod._config = None
@@ -1064,6 +1095,7 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
             "asr_backend": cfg.voice.asr.backend,
             "asr_corrector": cfg.voice.asr.corrector,
             "restart_required": restart_required,
+            "restart_scheduled": restart_scheduled,
             "persisted": False,
             "error": str(e),
         }
@@ -1074,6 +1106,7 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
         "asr_backend": cfg.voice.asr.backend,
         "asr_corrector": cfg.voice.asr.corrector,
         "restart_required": restart_required,
+        "restart_scheduled": restart_scheduled,
         "persisted": True,
     }
 

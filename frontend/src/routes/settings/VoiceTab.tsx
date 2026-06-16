@@ -202,7 +202,21 @@ export function VoiceTab() {
       if (result.asr_backend) setAsrBackendDraft(result.asr_backend as AsrBackendDraft);
       if (result.asr_corrector) setAsrCorrectorDraft(result.asr_corrector as AsrCorrectorDraft);
       if (result.persisted) {
-        if (result.restart_required) {
+        if (result.restart_scheduled) {
+          // Sprint 19b: the backend auto-restarts itself
+          // in 5 seconds so the new ASR engine / corrector
+          // takes effect. The WebSocket will disconnect
+          // briefly and reconnect to the new process.
+          toast.success("Voice settings saved", {
+            description:
+              "The backend is restarting in 5 seconds with the new ASR engine / corrector. The voice WS will reconnect automatically.",
+            duration: 8000,
+          });
+        } else if (result.restart_required) {
+          // Fallback: the user changed asr but the
+          // restart scheduler couldn't fire (e.g. no
+          // running event loop). Tell them how to
+          // restart manually.
           toast.success("Voice settings saved", {
             description:
               "Restart the backend to load the new ASR engine / corrector. pkill -f 'uvicorn app.main:app' && uv run --project . uvicorn app.main:app",

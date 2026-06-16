@@ -132,6 +132,11 @@ export const api = {
       asr_backend?: string;
       asr_corrector?: string;
       restart_required?: boolean;
+      // Sprint 19b: when the backend schedules a self-restart
+      // in response to an asr change, this is true. The
+      // dashboard surfaces a "Backend restarting in 5s" toast
+      // so the user knows to expect a brief disconnect.
+      restart_scheduled?: boolean;
       persisted: boolean;
       error?: string;
     }>("/voice/config", {

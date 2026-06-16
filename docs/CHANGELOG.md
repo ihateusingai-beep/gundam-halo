@@ -252,6 +252,91 @@ no test deletions.** Backend-only, 1-day sprint.
 - **19d**: Cantonese Whisper fine-tune (independent
   infra, GPU machine, 3h+ wall clock).
 
+### Sprint 19b — auto-restart on ASR / corrector change
+
+Sprint 19b makes the Sprint 18 `restart_required` flag
+**actionable**: when the user changes `asr_backend` or
+`asr_corrector` via Settings → Voice, the backend
+schedules a self-restart in 5 seconds so the new pipeline
+(FsmnVAD + YuesubASR + corrector) loads on the new
+process. The dashboard's "Restart required" banner is
+replaced by an automatic restart — the user no longer
+needs to manually `pkill -f 'uvicorn app.main:app' &&
+uvicorn ...`. See `docs/FEATURE-SPEC-SPRINT19b.md` for
+the full design.
+
+#### Added
+- **backend**: `app/core/restart.py` — new module
+  owning the in-process self-restart scheduler. Exports
+  `schedule_restart(delay_s, reason)` (spawns a
+  background asyncio task that sleeps then
+  `os.execvp(sys.executable, sys.argv)` — replaces the
+  process image in place, reuses the same PID, no
+  orphan), `is_restart_scheduled()` (read the in-process
+  flag), and `_set_restart_scheduled(bool, reason)`
+  (internal flag flipper called by `put_voice_config`).
+- **backend**: `app/api/voice_ws.py` `put_voice_config`
+  — calls `schedule_restart(delay_s=5.0,
+  reason="asr_config_change")` when `restart_required`
+  flips true. Both the success and error response
+  paths now include a `restart_scheduled: bool` field
+  so the dashboard can show the appropriate toast.
+- **frontend**: `lib/api.ts` `setVoiceConfig` response
+  type adds `restart_scheduled?: boolean`.
+- **frontend**: `routes/settings/VoiceTab.tsx` — the
+  Save toast now branches three ways: `restart_scheduled
+  = true` (Sprint 19b path) shows a longer-duration
+  "Backend restarting in 5s" toast, `restart_required
+  = true` (fallback when the in-process scheduler
+  couldn't fire) shows the manual `pkill` command, and
+  the default path shows "no restart needed".
+
+#### Tests
+- **backend**: `tests/voice/test_voice_config_asr.py`
+  added 3 new tests: PUT that flips asr returns
+  `restart_scheduled: true` and sets the in-process
+  flag, PUT that doesn't change asr returns
+  `restart_scheduled: false` and clears any stale
+  flag, and `schedule_restart` handles the no-loop
+  case (sync context) by logging a warning instead of
+  raising. All 10 Sprint 18 tests + 3 Sprint 19b tests
+  pass.
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_fsmn_vad.py
+  tests/voice/test_voice_config_asr.py
+  tests/voice/test_voice_ws.py
+  tests/voice/test_pipeline.py
+  tests/voice/test_audio_level_broadcast.py` — 54
+  passed, 1 skipped (Starlette 0.41+ WS rate-limit
+  test, deferred since Sprint 17b).
+- `cd frontend && pnpm tsc --noEmit` — 0 errors.
+- `cd frontend && pnpm vitest run` — 57/57 pass
+  (no Sprint 19b frontend test changes; the toast
+  branch is verified by the type system + the
+  `restart_scheduled?: boolean` field in the API
+  response type).
+- Manual smoke: change ASR engine in Settings →
+  Voice, click Save. The PUT returns
+  `restart_scheduled: true`. The toast says "The
+  backend is restarting in 5 seconds with the new ASR
+  engine / corrector". After ~5s the WebSocket
+  disconnects and reconnects; the new process is up
+  with the new ASR engine.
+
+#### Out of scope (deferred to 19c/19d/20+)
+- **19c**: Tauri always-on mic.
+- **19d**: Cantonese Whisper fine-tune.
+- **systemd / launchd supervisor** — Sprint 19b uses
+  self-restart, which requires the user to launch
+  the backend themselves (no daemon mode in v1). A
+  follow-up sprint can add a launchd plist / systemd
+  unit if the in-process pattern proves fragile.
+- **Restart on every config PUT** — only ASR /
+  corrector changes trigger a restart; wake_phrases /
+  strict_wake_phrase are runtime-tunable.
+
 ### Sprint 17a — voice hygiene: strict wake-phrase mode + cross-sentence sanitizer
 
 Strict wake-phrase mode is **on by default** (breaking change

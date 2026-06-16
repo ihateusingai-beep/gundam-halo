@@ -397,3 +397,114 @@ def test_put_voice_config_persists_asr_to_toml(voice_client, monkeypatch, tmp_pa
     finally:
         _set_asr(backend="whisper_local", corrector="bert")
         voice_ws._voice_restart_required = False
+
+
+# ---------------------------------------------------------------------------
+# Sprint 19b: auto-restart on ASR change
+# ---------------------------------------------------------------------------
+
+def test_put_asr_change_returns_restart_scheduled_true(voice_client, monkeypatch, tmp_path):
+    """Sprint 19b: a PUT that flips restart_required=True
+    also returns restart_scheduled=True in the response
+    and sets the in-process _restart_scheduled flag.
+    The schedule_restart() call is a no-op in this test
+    because we don't have a running asyncio event loop
+    (TestClient is sync). The important behaviors are
+    the response field and the flag."""
+    from app.core import restart as restart_mod
+
+    cfg = _config_module.get_config()
+    cfg.voice.strict_wake_phrase = True
+    _set_asr(backend="whisper_local", corrector="bert")
+    _reset_home_to_tmp(monkeypatch, tmp_path)
+    try:
+        # Clear the restart flag before the test
+        restart_mod._set_restart_scheduled(False, reason="test_setup")
+        assert restart_mod.is_restart_scheduled() is False
+
+        resp = voice_client.put("/voice/config", json={
+            "wake_phrases": ["Unicorn"],
+            "strict_wake_phrase": True,
+            "asr_backend": "yuesub",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["restart_required"] is True
+        # The response also includes restart_scheduled
+        assert data["restart_scheduled"] is True
+        # And the in-process flag is set
+        assert restart_mod.is_restart_scheduled() is True
+    finally:
+        _set_asr(backend="whisper_local", corrector="bert")
+        voice_ws._voice_restart_required = False
+        restart_mod._set_restart_scheduled(False, reason="test_cleanup")
+
+
+def test_put_wake_phrases_only_returns_restart_scheduled_false(voice_client, monkeypatch, tmp_path):
+    """Sprint 19b: a PUT that doesn't change asr fields
+    (e.g. just updates wake_phrases) returns
+    restart_scheduled=False and clears any pending
+    restart flag."""
+    from app.core import restart as restart_mod
+
+    cfg = _config_module.get_config()
+    cfg.voice.strict_wake_phrase = True
+    _set_asr(backend="whisper_local", corrector="bert")
+    _reset_home_to_tmp(monkeypatch, tmp_path)
+    try:
+        # Simulate a stale restart flag from a previous test
+        restart_mod._set_restart_scheduled(True, reason="stale_sim")
+        assert restart_mod.is_restart_scheduled() is True
+
+        resp = voice_client.put("/voice/config", json={
+            "wake_phrases": ["Unicorn", "NTD"],
+            "strict_wake_phrase": True,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["restart_required"] is False
+        assert data["restart_scheduled"] is False
+        # Stale flag is cleared
+        assert restart_mod.is_restart_scheduled() is False
+    finally:
+        _set_asr(backend="whisper_local", corrector="bert")
+        voice_ws._voice_restart_required = False
+        restart_mod._set_restart_scheduled(False, reason="test_cleanup")
+
+
+def test_schedule_restart_module_is_importable_and_handles_no_loop(caplog):
+    """Sprint 19b: schedule_restart() can be called
+    without a running event loop (e.g. in a sync
+    context). The function logs a warning instead of
+    raising — the PUT response will still report
+    restart_scheduled=true so the user can manually
+    restart if the in-process exec isn't available."""
+    import logging
+    from app.core import restart as restart_mod
+
+    # Make sure no loop is running in this test
+    try:
+        import asyncio
+        asyncio.get_running_loop()
+        pytest.skip("a running event loop is already attached")
+    except RuntimeError:
+        pass
+
+    restart_mod._set_restart_scheduled(False, reason="test_setup")
+    with caplog.at_level(logging.WARNING, logger="app.core.restart"):
+        # Should not raise even without a running loop
+        restart_mod.schedule_restart(delay_s=0.1, reason="test")
+    assert any(
+        "no running asyncio loop" in record.message
+        for record in caplog.records
+    ), f"expected warning, got: {[r.message for r in caplog.records]}"
+    # In the no-loop path, the flag is set BEFORE the
+    # schedule_restart call (by the caller in
+    # put_voice_config), so the flag here stays False
+    # because schedule_restart only sets it via
+    # _set_restart_scheduled in the running-loop path.
+    # The caller in voice_ws.py is the one that flips
+    # the flag, not schedule_restart itself.
+    assert restart_mod.is_restart_scheduled() is False
+    # Cleanup
+    restart_mod._set_restart_scheduled(False, reason="test_cleanup")
