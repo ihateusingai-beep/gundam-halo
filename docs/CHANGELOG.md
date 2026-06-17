@@ -1242,6 +1242,156 @@ in this run.)
 - **mlx-whisper inference** — per M9-E
   §"Fine-tune tooling".
 
+### Sprint 24 — v0.1.4 finalization (Track 3 acceptance gate + M9-C double re-run)
+
+Sprint 24 ships the design freeze for the
+final piece of v0.1.4 land. This is a
+**SPEC-ONLY sprint** — no code is written
+until the user has completed the M9-E
+Layer 2 training run (Sprint 19d runbook)
+AND the M9-C live re-run has been observed
+to pass without the augmented system note.
+Sprint 23 (`4e85e99`) shipped Tracks 1, 2,
+and 4 of the Sprint 22 plan; **Track 3 was
+explicitly deferred** to this sprint
+because it is the observable acceptance
+test for the M9-E fine-tune, and the
+fine-tune itself has not been executed yet
+(it's a user-driven 3h+ wall-clock session
+per Sprint 19d §6 runbook).
+
+#### Spec
+- **docs/FEATURE-SPEC-SPRINT24.md** — captures
+  the acceptance gate workflow (training run
+  + WER < 20% check + double M9-C re-run),
+  the M9-C success criteria deep-dive
+  (`used_tool_content == True` is the
+  observable proof that the fine-tune
+  worked), the git revert safety net
+  (one-command rollback if the M9-C re-run
+  fails without the workaround), the
+  file-by-file change set (Sprint 25
+  lands in 1 hour: 16 lines removed from
+  `m9c_voice_tools.py:179-199`), and a
+  cumulative test count + line-number drift
+  appendix that reconciles Sprint 22's
+  "lines 180-195" with the current code's
+  actual "lines 179-199" range.
+
+#### Architecture note — acceptance gate is 3 sequential steps
+1. **Training run** (user session, 3h+) —
+   `cd backend && uv sync --extra train
+   --extra voice && .venv/bin/python
+   scripts/finetune_whisper_yue.py`. The
+   Sprint 19d addendum background monitor
+   (`scripts/finetune_whisper_yue_monitor.py`)
+   watches the run; exits 0 on success, 2
+   on WER > 20%, 3 on crash, 4 on hang.
+2. **WER gate** — `.venv/bin/python -m
+   pytest tests/voice/test_whisper_yue.py
+   -v` asserts WER < 20% on the held-out
+   Cantonese fixture. The test no longer
+   skips because the fine-tuned model is
+   on disk at
+   `~/.gundam-halo/models/whisper-yue-base/`.
+3. **M9-C double re-run** (the observable
+   acceptance test for the fine-tune) —
+   `python scripts/m9c_voice_tools.py`
+   exits 0 with `used_tool_content == True`
+   **TWICE**: once with the v0.1.3
+   augmented note (the baseline — already
+   known to pass), once without (the test
+   — requires the fine-tune to work). If
+   the second run fails, the user runs
+   `git revert <sprint-25-hash>` and the
+   augmented note is restored.
+
+#### Architecture note — git revert safety net
+Sprint 25 (the one-commit implementation of
+the deletion) lands with a clear commit
+message that includes the revert command.
+The user copies the commit hash from
+`git log` immediately after the commit
+lands, BEFORE running the M9-C re-run.
+If the re-run fails, the revert is one
+command: `git revert <hash>`. The revert
+is **non-destructive**: the augmented note
+returns to `m9c_voice_tools.py:179-199`
+exactly as it was before the Sprint 25
+commit. The fine-tune checkpoint at
+`~/.gundam-halo/models/whisper-yue-base/`
+is NOT deleted on revert — the user can
+re-train with different hyperparameters
+without re-running the 3h training session.
+
+#### Architecture note — why spec-only + impl split
+Sprint 24 (spec) is **visible before the
+training run**. The user reviews the
+acceptance gate workflow, the M9-C double
+re-run procedure, and the git revert safety
+net BEFORE spending 3h on the training
+session. If the user disagrees with the
+workflow (e.g. wants a different acceptance
+test), they can push back on the spec
+without wasting the training session.
+Sprint 25 (impl) is **one commit at the
+end of the training session** — small,
+reversible, observable via the M9-C re-run.
+Combining the two into one sprint would
+mean reviewing the workflow in the middle
+of the training session, which is the
+wrong time to be making process decisions.
+
+#### Algorithm note — M9-C line range drift
+Sprint 22 spec §4.1 listed the augmented-
+note block as "lines 180-195" (in one
+place) and "lines 187-192" (in another
+place). The actual current line range is
+**lines 179-199 inclusive** (verified
+2026-06-17 against commit `4e85e99`):
+- 179-186: 8-line M9-C note comment
+  header.
+- 187-192: 6-line `augmented = (...)`
+  block.
+- 193-198: 6-line `AgentContext(...)` +
+  `agent.run(augmented, ...)` call.
+- 199: trailing blank line.
+
+**Net deletion: 20 lines − 4 lines (M9-E
+replacement comment) = 16 lines**, matching
+Sprint 22 spec §5 file-by-file table
+estimate. Spec Appendix A reconciles the
+drift for any reviewer cross-referencing
+Sprint 22 + 24.
+
+#### Verified (this sprint — spec only)
+- `git diff --stat` clean (no source changes).
+- `pytest tests/voice/` — 188 passed,
+  2 skipped, 0 failed (Sprint 23 baseline
+  preserved; Sprint 24 is spec-only).
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+
+#### Out of scope (deferred to 25+)
+- **Actual augmented-note deletion** —
+  Sprint 25+ (1 hour, conditional on the
+  M9-C live re-run passing without the
+  workaround).
+- **Actual training run** — user session,
+  3h+ wall clock (per Sprint 19d §6). This
+  is a pre-condition for the Track 3
+  deletion, not part of any sprint.
+- **`uv sync --extra voice-hf --extra voice`
+  install** — 3GB of ML deps (the user
+  runs this once before the training
+  run).
+- **launchd / systemd supervisor** — per
+  Sprint 19b §2.
+- **Self-record corpus + Layer 2 v2** —
+  per M9-E §"v0.1.3 Layer 2 plan".
+- **mlx-whisper inference** — per M9-E
+  §"Fine-tune tooling".
+
 ### Sprint 19d addendum — training monitor (background supervision)
 
 Sprint 19d's spec said "actual training run is a
