@@ -1392,6 +1392,176 @@ Sprint 22 + 24.
 - **mlx-whisper inference** — per M9-E
   §"Fine-tune tooling".
 
+### Sprint 25 — v0.1.4 finalization (Track 3 impl: M9-E Layer 2 acceptance + augmented-note deletion)
+
+Sprint 25 ships the **one-commit
+implementation** of the Track 3
+augmented-note deletion. This is the
+final piece of v0.1.4 land. The commit
+is small (~10 lines net deletion in
+`scripts/m9c_voice_tools.py:179-199`)
+and lands in the same session as the
+M9-C live re-run. The user runs the
+M9-C re-run twice (once with the v0.1.3
+augmented note, once without), observes
+the result, and either keeps the commit
+or reverts it via `git revert HEAD`.
+
+**Pre-condition (gate, per Sprint 24
+spec §4.1):** the user has completed
+the M9-E Layer 2 training run (Sprint
+19d runbook) with WER < 20% on the
+held-out fixture, and the M9-C Run 1
+(with augmented note, v0.1.3 code) has
+passed with `used_tool_content == True`.
+Sprint 25 does NOT include the training
+run itself — that's a separate user
+session, 3h+ wall clock.
+
+#### Spec
+- **docs/FEATURE-SPEC-SPRINT25.md** —
+  captures the exact diff (5-step edit:
+  delete 14 lines, add 5 lines, modify
+  1 line, net -9 lines), the commit
+  message template (with the
+  `git revert HEAD` command embedded in
+  the body), the post-commit checklist
+  (7-step verification), the CHANGELOG
+  entry template, the M9-E ticket
+  update template (5 boxes ✓/✗), and
+  5 appendices covering line-count drift
+  reconciliation, revert-vs-fix-forward
+  philosophy, ticket update philosophy,
+  no-new-unit-test rationale, and commit
+  subject wording.
+
+#### Changed (planned for Sprint 25+
+when the user runs the training session)
+- **backend**: `scripts/m9c_voice_tools.py`
+  — delete the 8-line M9-C note comment
+  header (lines 179-186) + the 6-line
+  `augmented = (...)` block (lines
+  187-192). Insert a 5-line M9-E Layer
+  2 acceptance comment in place. Modify
+  the `agent.run(augmented, ...)` call
+  (line 199) to `agent.run(text, ...)`.
+  The `AgentContext(...)` constructor
+  (lines 193-198) and the post-call
+  logging (lines 200-204) stay
+  unchanged. **Net: ~10 lines deleted,
+  1 line modified.**
+- **docs**: `CHANGELOG.md` — v0.1.4
+  finalization release entry under
+  `[Unreleased]` with the 4-section
+  structure (Sprint 25 / Changed /
+  Verified / Out of scope).
+- **docs**: `tickets/M9-E.md` — mark
+  the 5 Layer 2 acceptance boxes ✓
+  (or ✗ if the user reverts; see
+  Sprint 24 spec §4.3 for the revert
+  path).
+
+#### Architecture note — line count
+reconciliation
+Sprint 22 spec §5 estimated `0 / -16`
+for `m9c_voice_tools.py`. Sprint 24
+spec Appendix A reconciled to `-16`
+net (`20 lines − 4 lines replacement =
+16`). The actual math against the
+current code (verified 2026-06-17
+against commit `4e85e99`) is **-9 net
+lines** (14 deleted − 5 added = 9 net,
+plus 1 line modified for net 0). The
+Sprint 22 / 24 estimates were
+over-counted by ~7 lines. This is a
+**spec drift, not an implementation
+drift** — the Sprint 25 commit lands
+as ~9 lines net deletion, and the user
+verifies with `git diff --stat`. Spec
+Appendix A reconciles.
+
+#### Architecture note — why
+`git revert HEAD` (not
+`git revert <hash>`)
+The Sprint 25 commit message embeds
+the revert command as `git revert HEAD`
+instead of `git revert <hash>`. The
+reason is robustness: the user runs the
+revert immediately after the Sprint 25
+commit lands, so `HEAD` points at the
+Sprint 25 commit. Using `HEAD` avoids
+the user having to copy the hash from
+`git log`. If the user runs other
+commits between the Sprint 25 commit
+and the revert, the user substitutes
+`git revert <hash>` with the actual
+hash from `git log --oneline -1`.
+
+#### Architecture note — no new unit
+tests
+Sprint 25 ships 0 new unit tests (per
+Sprint 24 spec Appendix D). The Track
+3 deletion is verified by **the M9-C
+live re-run itself** — the
+`used_tool_content == True` check at
+`m9c_voice_tools.py:390` is the
+observable acceptance test. A unit
+test for "does the script not augment
+the text" would be a tautology — the
+test would just check that the
+`augmented` variable is unused, which
+is trivially true after the deletion.
+The unit test would be redundant with
+`git diff`. If the user wants a
+unit-test counterpart, we can add it
+as a 1-hour follow-up (Sprint 25.5).
+
+#### Architecture note — M9-E ticket
+update is binary
+The 5 Layer 2 acceptance boxes in
+`docs/tickets/M9-E.md` are intentionally
+**binary** — either the fine-tune
+works (all ✓) or it doesn't (all ✗).
+The user is not expected to maintain
+partial-pass states. For partial
+passes, the user has 3 options: accept
+the partial pass with a note, revert
+and re-train, or defer v0.1.4 land.
+See spec Appendix C for the full
+decision tree.
+
+#### Verified (this sprint — spec only)
+- `git diff --stat` clean (no source
+  changes; Sprint 25 is one commit at
+  the end of the training session).
+- `pytest tests/voice/` — 188 passed,
+  2 skipped, 0 failed (Sprint 23
+  baseline preserved).
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+
+#### Out of scope (deferred to 26+)
+- **Re-running the training session
+  with different hyperparameters** —
+  separate user session, 3h+ wall clock
+  each. The revert path keeps the
+  existing checkpoint so the user can
+  compare new training runs against
+  the Sprint 25 baseline.
+- **M9-C fixture refresh** — the
+  fixture
+  (`backend/tests/voice/fixtures/readme_query.wav`)
+  was designed for M9-D and is still
+  the right acceptance test for v0.1.4.
+  A held-out test (user-recorded, ~30s)
+  is M9-E Layer 2 v2.
+- **launchd / systemd supervisor** —
+  per Sprint 19b §2.
+- **Self-record corpus + Layer 2 v2** —
+  per M9-E §"v0.1.3 Layer 2 plan".
+- **mlx-whisper inference** — per M9-E
+  §"Fine-tune tooling".
+
 ### Sprint 19d addendum — training monitor (background supervision)
 
 Sprint 19d's spec said "actual training run is a
