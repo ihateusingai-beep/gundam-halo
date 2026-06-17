@@ -99,11 +99,19 @@ model_path = ""
 
 # ---------------------------------------------------------------------------
 # Mark-XL tool imports (Sprint 27, see
-# docs/FEATURE-SPEC-SPRINT27.md). The 4 tools below
-# are always registered in v0.1.5+; the user can
-# disable them per-tool by setting `enabled = false`.
-# A future sprint will wire `cfg.tools.<name>.enabled`
-# into `default_tools()` for conditional registration.
+# docs/FEATURE-SPEC-SPRINT27.md; Sprint 28/29 wired
+# the conditional registration per
+# docs/FEATURE-SPEC-SPRINT28.md). The 4 tools below
+# are conditionally registered in `default_tools()`
+# based on the `enabled` flag. Setting `enabled =
+# false` removes the tool from the LLM's tool list
+# (the LLM cannot call a tool it doesn't know about).
+#
+# **NOTE: changes to `enabled` take effect on
+# backend restart.** The `ToolsConfig.enabled` flag
+# is not runtime-tunable in v0.1.5+; a future sprint
+# can add hot-reload via the existing
+# `schedule_restart` pattern (Sprint 19b).
 # ---------------------------------------------------------------------------
 
 # WebSearchTool (Track 27.1) — DuckDuckGo HTML search.

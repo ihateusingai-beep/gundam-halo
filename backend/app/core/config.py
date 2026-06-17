@@ -10,12 +10,13 @@ Designed to be loaded once at startup and reloaded only when config changes.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -267,6 +268,125 @@ class MemoryConfig:
     disable_vector_index: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Tools config (Sprint 28/29) — see docs/FEATURE-SPEC-SPRINT28.md
+# ---------------------------------------------------------------------------
+# 5 new dataclasses that control the 4 Mark-XL tools imported
+# in Sprint 27 (commit 4a7a83e). The user can disable a tool per-tool
+# by setting `enabled = false` in the corresponding [tools.*] section
+# of ~/.gundam-halo/config.toml. Changes take effect on backend
+# restart (Sprint 28 spec §4.5 restart caveat; runtime toggling is
+# deferred to a future sprint).
+#
+# The 4 sub-configs follow the same pattern as the existing 8
+# sub-configs (UserConfig, LLMConfig, etc.) — a flat dataclass
+# with all fields required (or default). The _load_sub_config
+# helper (see _load_tools_config below) iterates dataclasses.fields()
+# to populate each sub-config from its TOML section, so a new field
+# added to a sub-config requires only 1 line in the dataclass
+# + 1 line in config.toml.example — no changes to the loader.
+
+
+@dataclass
+class WebSearchConfig:
+    """Settings for the WebSearchTool (Sprint 27 Track 27.1).
+
+    Per `docs/FEATURE-SPEC-SPRINT27.md` §4.2.
+    The tool searches DuckDuckGo's HTML endpoint and returns
+    TTS-friendly prose. No new deps; uses the existing httpx.
+    """
+    enabled: bool = True
+    # Cap on results fetched from DDG (1-10). Default 5.
+    max_results: int = 5
+    # Cap on the formatted output length (chars) to keep
+    # the TTS response under the 60s budget. Default 800.
+    summary_max_chars: int = 800
+    # HTTP timeout for the DDG endpoint. Default 10s.
+    request_timeout_s: float = 10.0
+
+
+@dataclass
+class YouTubeSummarizeConfig:
+    """Settings for the YouTubeSummarizeTool (Sprint 27 Track 27.2).
+
+    The tool fetches a YouTube video's transcript via the optional
+    `youtube-transcript-api` library. Without the dep, the tool
+    falls back to YouTube's oEmbed API for title + author metadata.
+    """
+    enabled: bool = True
+    # Cap on transcript length before LLM summarisation.
+    # Default 12000 (matches Mark-XL).
+    max_transcript_chars: int = 12_000
+    # Cap on the formatted output length (chars).
+    summary_max_chars: int = 800
+
+
+@dataclass
+class FlightFinderConfig:
+    """Settings for the FlightFinderTool (Sprint 27 Track 27.3).
+
+    The tool is a URL builder in v0.1.5+ — no real flight-data
+    extractor. A future sprint (Sprint 31+) can add a paid flight
+    API key here (aviationstack / serpapi / Skyscanner Business).
+    """
+    enabled: bool = True
+    # No config fields yet — the tool builds a clean
+    # Google Flights URL from origin/destination/date.
+
+
+@dataclass
+class SendMessageConfig:
+    """Settings for the SendMessageTool (Sprint 27 Track 27.4).
+
+    The tool is a stub in v0.1.5+ — the full pyautogui flow is a
+    future sprint (Sprint 31+) with computer-vision-based
+    coordinate detection. The `enabled` flag defaults to
+    `False` because pyautogui is fragile (hard-coded coordinates
+    + timings). The other 3 sub-configs default to `True`
+    because they have no fragile dependencies.
+    """
+    enabled: bool = False  # OPT-IN: pyautogui is fragile
+    # Default messaging platform when none is specified.
+    default_platform: str = "whatsapp"
+    # OS family (auto-detected from sys.platform by default;
+    # uncomment to override). Reserved for Sprint 31+ when
+    # the pyautogui flow is implemented.
+    # os_system: str = "darwin"  # darwin | win32 | linux
+
+
+@dataclass
+class ToolsConfig:
+    """Settings for the agent's tool registry (Sprint 28/29).
+
+    Per `docs/FEATURE-SPEC-SPRINT28.md` and
+    `docs/FEATURE-SPEC-SPRINT27.md` §4.4.
+
+    The 4 sub-configs control the 4 Mark-XL tools imported
+    in Sprint 27 (commit 4a7a83e). Each sub-config has an
+    `enabled` flag that gates whether the tool is registered
+    in the agent's tool list (`app/tools/builder.py::default_tools()`).
+    A disabled tool is **invisible** to the LLM — the
+    agent's tool spec list does not include it.
+
+    Changes to `enabled` take effect on backend restart
+    (not runtime-tunable in v0.1.5+). The restart caveat
+    is documented in `config.toml.example` and the
+    CHANGELOG entry.
+    """
+    web_search: WebSearchConfig = field(
+        default_factory=WebSearchConfig
+    )
+    youtube_summarize: YouTubeSummarizeConfig = field(
+        default_factory=YouTubeSummarizeConfig
+    )
+    flight_finder: FlightFinderConfig = field(
+        default_factory=FlightFinderConfig
+    )
+    send_message: SendMessageConfig = field(
+        default_factory=SendMessageConfig
+    )
+
+
 @dataclass
 class Config:
     """Root config object."""
@@ -280,6 +400,14 @@ class Config:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    # Sprint 28/29: agent tool registry settings. The 4
+    # Mark-XL tools imported in Sprint 27 (web_search,
+    # youtube_summarize, flight_finder, send_message)
+    # are conditionally registered based on
+    # `tools.<name>.enabled`. See
+    # `docs/FEATURE-SPEC-SPRINT28.md` for the
+    # design rationale.
+    tools: ToolsConfig = field(default_factory=ToolsConfig)
 
     @property
     def log_level(self) -> str:
@@ -523,6 +651,9 @@ def load_config(home: Optional[Path] = None) -> Config:
         security=_load_security_config(toml_data),
         voice=_load_voice_config(toml_data),
         memory=_load_memory_config(toml_data),
+        # Sprint 28/29: tools config (4 sub-configs
+        # for the Mark-XL tool imports).
+        tools=_load_tools_config(toml_data),
     )
 
 
@@ -542,6 +673,84 @@ def _load_memory_config(toml_data: dict) -> MemoryConfig:
         auto_rebuild=d.get("auto_rebuild", defaults.auto_rebuild),
         disable_vector_index=d.get(
             "disable_vector_index", defaults.disable_vector_index
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tools config loader (Sprint 28/29) — see
+# docs/FEATURE-SPEC-SPRINT28.md
+# ---------------------------------------------------------------------------
+
+
+def _load_sub_config(
+    section_dict: dict,
+    sub_config_class: type,
+) -> Any:
+    """Generic sub-config loader.
+
+    Iterates `dataclasses.fields(sub_config_class)` in
+    declaration order and pulls each field from
+    `section_dict.get(field.name, <default>)`. This
+    generalises the field-by-field read pattern that
+    `_load_memory_config` and `_load_voice_config`
+    inline — Sprint 28 lifts it into a helper so any
+    future sub-config (e.g. `LoggingConfig`,
+    `SecurityAuditConfig`) can be added without
+    touching the loader.
+
+    Args:
+        section_dict: The TOML section dict (e.g.
+            `toml_data["tools"]["web_search"]`).
+        sub_config_class: The dataclass to instantiate
+            (e.g. `WebSearchConfig`).
+
+    Returns:
+        An instance of `sub_config_class` with all
+        fields populated. Missing fields fall back to
+        the dataclass's defaults.
+    """
+    defaults = sub_config_class()
+    kwargs: dict = {}
+    for f in dataclasses.fields(sub_config_class):
+        kwargs[f.name] = section_dict.get(
+            f.name, getattr(defaults, f.name)
+        )
+    return sub_config_class(**kwargs)
+
+
+def _load_tools_config(toml_data: dict) -> ToolsConfig:
+    """Load the [tools.*] sections from TOML.
+
+    All fields are optional and fall back to the
+    ToolsConfig defaults. The 4 sub-configs
+    (`WebSearchConfig`, `YouTubeSummarizeConfig`,
+    `FlightFinderConfig`, `SendMessageConfig`) are
+    loaded via the generic `_load_sub_config` helper.
+
+    An unknown `[tools.bogus]` section in TOML is
+    silently ignored — only the 4 known sub-configs
+    are loaded. This is intentional: forward-
+    compatibility for older configs that may have
+    stale `tools.*` sections.
+
+    See `docs/FEATURE-SPEC-SPRINT28.md` for the
+    design rationale.
+    """
+    d = toml_data.get("tools", {})
+    return ToolsConfig(
+        web_search=_load_sub_config(
+            d.get("web_search", {}), WebSearchConfig
+        ),
+        youtube_summarize=_load_sub_config(
+            d.get("youtube_summarize", {}),
+            YouTubeSummarizeConfig
+        ),
+        flight_finder=_load_sub_config(
+            d.get("flight_finder", {}), FlightFinderConfig
+        ),
+        send_message=_load_sub_config(
+            d.get("send_message", {}), SendMessageConfig
         ),
     )
 

@@ -35,13 +35,25 @@ def test_sprint16_tools_wired():
     assert "mail" not in names
 
 
-def test_default_tool_count_is_22():
-    """18 tools (M11 + Sprint 16) + 4 Mark-XL tools
-    (Sprint 27) = 22 tools. Catches accidental
-    duplicate registrations or un-removed legacy
-    tools."""
+def test_default_tool_count_is_21_by_default():
+    """18 tools (M11 + Sprint 16) + 3 enabled Mark-XL
+    tools (web_search, youtube_summarize,
+    flight_finder) = 21 tools. The 4th Mark-XL tool
+    (send_message) is **disabled by default** per
+    `SendMessageConfig.enabled = False` (Sprint 28
+    spec §4.2 Track 27.4 — pyautogui is fragile,
+    opt-in only). When the user opts in by setting
+    `[tools.send_message] enabled = true` in
+    `~/.gundam-halo/config.toml` and restarting
+    the backend, the count grows to 22 — see
+    `test_send_message_default_disabled_*` tests in
+    `test_builder_conditional.py`.
+
+    Catches accidental duplicate registrations or
+    un-removed legacy tools.
+    """
     tools = default_tools()
-    assert len(tools) == 22, f"expected 22 tools, got {len(tools)}: {[t.name for t in tools]}"
+    assert len(tools) == 21, f"expected 21 tools (send_message default-disabled), got {len(tools)}: {[t.name for t in tools]}"
 
 
 def test_all_tools_have_unique_names():

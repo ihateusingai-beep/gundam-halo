@@ -52,8 +52,42 @@ from app.tools.youtube_summarize import YouTubeSummarizeTool
 
 
 def default_tools() -> list[BaseTool]:
-    """Return the default set of tools available to agents."""
-    return [
+    """Return the default set of tools available to agents.
+
+    Sprint 28/29: conditionally register the 4
+    Mark-XL tools (web_search, youtube_summarize,
+    flight_finder, send_message) based on
+    `cfg.tools.<name>.enabled`. A disabled tool
+    is **invisible** to the LLM — the agent's tool
+    spec list does not include it.
+
+    The `get_config()` import is **lazy** (inside
+    the function body, not at module level) to
+    avoid forcing a TOML parse during the test
+    suite's module import. The test suite uses
+    `monkeypatch.setattr(cfg.tools.web_search,
+    "enabled", False)` to flip individual tools
+    on/off at runtime.
+
+    Changes to `enabled` take effect on backend
+    restart (not runtime-tunable in v0.1.5+).
+    See `docs/FEATURE-SPEC-SPRINT28.md` §4.5 for
+    the restart caveat and Appendix F for why
+    runtime toggling is deferred.
+    """
+    # Lazy import to avoid forcing a TOML parse at
+    # module import time. `app.core.config` is a
+    # heavyweight module (it pulls in stdlib tomllib,
+    # the Config singleton, all loaders). The test
+    # suite imports `builder.py` from many test files;
+    # a module-level `from app.core.config import
+    # get_config` would force the TOML parse to run
+    # at every test module import, slowing the test
+    # suite by 10-50ms per test file.
+    from app.core.config import get_config
+
+    cfg = get_config()
+    tools: list[BaseTool] = [
         FileReadTool(),
         FileWriteTool(),
         ShellExecTool(),
@@ -79,17 +113,26 @@ def default_tools() -> list[BaseTool]:
         SystemSettingsTool(),   # DND / Focus + general prefs
         ScreenshotTool(),        # screencapture wrapper
         BluetoothTool(),         # BT list + connect (blueutil)
-        # Sprint 27: Mark-XL selective tool import. See
-        # `docs/FEATURE-SPEC-SPRINT27.md` for the design.
-        # The 4 new tools are always registered; the user
-        # can disable per-tool by editing config.toml (see
-        # the `[tools.*]` sections added to
-        # `config.toml.example`).
-        WebSearchTool(),         # DDG HTML search, no extra dep
-        YouTubeSummarizeTool(),  # transcript fetch (optional dep)
-        FlightFinderTool(),      # Google Flights URL builder
-        SendMessageTool(),       # pyautogui (opt-in; stub in v0.1)
     ]
+
+    # Sprint 28/29: conditional Mark-XL tool registration
+    # (per `docs/FEATURE-SPEC-SPRINT28.md`). The 4 tools
+    # are added only if their `enabled` flag is True in
+    # `~/.gundam-halo/config.toml`'s [tools.*] section.
+    # A disabled tool is invisible to the LLM (the agent
+    # loop never sees it). The user can disable a tool
+    # by setting `enabled = false` and restarting the
+    # backend.
+    if cfg.tools.web_search.enabled:
+        tools.append(WebSearchTool())
+    if cfg.tools.youtube_summarize.enabled:
+        tools.append(YouTubeSummarizeTool())
+    if cfg.tools.flight_finder.enabled:
+        tools.append(FlightFinderTool())
+    if cfg.tools.send_message.enabled:
+        tools.append(SendMessageTool())
+
+    return tools
 
 
 __all__ = ["default_tools"]
