@@ -35,11 +35,13 @@ def test_sprint16_tools_wired():
     assert "mail" not in names
 
 
-def test_default_tool_count_is_18():
-    """15 pre-Sprint16 + 4 new - 1 mail = 18 tools. Catches
-    accidental duplicate registrations or un-removed legacy tools."""
+def test_default_tool_count_is_22():
+    """18 tools (M11 + Sprint 16) + 4 Mark-XL tools
+    (Sprint 27) = 22 tools. Catches accidental
+    duplicate registrations or un-removed legacy
+    tools."""
     tools = default_tools()
-    assert len(tools) == 18, f"expected 18 tools, got {len(tools)}: {[t.name for t in tools]}"
+    assert len(tools) == 22, f"expected 22 tools, got {len(tools)}: {[t.name for t in tools]}"
 
 
 def test_all_tools_have_unique_names():

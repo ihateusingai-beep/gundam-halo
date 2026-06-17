@@ -98,6 +98,66 @@ default_emotion = "calm"
 model_path = ""
 
 # ---------------------------------------------------------------------------
+# Mark-XL tool imports (Sprint 27, see
+# docs/FEATURE-SPEC-SPRINT27.md). The 4 tools below
+# are always registered in v0.1.5+; the user can
+# disable them per-tool by setting `enabled = false`.
+# A future sprint will wire `cfg.tools.<name>.enabled`
+# into `default_tools()` for conditional registration.
+# ---------------------------------------------------------------------------
+
+# WebSearchTool (Track 27.1) — DuckDuckGo HTML search.
+# No extra dep needed (uses existing httpx).
+[tools.web_search]
+enabled = true
+# Cap on results fetched from DDG (1-10). Default 5.
+max_results = 5
+# Cap on the formatted output length (chars) to keep
+# the TTS response under the 60s budget. Default 800.
+summary_max_chars = 800
+# HTTP timeout for the DDG endpoint. Default 10s.
+request_timeout_s = 10.0
+
+# YouTubeSummarizeTool (Track 27.2) — fetch + summarize
+# a YouTube video's transcript.
+# Requires the optional `youtube-transcript-api` dep:
+#   uv add youtube-transcript-api
+# Without the dep, the tool falls back to YouTube's
+# oEmbed API and returns the video's title + author.
+[tools.youtube_summarize]
+enabled = true
+# Cap on transcript length before LLM summarisation.
+# Default 12000 (matches Mark-XL).
+max_transcript_chars = 12000
+# Cap on the formatted output length (chars).
+summary_max_chars = 800
+
+# FlightFinderTool (Track 27.3) — Google Flights
+# URL builder. Returns a URL the user opens in their
+# browser; doesn't extract flight data. See the spec
+# §4.2 for why this is a stub, not a full extractor.
+# No extra dep needed.
+[tools.flight_finder]
+enabled = true
+# No config fields yet — the tool builds a clean
+# Google Flights URL from origin/destination/date.
+
+# SendMessageTool (Track 27.4) — pyautogui-based
+# message sender. **OPT-IN**: requires the
+# `pyautogui + pyperclip` deps AND macOS Accessibility
+# permission. The tool is a stub in v0.1.5+ — it
+# returns a clear "not yet implemented" message. The
+# full pyautogui flow is a future sprint.
+#   uv add pyautogui pyperclip
+[tools.send_message]
+enabled = false  # OPT-IN: pyautogui is fragile
+# OS family (auto-detected from sys.platform by default;
+# uncomment to override):
+# os_system = "darwin"  # darwin | win32 | linux
+# Default messaging platform when none is specified.
+default_platform = "whatsapp"
+
+# ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
 [security]

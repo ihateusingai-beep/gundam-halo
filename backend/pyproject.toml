@@ -133,6 +133,46 @@ voice-hf = [
     "soundfile>=0.12,<1",          # audio I/O for HF processor
 ]
 
+# Sprint 27: Mark-XL tool imports (see
+# docs/FEATURE-SPEC-SPRINT27.md). Each extra is
+# independent — the user opts in only for the tools
+# they want. Most of the tool impls work without any
+# of these extras (they fall back gracefully via
+# ImportError or oEmbed), so installing them is
+# purely for richer output.
+#
+# tool-youtube-summarize: `youtube-transcript-api` for
+# full transcript support. Without it, the tool
+# falls back to YouTube's oEmbed API (title + author
+# only).
+#
+# tool-flight-finder: `playwright` for a future
+# real-flight-data extractor (not in v0.1.5+; the
+# current tool is a URL builder that needs no
+# extra deps). Install this when the user wants
+# the real extractor.
+#
+# tool-send-message: `pyautogui` + `pyperclip` for
+# desktop automation. Required for the
+# SendMessageTool's pyautogui flow. The current
+# tool is a stub, so the user only needs these if
+# they implement the pyautogui flow.
+tool-youtube-summarize = [
+    "youtube-transcript-api>=0.6,<1",
+]
+tool-flight-finder = [
+    "playwright>=1.40,<2",
+    # The user runs `playwright install chromium`
+    # separately (~150MB browser download).
+]
+tool-send-message = [
+    "pyautogui>=0.9.54,<1",
+    "pyperclip>=1.8,<2",
+]
+# Note: tool-web-search needs no extra deps — it
+# uses the existing httpx (already in the base venv
+# via the `web_fetch` tool).
+
 [project.scripts]
 gundam-halo = "gundam_halo.cli:main"
 

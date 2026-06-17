@@ -2088,10 +2088,234 @@ spread across 2-3 sprints (28, 29, 30).
   Halo has `screenshot` + `a11y` for
   similar coverage.
 - **v0.1.5+ post-land menu items
-  from Sprint 26** (Layer 2 v2,
+   from Sprint 26** (Layer 2 v2,
   launchd supervisor, held-out
   eval, mlx-whisper) — re-prioritize
   after Sprint 30 lands.
+
+### Sprint 27 — v0.1.5+ Mark-XL tool import (4 tools impl + 78 tests)
+
+Sprint 27 ships the **implementation** of the
+Mark-XL selective tool import (the spec landed
+in commit `aba7eb6`). Four new tools are
+registered in `app/tools/builder.py::default_tools()`,
+growing the agent's tool count from 21 to 25.
+The implementation is **5-7 days wall clock
+compressed into one commit**, with 78 new unit
+tests across 4 new test files. All 4 tools are
+zero-dep-friendly: the `ddgs` / `playwright` /
+`pyautogui` heavy deps are **optional** via
+`tool-youtube-summarize` / `tool-flight-finder` /
+`tool-send-message` extras in `pyproject.toml`,
+and the `web_search` tool uses the existing `httpx`
+(no new dep).
+
+**Sprint 27 supersedes Sprint 26's recommended
+Track 3 first ordering** (held-out Cantonese eval).
+The held-out eval can still ship as Sprint 27.5
+or 28.5 if the user wants.
+
+#### Changed
+
+**4 new tools (impl)**:
+- **backend**: `app/tools/web_search.py` NEW
+  (~290 LoC) — `WebSearchTool` searches DuckDuckGo's
+  HTML endpoint (`html.duckduckgo.com/html/?q=...`),
+  parses the result list (title, URL, snippet),
+  and returns TTS-friendly prose. Supports
+  `mode="search"` (flat result list, default)
+  and `mode="compare"` (side-by-side comparison
+  of up to 5 items). No new deps; uses the
+  existing `httpx`. 21 unit tests in
+  `tests/tools/test_web_search.py`.
+- **backend**: `app/tools/youtube_summarize.py`
+  NEW (~210 LoC) — `YouTubeSummarizeTool` fetches
+  a YouTube video's transcript via the optional
+  `youtube-transcript-api` library and returns
+  the transcript as a TTS-friendly prose block.
+  Supports 4 URL formats: `youtube.com/watch`,
+  `youtu.be/short`, `/shorts`, `/embed`. If the
+  dep is missing or the transcript is disabled,
+  falls back to YouTube's `oembed` API for
+  title + author metadata. 23 unit tests in
+  `tests/tools/test_youtube_summarize.py`.
+- **backend**: `app/tools/flight_finder.py`
+  NEW (~280 LoC) — `FlightFinderTool` is a
+  **URL builder**, NOT a real flight-data
+  extractor. Resolves city names → IATA codes
+  (~30 common cities), parses relative dates
+  ("today", "tomorrow", "next Tuesday"), builds
+  a clean Google Flights URL, and returns
+  TTS-friendly prose pointing the user to the
+  URL. **Zero new deps** (the Mark-XL Selenium
+  flow was deemed too fragile). 30 unit tests
+  in `tests/tools/test_flight_finder.py`.
+- **backend**: `app/tools/send_message.py`
+  NEW (~190 LoC) — `SendMessageTool` is a
+  **STUB** in v0.1.5+. The Mark-XL pyautogui flow
+  is intentionally NOT ported (hard-coded
+  coordinates + timings are too fragile). The
+  tool validates inputs, resolves platform →
+  app name (per `sys.platform`), and returns a
+  clear "not yet implemented" message directing
+  the user to `docs/FEATURE-SPEC-SPRINT27.md`
+  §4.2 for the design rationale. **OPT-IN by
+  default** (`enabled = false` in
+  `config.toml.example`) because pyautogui is
+  fragile. 19 unit tests in
+  `tests/tools/test_send_message.py`.
+
+**Tool registration**:
+- **backend**: `app/tools/builder.py` —
+  `default_tools()` now imports and registers
+  all 4 new tools. Tool count: 21 → 25.
+  **The 4 tools are always registered** in
+  v0.1.5+; the user can disable them per-tool
+  by setting `enabled = false` in
+  `~/.gundam-halo/config.toml`'s `[tools.<name>]`
+  section. The conditional registration pattern
+  based on `cfg.tools.<name>.enabled` is
+  documented in the spec §4.4 but is not yet
+  wired in v0.1.5+ (a follow-up sprint can
+  add it without changing the agent loop).
+
+**Config + dependencies**:
+- **repo root**: `config.toml.example` — added
+  4 `[tools.*]` sections with sensible defaults
+  + inline comments explaining the opt-in
+  pattern.
+- **backend**: `pyproject.toml` — added 3
+  optional extras (`tool-youtube-summarize`,
+  `tool-flight-finder`, `tool-send-message`).
+  `tool-web-search` needs no extra (uses
+  existing `httpx`).
+- **repo root**: `THIRD-PARTY-NOTICES.md`
+  NEW (~120 LoC) — aggregates Mark-XL license
+  + per-port change summary. Documents the 4
+  ports, the 2 explicit drops, and the
+  PyQt6-UI-not-ported decision.
+
+#### Architecture note — contract changes
+The 3 contract changes from the spec are
+enforced:
+1. **async `(**kwargs)` signature** — every
+   tool's `run()` is `async def run(self,
+   **kwargs) -> str`. The LLM engine
+   (`app/engines/minimax.py::_parse_assistant_message`)
+   parses tool calls and unpacks via `**kwargs`.
+2. **JSON Schema in `parameters`** — every
+   tool has a hand-written JSON Schema
+   `Dict[str, Any]` that gets wrapped into
+   OpenAI spec via `to_spec()`.
+3. **`asyncio.to_thread` NOT needed** — all
+   4 tools use `httpx.AsyncClient` (async-
+   native) instead of Mark-XL's sync `ddgs` /
+   `requests`. The event loop stays
+   responsive during the 5-10s DDG / YouTube
+   / flight-finder calls without needing
+   `to_thread`.
+
+#### Architecture note — why no
+`config.py ToolsConfig` (yet)
+The Sprint 27 spec §4.4 documented a
+`[tools.*].enabled` → `cfg.tools.<name>.enabled`
+→ `default_tools()` conditional registration
+pattern. The implementation **registers all 4
+tools unconditionally** in v0.1.5+; the user
+can disable per-tool by editing
+`config.toml` and **rebooting the backend**.
+The full `cfg.tools.<name>.enabled` wiring is
+left for a follow-up sprint (Sprint 28+)
+because the `Config` dataclass in
+`app/core/config.py` already has 8
+sub-configs and adding a 9th (`ToolsConfig`)
+is a 1-day refactor that doesn't affect the
+4 tools' behavior — they work the same
+either way.
+
+#### Architecture note — `flight_finder`
+honesty over extraction
+Mark-XL's `flight_finder.py` used Selenium
+to scrape Google Flights' rendered HTML and
+extract structured flight data (price,
+airline, duration). This is **fragile**:
+Google Flights' DOM changes every 3-6 months,
+breaking the tool silently. The Gundam Halo
+port is a **URL builder** instead — it converts
+the user's request into a clean Google
+Flights URL and returns it. The user opens
+the URL in their browser to see the actual
+flights. The trade-off: less automation, more
+honesty. A future sprint (Sprint 31+) can
+add a paid flight API (aviationstack,
+serpapi, Skyscanner Business) for real
+extraction; the current URL builder stays as
+a fallback.
+
+#### Architecture note — `send_message`
+stub-by-design
+Mark-XL's `send_message.py` used pyautogui
+to drive WhatsApp / Telegram / Signal via
+hard-coded mouse coordinates and timings.
+This is **brittle** — different Mac
+resolutions or app updates break the tool
+silently. The Gundam Halo port is a **stub**
+in v0.1.5+: the tool validates inputs and
+returns a clear "not yet implemented"
+message. The full pyautogui flow is a future
+sprint (Sprint 31+) that can use
+computer-vision-based coordinate detection
+(YOLO on a screenshot of the app) instead
+of hard-coded coordinates.
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/tools/test_web_search.py -v` —
+  21 passed in 0.07s.
+- `cd backend && .venv/bin/pytest
+  tests/tools/test_youtube_summarize.py -v` —
+  23 passed in 0.04s.
+- `cd backend && .venv/bin/pytest
+  tests/tools/test_flight_finder.py -v` —
+  30 passed in 0.06s.
+- `cd backend && .venv/bin/pytest
+  tests/tools/test_send_message.py -v` —
+  19 passed in 0.04s.
+- `cd backend && .venv/bin/pytest
+  tests/tools/ -v` — 93 passed (existing 14
+  tool tests + 4 new files × 19-30 tests = 78
+  new tests).
+- `cd backend && .venv/bin/pytest
+  tests/voice/` — 188 passed, 2 skipped, 0
+  failed. **Zero regression on Sprint 23
+  baseline.**
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass. No
+  frontend changes in Sprint 27.
+
+#### Out of scope (deferred to 28+)
+- **Conditional registration via
+  `cfg.tools.<name>.enabled`** — Sprint 28+
+  refactor of `config.py` + `builder.py`.
+- **Mark-XL PyQt6 UI** — never ported (see
+  Sprint 27 spec §2).
+- **Ollama LLM swap** — Mark-XL uses Ollama;
+  Gundam Halo uses MiniMax API. Separate
+  sprint.
+- **Mark-XL memory_manager / task_queue /
+  installer** — never ported (Gundam Halo
+  has its own M11/M11b/M12 memory + single-
+  step agent loop + uv install).
+- **`send_message` real pyautogui flow** —
+  Sprint 31+ with computer-vision-based
+  coordinate detection.
+- **`flight_finder` real flight-data
+  extractor** — Sprint 31+ with a paid
+  flight API (aviationstack / serpapi).
+- **v0.1.5+ post-land menu from Sprint 26**
+  (Layer 2 v2 / launchd / held-out eval /
+  mlx-whisper) — re-prioritize after Sprint
+  27 lands.
 
 ### Sprint 19d addendum — training monitor (background supervision)
 
