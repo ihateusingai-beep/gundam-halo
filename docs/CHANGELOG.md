@@ -817,6 +817,172 @@ sample corpus, the difference is minor.
 - **Self-record corpus + Layer 2 v2**.
 - **mlx-whisper inference**.
 
+### Sprint 22 — v0.1.4 land (WhisperHF + augmented-note removal + banner expiry)
+
+Sprint 22 ships the design freeze for v0.1.4
+land. This is a **SPEC-ONLY sprint** — no code
+is written. The four tracks ship in Sprint 23+
+once the user has completed the M9-E Layer 2
+training run (Sprint 19d runbook + monitor,
+produces a HF-format checkpoint under
+`~/.gundam-halo/models/whisper-yue-base/`).
+Sprint 21 (`3353106`) shipped Step 1
+(`prepare_common_voice_yue` impl). Sprint 22
+documents Steps 2 + 3 + 5 from Sprint 20's
+plan, plus a fourth track: Sprint 17a
+upgrade-banner dead-code removal (the 7-day
+TTL has already expired for all users).
+
+#### Spec
+- **docs/FEATURE-SPEC-SPRINT22.md** — 4 tracks
+  (Track 1: `WhisperHFASR` backend + factory
+  branch + voice_ws validation; Track 2:
+  `whisper_local` `model_path` becomes a hard
+  `ValueError`; Track 3: augmented system note
+  deletion in `m9c_voice_tools.py:180-195`,
+  conditional on the M9-C live re-run passing
+  without it; Track 4: Sprint 17a
+  `_STRICT_WAKE_UPGRADE_LOGGED` flag + first-
+  launch INFO block + frontend `VoiceTab.tsx`
+  banner JSX + `shouldShowUpgradeBanner` /
+  `dismissUpgradeBanner` helpers + `localStorage`
+  TTL — all removed as dead code).
+
+#### Changed (planned for Sprint 23+)
+- **backend**: `app/voice/asr/whisper_hf.py`
+  NEW — `WhisperHFASR` implementing
+  `ASRInterface`, lazy-imports `transformers`,
+  uses `transformers.pipeline` with
+  `generate_kwargs={"language": "cantonese",
+  "task": "transcribe"}` (mapping `yue` →
+  `cantonese` for the HF schema), wraps HF
+  sync calls in `asyncio.to_thread`, raises
+  `ASRError` if `model_path` is missing or
+  not a directory.
+- **backend**: `app/voice/asr/asr_factory.py` —
+  add `whisper_hf` branch with lazy import +
+  `model_path` empty-check, update the
+  `ValueError` docstring (line 70) to list
+  `whisper_hf`.
+- **backend**: `app/voice/asr/whisper_local.py`
+  — replace the `model_path` warning block
+  (lines 80-99) with a `ValueError` pointing
+  the user at `whisper_hf`.
+- **backend**: `app/core/config.py` — remove
+  `_STRICT_WAKE_UPGRADE_LOGGED` flag (line 33)
+  + the first-launch INFO block in
+  `load_config` (lines 519-552) + the
+  "mitigated by first-launch log line + 7-day
+  upgrade banner" sentence on `strict_wake_phrase`
+  (line 230).
+- **backend**: `app/api/voice_ws.py` — add
+  `"whisper_hf"` to the `asr_backend`
+  validation list (line 976) + update the
+  error message.
+- **backend**: `tests/voice/test_whisper_hf.py`
+  NEW — 8-10 tests (model load, transcribe
+  happy path, WER against fixture, model_path
+  error, language yue→cantonese mapping,
+  device auto-resolution, compute_type
+  float16, missing `transformers` ImportError,
+  lazy import isolation).
+- **backend**: `tests/voice/test_whisper_local.py`
+  NEW — 2-3 tests (model_path non-empty
+  raises, model_path empty default loads OK,
+  error message references `whisper_hf`).
+- **backend**: `scripts/m9c_voice_tools.py` —
+  delete the augmented-note block (lines
+  180-195) and replace with a one-line
+  M9-E Layer 2 comment. Git revert is the
+  rollback path.
+- **frontend**: `routes/settings/VoiceTab.tsx` —
+  remove `UPGRADE_BANNER_KEY` + `UPGRADE_BANNER_TTL_MS`
+  + `shouldShowUpgradeBanner` + `dismissUpgradeBanner`
+  + `showUpgradeBanner` state + the
+  useEffect branch that sets it + the banner
+  JSX (lines 65-99, 125, 168-172, 278-300).
+- **pyproject.toml** — add `voice-hf` optional
+  extra (`transformers>=4.40`, `torch` CPU +
+  MPS, `accelerate>=0.30`, `soundfile>=0.12`,
+  ~850MB total).
+- **config.toml** (user's local) — one-time
+  manual update: `backend = "whisper_hf"` +
+  `model_path = "~/.gundam-halo/models/whisper-yue-base/"`.
+
+#### Architecture note — lazy import + yue→cantonese mapping
+`WhisperHFASR` follows the same lazy-import +
+`ASRError` wrap pattern as `YuesubASR`
+(`backend/app/voice/asr/yuesub.py:155-204`).
+The factory's `whisper_hf` branch is gated on
+`config.model_path` (raises `ValueError` if
+empty) because the `voice-hf` extra users
+already need the fine-tuned checkpoint on
+disk; without it, the HF pipeline can't load.
+The `yue` → `cantonese` mapping in
+`generate_kwargs` is needed because
+`transformers.pipeline` uses ISO 639-1 names,
+not Whisper's `yue` shorthand. The existing
+`VoiceASRConfig.language` field keeps the
+`yue` convention so the config schema
+doesn't break.
+
+#### Acceptance test — M9-C live re-run
+Track 3 (augmented-note deletion) is the
+**observable acceptance test** for the
+fine-tune. The user runs M9-C twice: once
+with the v0.1.3 augmented note (Track 3
+deletion NOT yet committed), once without
+(Track 3 deletion committed). If both
+pass, the fine-tune is good. If only the
+v0.1.3 run passes, `git revert` and decide
+whether to re-train or defer the sprint.
+
+#### Algorithm note — keep/flip Sprint 20's plan
+Sprint 20 (commit `ffc2624`) listed 3 Steps
+for Sprint 22: Step 2 (WhisperHFASR), Step 3
+(warning removal), Step 5 (augmented-note
+deletion). Sprint 22 adds **Track 4** (Sprint
+17a upgrade-banner expiry), which Sprint 20
+didn't include. The reason: Sprint 20 was
+written 2026-06-13, just after Sprint 17a's
+banner shipped; Sprint 22 is written 2026-06-17,
+the banner's 7-day TTL is already approaching
+expiry, and the dead-code removal is on the
+cleanup backlog. If the user wants Sprint 22
+to ship *only* Sprint 20's 3 Steps, Track 4
+can be deferred to a "Sprint 25 cleanup"
+sprint with no dependency on the training
+run (see spec Appendix A).
+
+#### Verified (this sprint — spec only)
+- `git diff --stat` clean (no source changes).
+- `pytest tests/voice/test_finetune_script.py
+  -v` — 9/9 pass (Sprint 21 contract test
+  still green; Sprint 22's spec doesn't
+  touch the script).
+- No regression on the 52-test voice baseline
+  from Sprint 21.
+
+#### Out of scope (deferred to 23+)
+- **Actual `WhisperHFASR` implementation** —
+  Sprint 23+ (1 day, per Sprint 22 spec §5:
+  200 LoC `whisper_hf.py` + 20 LoC factory
+  branch + 25 LoC `whisper_local.py` cleanup
+  + 250 LoC tests).
+- **Augmented system note deletion** — Sprint
+  23+ (1 hour, conditional on the M9-C live
+  re-run passing without it).
+- **Sprint 17a upgrade-banner dead-code
+  removal** — Sprint 23+ (30 min, no
+  conditional — the 7-day TTL has already
+  expired).
+- **launchd / systemd supervisor** — Sprint
+  23+ per Sprint 19b §2.
+- **Self-record corpus + Layer 2 v2** — per
+  M9-E §"v0.1.3 Layer 2 plan".
+- **mlx-whisper inference** — per M9-E
+  §"Fine-tune tooling".
+
 ### Sprint 19d addendum — training monitor (background supervision)
 
 Sprint 19d's spec said "actual training run is a
