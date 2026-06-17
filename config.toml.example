@@ -17,8 +17,13 @@ default_theme = "gundam-ntd"   # 8 themes available; see docs/ARCHITECTURE.md
 [llm]
 provider = "minimax"
 api_key_env = "MINIMAX_API_KEY"     # read from env, NEVER stored in TOML
-base_url = "https://api.MiniMax.chat/v1"
-default_model = "MiniMax-M3"
+# Two MiniMax clusters exist:
+#   - api.minimax.io    (`.io` cluster, this default)
+#   - api.MiniMax.chat  (`.chat` cluster, different key scope)
+# The `.io` cluster is the standard one as of 2026-06; if you
+# have a `.chat` API key, change the URL accordingly.
+base_url = "https://api.minimax.io/v1"
+default_model = "MiniMax-M2"
 fallback_model = "MiniMax-M2"
 
 # ---------------------------------------------------------------------------
