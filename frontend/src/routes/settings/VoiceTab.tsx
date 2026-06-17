@@ -1,5 +1,5 @@
 /**
- * Settings → Voice tab (Sprint 16 + 17a + 18).
+ * Settings → Voice tab (Sprint 16 + 17a + 18 + 23).
  *
  * Sprint 16: lets the user edit the list of text-level wake
  * phrases the voice pipeline matches at the start of every ASR
@@ -7,21 +7,24 @@
  *
  * Sprint 17a adds a strict-mode toggle (default ON — see
  * docs/FEATURE-SPEC-SPRINT17a.md §11 for the breaking-change
- * rationale and the 7-day upgrade-banner mitigation). When
- * strict mode is on, voice turns whose ASR transcript does not
- * start with a configured wake phrase are discarded server-side
- * and the cockpit shows a brief toast. Both `wake_phrases` and
- * `strict_wake_phrase` are persisted in one PUT round-trip.
+ * rationale). When strict mode is on, voice turns whose ASR
+ * transcript does not start with a configured wake phrase are
+ * discarded server-side and the cockpit shows a brief toast.
+ * Both `wake_phrases` and `strict_wake_phrase` are persisted
+ * in one PUT round-trip. The 7-day upgrade banner that
+ * accompanied the default flip was removed in Sprint 23
+ * (v0.1.4) as the TTL had long expired for all users.
  *
  * Sprint 18 adds two radio groups for the ASR engine and the
  * corrector (formerly read-only in Sprint 17b). The user can
- * now pick `whisper_local` vs `yuesub` for the engine, and
- * `bert` / `opencc` / `none` for the corrector, and Save
- * persists all four fields in one PUT round-trip. Changing
- * either asr field flips a `restart_required` flag in the
- * response; the dashboard shows the "Restart required"
- * banner. See docs/FEATURE-SPEC-SPRINT18.md §3.2 for the
- * UX wireframe.
+ * now pick `whisper_local` vs `yuesub` vs `whisper_hf` for
+ * the engine (Sprint 23 adds `whisper_hf` for fine-tuned HF
+ * checkpoints), and `bert` / `opencc` / `none` for the
+ * corrector, and Save persists all four fields in one PUT
+ * round-trip. Changing either asr field flips a
+ * `restart_required` flag in the response; the dashboard shows
+ * the "Restart required" banner. See docs/FEATURE-SPEC-SPRINT18.md
+ * §3.2 for the UX wireframe.
  *
  * The current voice WS state (idle / ready / etc.) is shown at
  * the top so the user can confirm the connection is alive before
@@ -62,42 +65,6 @@ interface VoiceConfig {
 type AsrBackendDraft = "whisper_local" | "yuesub";
 type AsrCorrectorDraft = "bert" | "opencc" | "none";
 
-const UPGRADE_BANNER_KEY = "halo.voice.strict-banner-dismissed-at";
-const UPGRADE_BANNER_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-
-function shouldShowUpgradeBanner(): boolean {
-  // Sprint 17a §11: show the strict-mode upgrade banner for 7
-  // days after the user first sees it, or until they dismiss it.
-  // We persist the dismissal timestamp in localStorage so the
-  // banner stays gone across reloads.
-  if (typeof window === "undefined") return false;
-  try {
-    const raw = window.localStorage.getItem(UPGRADE_BANNER_KEY);
-    if (raw) {
-      const dismissedAt = Number.parseInt(raw, 10);
-      if (Number.isFinite(dismissedAt)) {
-        if (Date.now() - dismissedAt < UPGRADE_BANNER_TTL_MS) {
-          return false;
-        }
-      }
-    }
-  } catch {
-    // localStorage may be disabled (private mode, etc.) — show
-    // the banner anyway; it just won't be persisted.
-  }
-  return true;
-}
-
-function dismissUpgradeBanner(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(UPGRADE_BANNER_KEY, String(Date.now()));
-  } catch {
-    // ignore — the banner will re-appear next page load but the
-    // user has at least dismissed this one.
-  }
-}
-
 export function VoiceTab() {
   const [config, setConfig] = useState<VoiceConfig | null>(null);
   const [draft, setDraft] = useState<string>("");
@@ -122,7 +89,6 @@ export function VoiceTab() {
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>(
     () => getVoiceStatus(),
   );
-  const [showUpgradeBanner, setShowUpgradeBanner] = useState(false);
 
   // Mirror the voice service's state into this tab. Cheap — no
   // polling, we just read the singleton on every render via the
@@ -164,14 +130,6 @@ export function VoiceTab() {
       })
       .finally(() => setLoading(false));
   }, []);
-
-  // Sprint 17a §11: show the strict-mode upgrade banner on first
-  // visit after the upgrade. Hidden after dismiss OR after 7 days.
-  useEffect(() => {
-    if (config !== null && shouldShowUpgradeBanner()) {
-      setShowUpgradeBanner(true);
-    }
-  }, [config]);
 
   const handleSave = async () => {
     if (saving) return;
@@ -274,52 +232,6 @@ export function VoiceTab() {
       <h3 className="text-sm font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
         Voice
       </h3>
-
-      {/* Sprint 17a §11: 7-day upgrade banner for the strict-mode
-          default flip. Shown until dismissed OR 7 days pass. */}
-      {showUpgradeBanner && (
-        <div
-          className="mb-4 border border-[var(--accent)] bg-[var(--bg-elevated)] px-3 py-2 text-xs font-mono"
-          role="status"
-        >
-          <div className="flex items-start gap-2">
-            <span className="text-[var(--accent)] shrink-0">⚠</span>
-            <div className="flex-1">
-              <p className="text-[var(--text-primary)] mb-1">
-                <strong>New in Sprint 17a:</strong> Strict wake-phrase
-                mode is now on by default. Voice turns need a wake
-                phrase (e.g. <code>Unicorn</code>, <code>高達</code>)
-                to invoke the agent. To revert to permissive mode,
-                uncheck the box below.
-              </p>
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={() => {
-                    setStrictDraft(false);
-                    dismissUpgradeBanner();
-                    setShowUpgradeBanner(false);
-                    toast.info(
-                      "Strict mode will be disabled when you click Save.",
-                    );
-                  }}
-                  className="px-2 py-1 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors"
-                >
-                  Open Settings
-                </button>
-                <button
-                  onClick={() => {
-                    dismissUpgradeBanner();
-                    setShowUpgradeBanner(false);
-                  }}
-                  className="px-2 py-1 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       <Section title="Voice WebSocket">
         <KV

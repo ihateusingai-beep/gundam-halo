@@ -24,14 +24,6 @@ else:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
-# Sprint 17a: emitted at most once per process lifetime, when the
-# user's config.toml is missing the [voice].strict_wake_phrase key
-# entirely (i.e. the user has not yet made an explicit choice
-# about Sprint 17a's new default). After they save any value via
-# Settings → Voice or by editing config.toml, this log line is
-# suppressed on subsequent loads.
-_STRICT_WAKE_UPGRADE_LOGGED: bool = False
-
 
 # ---------------------------------------------------------------------------
 # Default paths
@@ -226,12 +218,12 @@ class VoiceConfig:
     # whose ASR transcript does not start with a configured wake
     # phrase are discarded — no agent invocation, no TTS, a brief
     # cockpit hint. Default flipped from False → True in Sprint 17a
-    # (breaking change for users who never opened Settings → Voice;
-    # mitigated by first-launch log line + 7-day upgrade banner, see
-    # docs/FEATURE-SPEC-SPRINT17a.md §11). Users who want the old
-    # permissive behavior can set strict_wake_phrase = false in
-    # ~/.gundam-halo/config.toml under [voice] or via the
-    # Settings → Voice tab.
+    # (breaking change for users who never opened Settings → Voice).
+    # The 7-day upgrade banner (Sprint 17a §11) was removed in
+    # Sprint 23 (v0.1.4) as the TTL has long expired for all users.
+    # Users who want the old permissive behavior can set
+    # strict_wake_phrase = false in ~/.gundam-halo/config.toml
+    # under [voice] or via the Settings → Voice tab.
     strict_wake_phrase: bool = True
     # Sprint 19c: always-on mic mode. When True, the cockpit
     # auto-fires the agent on the backend's VAD speech_start
@@ -518,36 +510,8 @@ def get_config(home: Optional[Path] = None) -> Config:
 
 def load_config(home: Optional[Path] = None) -> Config:
     """Load config from TOML + env vars."""
-    global _STRICT_WAKE_UPGRADE_LOGGED
     home = expand_home(home or _env("HALO_HOME", str(DEFAULT_HOME)))
-    config_path = home / "config.toml"
-    toml_data = _load_toml(config_path)
-
-    # Sprint 17a: first-launch nudge. If the [voice] section exists
-    # but has no `strict_wake_phrase` key, the user has not made an
-    # explicit choice yet — emit a one-time INFO pointing them to
-    # the Settings → Voice tab. Users who already saved the value
-    # (either as `true` or `false`) see nothing. We do NOT touch
-    # the file ourselves; the user should make the choice via the
-    # dashboard, not have us silently write it.
-    voice_section = toml_data.get("voice", {}) if toml_data else {}
-    if (
-        not _STRICT_WAKE_UPGRADE_LOGGED
-        and isinstance(voice_section, dict)
-        and "strict_wake_phrase" not in voice_section
-    ):
-        # Use both `logger.info` (for the structured log stream)
-        # and a plain `print` (so it shows up in the default
-        # uvicorn console even if the app's logger hasn't been
-        # configured yet — load_config() runs during import).
-        msg = (
-            "voice: strict_wake_phrase=True is now the default (Sprint 17a). "
-            "To revert to permissive: set [voice].strict_wake_phrase = false "
-            f"in {config_path}, or use Settings → Voice."
-        )
-        logger.info(msg)
-        print(f"[halo.config] {msg}")
-        _STRICT_WAKE_UPGRADE_LOGGED = True
+    toml_data = _load_toml(home / "config.toml")
 
     return Config(
         home=home,

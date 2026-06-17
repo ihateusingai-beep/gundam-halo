@@ -14,14 +14,17 @@ Why openai-whisper over whisper.cpp in v1:
 - The Python API is enough for our throughput (1-2 turns/sec max)
 M2+ can swap to whisper.cpp via the same interface for lower latency.
 
-M9-E Layer 2 (v0.1.3): the `model_path` field is accepted in the
-constructor for forward-compat with the upcoming HF-transformers
-backend. In this v0.1.x line, `WhisperLocalASR` still uses the
-`openai-whisper` inference path, which only understands size names
-or `.pt` files — it cannot load a Hugging Face format checkpoint
-directory. A `model_path` directory is detected at warmup and a
-clear warning is logged; the field will be fully wired in v0.1.4
-when the HF backend lands (see docs/tickets/M9-E.md).
+M9-E Layer 2 (v0.1.3) → Sprint 23 (v0.1.4): the `model_path` field
+was a forward-compat shim in v0.1.3; v0.1.4 removes it
+entirely. `WhisperLocalASR` (openai-whisper backend) only
+understands size names or `.pt` files — it cannot load a
+Hugging Face format checkpoint directory. To use a
+fine-tuned HF-format model, switch to `WhisperHFASR`
+(see `app/voice/asr/whisper_hf.py`) by setting
+`voice.asr.backend = "whisper_hf"` in config.toml.
+`WhisperLocalASR(model_path=...)` raises `ValueError` at
+warmup with a pointer at the right backend (no silent
+fallback to `model_size`).
 """
 
 from __future__ import annotations
@@ -45,7 +48,10 @@ class WhisperLocalASR(ASRInterface):
     def __init__(
         self,
         model_size: str = "base",
-        model_path: str = "",  # M9-E Layer 2: HF-format dir, wired in v0.1.4
+        model_path: str = "",  # Sprint 23 (v0.1.4): must be empty.
+        # Use `WhisperHFASR` (backend="whisper_hf") for HF-format
+        # fine-tuned checkpoints. Passing a non-empty
+        # `model_path` here raises `ValueError` at warmup.
         language: str | None = None,  # None = auto-detect
         device: str = "auto",  # auto|cpu|cuda|mps
         compute_type: str = "auto",  # auto|int8|float16|float32
@@ -77,26 +83,26 @@ class WhisperLocalASR(ASRInterface):
         if self._model is not None:
             return
 
-        # M9-E Layer 2 forward-compat: if a model_path is set, surface
-        # the gap so the operator knows the v0.1.x line can't load a
-        # Hugging Face format directory yet. v0.1.4 will replace this
-        # backend with a HF-pipeline implementation.
+        # Sprint 23 (v0.1.4): `model_path` was a forward-compat
+        # shim in v0.1.3 — the constructor accepted it but the
+        # backend couldn't load HF-format directories, so
+        # warmup() emitted a warning and silently fell back to
+        # `model_size`. v0.1.4 ships `WhisperHFASR`
+        # (`app/voice/asr/whisper_hf.py`) which CAN load
+        # HF-format directories, so `whisper_local` no longer
+        # accepts `model_path` at all. Setting it is a
+        # user-error (probably the user migrated to v0.1.4
+        # but forgot to flip `backend = "whisper_hf"` in
+        # config.toml) — fail loud, point at the right
+        # backend, don't silently fall back.
         if self._model_path:
-            expanded = os.path.expanduser(self._model_path)
-            if os.path.isdir(expanded):
-                logger.warning(
-                    f"voice.asr.model_path={self._model_path!r} is set "
-                    f"but WhisperLocalASR (openai-whisper backend) cannot "
-                    f"load HF-format directories. Falling back to "
-                    f"model_size={self._model_size!r}. Full support "
-                    f"lands in v0.1.4 (see docs/tickets/M9-E.md)."
-                )
-            else:
-                logger.warning(
-                    f"voice.asr.model_path={self._model_path!r} does not "
-                    f"exist on disk. Falling back to "
-                    f"model_size={self._model_size!r}."
-                )
+            raise ValueError(
+                f"WhisperLocalASR (openai-whisper backend) does "
+                f"not support voice.asr.model_path. To load a "
+                f"fine-tuned HF-format checkpoint, set "
+                f"voice.asr.backend = 'whisper_hf' instead. "
+                f"Got: voice.asr.model_path={self._model_path!r}."
+            )
 
         try:
             import whisper  # type: ignore

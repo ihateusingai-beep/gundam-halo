@@ -973,12 +973,12 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
                 status_code=400,
                 detail="`asr_backend` must be a string",
             )
-        if raw not in ("whisper_local", "yuesub"):
+        if raw not in ("whisper_local", "yuesub", "whisper_hf"):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"`asr_backend` must be one of: whisper_local, yuesub "
-                    f"(got {raw!r})"
+                    f"`asr_backend` must be one of: whisper_local, yuesub, "
+                    f"whisper_hf (got {raw!r})"
                 ),
             )
         new_asr_backend = raw

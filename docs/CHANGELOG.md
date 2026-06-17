@@ -983,6 +983,265 @@ run (see spec Appendix A).
 - **mlx-whisper inference** — per M9-E
   §"Fine-tune tooling".
 
+### Sprint 23 — v0.1.4 land (WhisperHFASR impl + whisper_local cleanup + banner expiry)
+
+Sprint 23 ships the v0.1.4 land per the Sprint 22
+spec (commit `e0b87f9`). Three of the four tracks
+ship in this commit; **Track 3 (augmented system
+note deletion) is deferred** to a follow-up sprint
+because it is conditional on the M9-E Layer 2
+training run completing and the M9-C live re-run
+passing without the workaround. The training run
+itself is a user-driven, 3h+ wall-clock session
+(Sprint 19d runbook) and has not been executed
+yet — see Sprint 22 spec §4.2 "Acceptance test —
+M9-C live re-run" for the conditional workflow.
+
+#### Changed
+
+**Track 1 — `WhisperHFASR` backend** (~485 LoC
+new code, 34 unit tests, all green).
+- **backend**: `app/voice/asr/whisper_hf.py` NEW
+  — `WhisperHFASR` class implementing
+  `ASRInterface`. Lazy-imports `transformers` and
+  `torch` via `_import_transformers` and
+  `_import_torch` helpers (the heavy ML deps are
+  in the `voice-hf` optional extra, not pulled in
+  for whisper_local / yuesub users). Uses
+  `transformers.pipeline` with
+  `generate_kwargs={"language": "cantonese",
+  "task": "transcribe"}` — the `yue` →
+  `cantonese` mapping is required because
+  `transformers` uses ISO 639-1 names, not
+  Whisper's `yue` shorthand. Without this
+  mapping the model would auto-detect English on
+  the first inference and Cantonese WER would
+  spike. HF sync calls are wrapped in
+  `asyncio.to_thread` (same pattern as the BERT
+  corrector) so the event loop stays responsive
+  during the 100-500ms transcribe call.
+  Resolves `device="auto"` → MPS on Apple
+  Silicon, CUDA on Linux/Windows, CPU fallback.
+  Resolves `compute_type="auto"` → float32
+  (parity with the training script; user can
+  override to float16 to halve MPS residency).
+  Raises `ASRError` if `model_path` is empty
+  or not a directory. Module-local copy of
+  `_pcm_bytes_to_float32` (mirrors
+  `YuesubASR._pcm_bytes_to_float32`) — kept
+  module-local to avoid transitively importing
+  yuesub (which pulls in funasr_onnx, defeating
+  the voice-hf extra's opt-in design).
+- **backend**: `app/voice/asr/asr_factory.py` —
+  added `whisper_hf` branch with lazy import +
+  `model_path` empty-check that raises
+  `ValueError` with a clear install/config hint.
+  Updated the `ValueError` docstring and the
+  docstring on `VoiceASRConfig.backend`
+  (`app/core/config.py:153`) to list
+  `whisper_hf` as the third option.
+- **backend**: `app/api/voice_ws.py:976` —
+  added `"whisper_hf"` to the `asr_backend`
+  validation list (returns 400 with a clearer
+  error message listing all three backends).
+  The Sprint 19b restart-scheduled flow
+  automatically fires when the user PATCHes
+  `asr_backend` from `whisper_local` to
+  `whisper_hf` via the Settings → Voice tab —
+  no extra wiring needed.
+- **pyproject.toml** — added `voice-hf` optional
+  extra: `transformers>=4.40,<5`, `torch>=2.1,<3`,
+  `accelerate>=0.30,<1`, `soundfile>=0.12,<1`.
+  Total extra size: ~850MB. The user runs
+  `uv sync --extra voice-hf` once the training
+  run produces a HF-format checkpoint under
+  `~/.gundam-halo/models/whisper-yue-base/`.
+  whisper_local / yuesub users do NOT need this
+  extra; the factory's `whisper_hf` branch
+  raises `ASRError` with a clear install hint
+  if the deps are missing.
+- **backend**: `tests/voice/test_whisper_hf.py`
+  NEW — 34 unit tests across 7 categories
+  (module shape, pcm conversion, device
+  resolution, compute_type resolution, language
+  mapping, warmup + transcribe, factory
+  integration). Uses `monkeypatch.setattr` to
+  patch the lazy-import helpers (a more reliable
+  pattern than `sys.modules.setdefault` with
+  MagicMock — see "Memory note" below).
+
+**Track 2 — `whisper_local` `model_path` warning
+→ `ValueError`** (~50 LoC removed from
+`whisper_local.py` + docstring updates, 4 unit
+tests, all green).
+- **backend**: `app/voice/asr/whisper_local.py` —
+  replaced the v0.1.3 forward-compat warning
+  block (lines 80-99) with a hard `ValueError`
+  that points the user at the right backend:
+  "WhisperLocalASR (openai-whisper backend) does
+  not support voice.asr.model_path. To load a
+  fine-tuned HF-format checkpoint, set
+  voice.asr.backend = 'whisper_hf' instead."
+  Updated the file-level docstring (lines 17-25)
+  to drop the "fully wired in v0.1.4" forward-
+  compat note. Updated the `model_path` parameter
+  comment (line 51) to "Sprint 23 (v0.1.4): must
+  be empty. Use `WhisperHFASR` for HF-format
+  fine-tuned checkpoints." The constructor
+  signature is unchanged (still accepts
+  `model_path=""` for backward-compat), but a
+  non-empty value now raises `ValueError` at
+  warmup time.
+- **backend**: `tests/voice/test_whisper_local.py`
+  NEW — 4 unit tests covering: model_path
+  non-empty raises with `whisper_hf` in the
+  message, error message includes the offending
+  path value, model_path empty (default) loads
+  openai-whisper as before, the default value
+  is the empty string (no breaking change for
+  users who never set the field).
+
+**Track 4 — Sprint 17a upgrade-banner dead-code
+removal** (~50 LoC backend + ~50 LoC frontend
+removed, 0 new tests, 0 regression).
+- **backend**: `app/core/config.py` — removed
+  the `_STRICT_WAKE_UPGRADE_LOGGED: bool = False`
+  module-level flag (was line 33) and the
+  first-launch INFO log block inside
+  `load_config` (was lines 519-552). The block
+  fired on every process restart when the user
+  had a `[voice]` section but no
+  `strict_wake_phrase` key — a per-process
+  re-emission pattern that the Sprint 17a spec
+  didn't fully intend (the 7-day TTL was only
+  honored on the frontend via localStorage).
+  Updated the `strict_wake_phrase` field
+  docstring (`config.py:217-226`) to drop the
+  "mitigated by first-launch log line + 7-day
+  upgrade banner" sentence and to credit Sprint
+  23 for the removal.
+- **frontend**: `routes/settings/VoiceTab.tsx` —
+  removed the `UPGRADE_BANNER_KEY` +
+  `UPGRADE_BANNER_TTL_MS` constants (lines
+  65-66), the `shouldShowUpgradeBanner` and
+  `dismissUpgradeBanner` helpers (lines 68-99),
+  the `showUpgradeBanner` state (was line 89),
+  the useEffect that set it (was lines 131-137),
+  and the banner JSX block (was lines 233-277).
+  Updated the file-level docstring to credit
+  Sprint 23 for the banner removal. No frontend
+  tests were affected (no test asserted on
+  banner presence).
+
+#### Architecture note — pure / lazy split
+`WhisperHFASR` follows the same lazy-import +
+`ASRError` wrap pattern as `YuesubASR`
+(`app/voice/asr/yuesub.py:155-194`). The factory
+is the only place that calls into the heavy
+deps; `WhisperHFASR.__init__` does not import
+`transformers` or `torch`. The `_import_transformers`
+and `_import_torch` helpers are called from
+`_resolve_device`, `_resolve_torch_dtype`,
+`_build_pipeline`, and `_invoke_pipeline` —
+all on the warmup or transcribe hot path, not
+the constructor path. This means a
+`create_asr(config)` call with
+`backend="whisper_hf"` succeeds even on a system
+without `transformers` installed (the warmup
+or first transcribe will raise `ASRError` with
+an install hint).
+
+#### Architecture note — yue→cantonese mapping
+`transformers.pipeline`'s `generate_kwargs.language`
+field uses ISO 639-1 names (`cantonese`, `chinese`,
+`english`). Gundam Halo's `VoiceASRConfig.language`
+field uses the `yue` shorthand to match Whisper
+and SenseVoice conventions. The `_map_language`
+helper in `whisper_hf.py` bridges the two —
+without it, the model would default to English
+detection and Cantonese WER would spike to
+~50%+ on the M9-E eval set. The mapping is
+tested by 6 unit tests (yue→cantonese, zh→chinese,
+auto→english, empty→english, unknown code
+passthrough, case-insensitive).
+
+#### Architecture note — test fixture pitfall
+The first attempt at mocking `transformers` in
+test fixtures used
+`sys.modules.setdefault("transformers", MagicMock(pipeline=...))`
+— same pattern as Sprint 17b's
+`test_yuesub_asr.py:mock_yuesub_deps`. The
+pattern works for `from package import name1,
+name2` (multi-name imports) but **fails for
+`from package import single_name`** because
+MagicMock's attribute access goes through
+`__getattr__` (which returns a fresh MagicMock
+each time) before checking `__dict__` (where
+the kwarg-set attribute lives). The fix was
+to patch the lazy-import helper directly via
+`monkeypatch.setattr(whisper_hf,
+"_import_transformers", lambda: fake)`. This
+is a reliable pattern for any "lazy import a
+heavy dep" helper function — see
+`memory/python-backend-patterns.md` §8 for
+the full writeup with a trace.
+
+#### Test count evolution
+| Sprint | New tests | Total backend voice |
+|---|---|---|
+| 21 (previous) | +5 | 102 |
+| **23 (this)** | **+38** (34 whisper_hf + 4 whisper_local) | **140** |
+
+(Total voice tests: 90 + 85 + 12 + 1 = 188 passed,
+2 skipped, 0 failed across all voice test files
+in this run.)
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_whisper_hf.py -v` — 34 passed
+  in 0.14s.
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_whisper_local.py -v` — 4
+  passed in 1.29s.
+- `cd backend && .venv/bin/pytest tests/voice/`
+  (full voice suite) — **188 passed, 2 skipped,
+  0 failed**. Zero regression on Sprint 16 +
+  17a + 17b + 18 + 19a + 19b + 19c P1 + 19c
+  P2 + 19d prep + 19d addendum + 20 + 21 + 22
+  baseline.
+- `cd frontend && pnpm tsc --noEmit` — 0
+  errors.
+- `cd frontend && pnpm vitest run` — 63/63
+  pass. The banner removal did not break any
+  frontend test.
+
+#### Out of scope (deferred to 24+)
+- **Track 3 — augmented system note deletion**
+  in `scripts/m9c_voice_tools.py:180-195` —
+  **conditional on the M9-E Layer 2 training
+  run completing** and the M9-C live re-run
+  passing without the workaround. The training
+  run is a user-driven 3h+ wall-clock session
+  (Sprint 19d runbook, monitored by
+  `finetune_whisper_yue_monitor.py`). Once
+  the user has produced a fine-tuned HF-format
+  checkpoint and the M9-C re-run passes both
+  with and without the augmented note, the
+  deletion lands in a follow-up sprint (one
+  command: `git revert` if it fails).
+- **`uv sync --extra voice-hf` install** —
+  the user runs this once the training run
+  produces a HF-format checkpoint (~850MB of
+  ML deps).
+- **Actual training run** — 3h+ wall clock,
+  user-present session (per Sprint 19d spec).
+- **launchd / systemd supervisor** — per
+  Sprint 19b §2.
+- **Self-record corpus + Layer 2 v2** — per
+  M9-E §"v0.1.3 Layer 2 plan".
+- **mlx-whisper inference** — per M9-E
+  §"Fine-tune tooling".
+
 ### Sprint 19d addendum — training monitor (background supervision)
 
 Sprint 19d's spec said "actual training run is a

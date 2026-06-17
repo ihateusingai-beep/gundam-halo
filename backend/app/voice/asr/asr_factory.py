@@ -6,6 +6,12 @@ Sprint 17b: `yuesub` (Cantonese, SenseVoice + fsmn-vad + optional
 BERT corrector). The yuesub backend is a lazy import so that
 whisper_local users don't need to install the voice-yuesub
 extras (funasr_onnx, librosa, transformers[onnx], opencc, etc.).
+Sprint 23 (v0.1.4): `whisper_hf` (Hugging Face transformers
+pipeline; loads a fine-tuned HF-format checkpoint via
+`voice.asr.model_path`). The whisper_hf backend is a lazy
+import so that whisper_local / yuesub users don't need to
+install the voice-hf extras (transformers, torch, accelerate,
+soundfile). See `docs/FEATURE-SPEC-SPRINT22.md` §4.1 "Track 1".
 """
 
 from __future__ import annotations
@@ -32,7 +38,8 @@ def create_asr(
         A ready-to-warmup ASR engine instance.
 
     Raises:
-        ValueError: on unknown backend name
+        ValueError: on unknown backend name, or on
+            `whisper_hf` with empty `model_path`.
     """
     if config is None:
         from app.core.config import get_config
@@ -65,9 +72,38 @@ def create_asr(
             corrector=corrector,
         )
 
+    if backend == "whisper_hf":
+        # Sprint 23 (v0.1.4): HF transformers pipeline for
+        # fine-tuned Cantonese models. The voice-hf extra
+        # declares `transformers` + `torch` + `accelerate`
+        # + `soundfile` (~850MB total). whisper_local /
+        # yuesub users don't pay for these.
+        from app.voice.asr.whisper_hf import WhisperHFASR
+
+        # model_path is REQUIRED for whisper_hf — the
+        # WhisperHFASR class itself raises ASRError on
+        # empty model_path, but we fail earlier here with
+        # a clearer ValueError so the user sees a startup
+        # error rather than a warmup error.
+        if not config.model_path:
+            raise ValueError(
+                "voice.asr.model_path is required when "
+                "backend='whisper_hf'. Set it in config.toml "
+                "to the fine-tuned checkpoint directory, e.g.\n"
+                'model_path = "~/.gundam-halo/models/whisper-yue-base/"'
+            )
+
+        return WhisperHFASR(
+            model_path=config.model_path,
+            language=config.language,
+            device=config.device,
+            compute_type=config.compute_type,
+        )
+
     raise ValueError(
         f"Unknown ASR backend: {backend!r}. "
-        f"Supported: 'whisper_local' (Sprint 16), 'yuesub' (Sprint 17b)."
+        f"Supported: 'whisper_local' (Sprint 16), 'yuesub' (Sprint 17b), "
+        f"'whisper_hf' (Sprint 23 / v0.1.4)."
     )
 
 
