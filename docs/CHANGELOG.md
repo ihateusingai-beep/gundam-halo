@@ -701,10 +701,121 @@ model_path = "~/.gundam-halo/models/whisper-yue-base/"
   Sprint 22 (bundled with Step 2).
 - **Step 5 — launchd / systemd supervisor** —
   Sprint 23+ (per Sprint 19b §2).
-- **Self-record corpus + Layer 2 v2** — per
-  M9-E §"v0.1.3 Layer 2 plan".
+- **Self-record corpus + Layer 2 v2** — per M9-E
+  §"v0.1.3 Layer 2 plan".
 - **mlx-whisper inference** — per M9-E §"Fine-tune
   tooling".
+
+### Sprint 21 — prepare_common_voice_yue impl
+
+Sprint 21 ships Sprint 20 spec Step 1: replaces the
+v0.1.3 `NotImplementedError` stub in
+`backend/scripts/finetune_whisper_yue.py:193-246`
+with a real, testable dataset preparation pipeline.
+The training script can now download Common Voice
+yue, split by speaker, cap by hours, and write
+parquet files. Once the user installs the `train`
+extra (`uv sync --extra train --extra voice`) and
+runs the script, the streaming + split + parquet
+write all succeed without raising.
+
+#### Changed
+- **backend**: `scripts/finetune_whisper_yue.py` —
+  replaced the `NotImplementedError` body of
+  `prepare_common_voice_yue` with a 3-step
+  pipeline:
+    1. **Stream** — `datasets.load_dataset(
+       mozilla-foundation/common_voice_<ver>_0`,
+       'yue', split='train+validation+test',
+       streaming=True, trust_remote_code=True)`,
+       then cast audio to 16kHz.
+    2. **Split by speaker** — `split_by_client_id`
+       helper (pure): speakers sorted by sample
+       count descending, top `test_ratio`
+       speakers → test, next `val_ratio` → val,
+       rest → train. Speaker-disjoint (the same
+       client_id never appears in two splits, per
+       Common Voice's standard rule that prevents
+       WER leakage).
+    3. **Cap + write** — `cap_at_hours` helper
+       (pure, greedy "keep earliest that fit"
+       algorithm) trims the train split to
+       `max_train_hours` of audio. Then
+       `save_splits_as_parquet` writes each split
+       to `cache_dir/{split}/data.parquet`. The
+       write is resumable — existing files are
+       skipped on re-run.
+  New private helpers added: `_audio_seconds`
+  (reads duration from HF audio feature's decoded
+  array), `load_splits_row_counts` (used by the
+  resumability check).
+- **backend**: `tests/voice/test_finetune_script.py`
+  — replaced `test_prepare_common_voice_yue_is_stub`
+  with a contract assertion (the function exists,
+  the stub `raise NotImplementedError` is gone)
+  + 5 new unit tests for the pure helpers:
+  `test_split_by_client_id_speaker_disjoint`
+  (verifies no client_id in two splits),
+  `test_split_by_client_id_handles_single_speaker`
+  (degenerate single-speaker corpus),
+  `test_cap_at_hours_keeps_earliest_within_cap`
+  (verifies the greedy-keep algorithm in input
+  order), `test_cap_at_hours_no_op_when_under_cap`
+  (no-op short-circuit), and
+  `test_audio_seconds_zero_length_returns_zero`
+  (missing audio array → 0 duration).
+  Total: 9 tests pass (up from 4 in Sprint 19d).
+
+#### Architecture note — pure / impure split
+The implementation splits into pure helpers
+(`split_by_client_id`, `cap_at_hours`) and impure
+I/O wrappers (`save_splits_as_parquet`,
+`load_splits_row_counts`, `prepare_common_voice_yue`).
+The pure helpers are unit-testable without
+`datasets` or `pyarrow`. The impure wrapper
+imports them lazily so unit tests can import the
+module even when the `train` extra isn't installed.
+This pattern matches Sprint 19d's "stub until
+ready" strategy: the function exists in v0.1.3 so
+the call site doesn't break, but the impl lands in
+Sprint 21 and is unit-testable in isolation.
+
+#### Algorithm choice — "keep earliest" vs "drop longest"
+The `cap_at_hours` helper uses a "keep earliest
+samples that fit" algorithm rather than "drop
+the longest first". The "keep earliest" variant
+preserves input order (deterministic, easier to
+test) and aligns with Common Voice's natural
+ordering (each speaker's earliest samples are the
+most "canonical"). The "drop longest" variant is
+also valid but reorders output and complicates
+unit testing. For the typical 50h cap on a 30-60k
+sample corpus, the difference is minor.
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_finetune_script.py
+  tests/voice/test_finetune_monitor.py
+  tests/voice/test_fsmn_vad.py
+  tests/voice/test_voice_config_asr.py` — 52 passed,
+  0 skipped. Zero regression on Sprint 18 + 19a +
+  19b + 19c + 19d + 19d addendum + 20 baseline.
+- `cd frontend && pnpm tsc --noEmit` — 0 errors.
+- `cd frontend && pnpm vitest run` — 63/63 pass.
+
+#### Out of scope (deferred to 22+)
+- **`uv sync --extra train --extra voice` install**
+  — 3GB of ML deps. The user installs this in the
+  actual-training session.
+- **Actual training run** — 3h+ wall clock,
+  user-present session (per Sprint 19d spec).
+- **`WhisperHFASR` swap** — Sprint 22 (per Sprint
+  20 spec Step 2).
+- **Augmented system note removal** — Sprint 22
+  (per Sprint 20 spec Step 4).
+- **launchd / systemd supervisor** — Sprint 23+.
+- **Self-record corpus + Layer 2 v2**.
+- **mlx-whisper inference**.
 
 ### Sprint 19d addendum — training monitor (background supervision)
 

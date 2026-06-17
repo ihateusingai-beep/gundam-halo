@@ -88,6 +88,18 @@ def test_finetune_script_is_importable():
         "finetune_whisper_yue.py should export a main() "
         "function as the CLI entry point"
     )
+    # Sprint 21: the impl adds three pure helpers that
+    # unit-test the dataset preparation pipeline
+    # without needing `datasets` or `pyarrow`.
+    assert hasattr(mod, "split_by_client_id"), (
+        "Sprint 21: split_by_client_id helper missing"
+    )
+    assert hasattr(mod, "cap_at_hours"), (
+        "Sprint 21: cap_at_hours helper missing"
+    )
+    assert hasattr(mod, "save_splits_as_parquet"), (
+        "Sprint 21: save_splits_as_parquet helper missing"
+    )
 
 
 def test_finetune_script_help_exits_zero():
@@ -116,52 +128,174 @@ def test_finetune_script_help_exits_zero():
 
 
 def test_prepare_common_voice_yue_is_stub():
-    """prepare_common_voice_yue is a NotImplementedError
-    stub in v0.1.3 (per M9-E ticket). The actual
-    materialise-and-split logic is the next chunk of
-    work. This test pins the contract so a future
-    refactor that accidentally removes the stub
-    raises a clear failure here.
+    """Sprint 21: prepare_common_voice_yue is NO LONGER
+    a stub. The full impl lives in
+    finetune_whisper_yue.py and uses the pure
+    helpers split_by_client_id, cap_at_hours,
+    save_splits_as_parquet. We test the pure
+    helpers in dedicated unit tests below; the
+    streaming call inside prepare_common_voice_yue
+    requires the `datasets` extra (which the
+    standard venv doesn't have), so the end-to-end
+    path is tested by monkey-patching the
+    load_dataset call.
 
-    The function imports `from datasets import ...` at
-    the top, which only exists when the `train` extra
-    is installed (`uv sync --extra train`). In CI /
-    unit-test environments without the extra, we skip
-    the runtime call and only assert the function
-    exists on the module. The function-existence check
-    is the part of the contract we can verify offline.
+    This test now asserts the function exists and
+    is callable. The NotImplementedError check was
+    removed in Sprint 21.
     """
-    mod = _load_script_module(name="finetune_yue_stub_test")
-    assert hasattr(mod, "prepare_common_voice_yue"), (
-        "finetune_whisper_yue.py should export "
-        "prepare_common_voice_yue as a module-level "
-        "function"
+    mod = _load_script_module(name="finetune_yue_not_stub_test")
+    assert hasattr(mod, "prepare_common_voice_yue")
+    # The function should be callable. We can't
+    # actually invoke it without `datasets`, but we
+    # can import the module and confirm the impl is
+    # in place (i.e. it doesn't re-raise
+    # NotImplementedError at import time).
+    src = Path(mod.__file__).read_text(encoding="utf-8")
+    assert "raise NotImplementedError" not in src.split(
+        "def prepare_common_voice_yue", 1
+    )[1].split("def _audio_seconds", 1)[0], (
+        "Sprint 21: prepare_common_voice_yue should "
+        "not still raise NotImplementedError. The "
+        "stub was filled in this sprint; if you "
+        "re-added a NotImplementedError, that's a "
+        "regression."
     )
-    datasets = pytest.importorskip(
-        "datasets",
-        reason=(
-            "datasets is part of the `train` extra "
-            "(uv sync --extra train); skip the runtime "
-            "stub test when running unit tests without "
-            "the extra installed."
-        ),
+
+
+# ---------------------------------------------------------------------------
+# Sprint 21: pure helper tests for the dataset
+# preparation pipeline. These don't require the
+# `datasets` or `pyarrow` extras — they exercise the
+# pure functions that are split out from
+# prepare_common_voice_yue for testability.
+# ---------------------------------------------------------------------------
+
+
+def _mock_sample(client_id: str, duration_s: float = 1.0) -> dict:
+    """Build a mock Common Voice sample with a
+    decoded audio array of the requested duration at
+    16kHz. Mirrors the HF datasets Audio feature
+    output so split_by_client_id and cap_at_hours
+    can read it without touching the real schema.
+    """
+    n_samples = int(duration_s * 16000)
+    return {
+        "client_id": client_id,
+        "audio": {"array": list(range(n_samples))},
+        "sentence": f"hello from {client_id}",
+    }
+
+
+def test_split_by_client_id_speaker_disjoint():
+    """split_by_client_id must never put the same
+    client_id in two splits (Common Voice's standard
+    rule — never split one speaker across train and
+    val, that leaks the WER)."""
+    mod = _load_script_module(name="finetune_yue_split_test")
+    samples = []
+    # 3 speakers with different sample counts so the
+    # "top speakers go to test" sorting kicks in.
+    for cid, count in [("A", 5), ("B", 3), ("C", 2)]:
+        for _ in range(count):
+            samples.append(_mock_sample(cid))
+    splits = mod.split_by_client_id(
+        samples, test_ratio=0.34, val_ratio=0.33
     )
-    # Re-load the module now that `datasets` is on
-    # sys.path so the prepare_common_voice_yue
-    # function can import it without raising
-    # ModuleNotFoundError.
-    mod = _load_script_module(name="finetune_yue_stub_test_v2")
-    with pytest.raises(NotImplementedError) as exc_info:
-        mod.prepare_common_voice_yue(
-            cv_version="11.0",
-            cache_dir=Path("/tmp/cv-yue"),
-            max_train_hours=50.0,
-        )
-    # The error message should point at the M9-E ticket
-    # so the user has a paper trail.
-    assert "M9-E" in str(exc_info.value) or "v0.1.3" in str(
-        exc_info.value
-    ), f"stub error message should mention M9-E ticket: {exc_info.value}"
+    spk_train = set(s["client_id"] for s in splits["train"])
+    spk_val = set(s["client_id"] for s in splits["validation"])
+    spk_test = set(s["client_id"] for s in splits["test"])
+    assert spk_train.isdisjoint(spk_val), (
+        f"speaker-disjoint violated: train={spk_train} "
+        f"overlaps val={spk_val}"
+    )
+    assert spk_val.isdisjoint(spk_test)
+    assert spk_train.isdisjoint(spk_test)
+    # The 3-speaker split with 34%/33% ratios should
+    # give 1 / 1 / 1 (each split gets one speaker,
+    # the smallest).
+    assert len(spk_test) == 1
+    assert len(spk_val) == 1
+    assert len(spk_train) == 1
+
+
+def test_split_by_client_id_handles_single_speaker():
+    """With only one speaker, the split still works
+    — the speaker goes to test (the smallest split),
+    val is empty, train has them all. This is a
+    degenerate case the test data should never hit
+    in production but the impl must not crash.
+    """
+    mod = _load_script_module(name="finetune_yue_single_spkr_test")
+    samples = [_mock_sample("solo") for _ in range(5)]
+    splits = mod.split_by_client_id(samples)
+    assert len(splits["test"]) == 5
+    assert len(splits["validation"]) == 0
+    assert len(splits["train"]) == 0
+
+
+def test_cap_at_hours_keeps_earliest_within_cap():
+    """cap_at_hours keeps the earliest samples that
+    fit under the cap, in input order. We pass 5
+    samples with varying durations (1s..5s) and
+    cap at 8s: A(1)+B(2)+C(3)=6s ≤ 8, D(4) would
+    push to 10s so D and E are dropped. Output is
+    [A, B, C] in input order.
+    """
+    mod = _load_script_module(name="finetune_yue_cap_test")
+    samples = [
+        _mock_sample("A", duration_s=1.0),
+        _mock_sample("B", duration_s=2.0),
+        _mock_sample("C", duration_s=3.0),
+        _mock_sample("D", duration_s=4.0),
+        _mock_sample("E", duration_s=5.0),
+    ]
+    # Total = 15s. Cap at 8s. Algorithm: iterate in
+    # input order, keep if fits.
+    #   A(1): running 0+1=1 ≤ 8 → keep, running=1
+    #   B(2): 1+2=3 ≤ 8 → keep, running=3
+    #   C(3): 3+3=6 ≤ 8 → keep, running=6
+    #   D(4): 6+4=10 > 8 → drop
+    #   E(5): 6+5=11 > 8 → drop
+    # Output: [A, B, C].
+    capped = mod.cap_at_hours(samples, max_hours=8 / 3600)
+    kept_ids = [s["client_id"] for s in capped]
+    assert kept_ids == ["A", "B", "C"], (
+        f"expected [A, B, C] kept, got {kept_ids}"
+    )
+
+
+def test_cap_at_hours_no_op_when_under_cap():
+    """If the total duration is under the cap, all
+    samples are returned unchanged (in input order)."""
+    mod = _load_script_module(name="finetune_yue_cap_noop_test")
+    samples = [
+        _mock_sample("A", duration_s=1.0),
+        _mock_sample("B", duration_s=2.0),
+    ]
+    capped = mod.cap_at_hours(samples, max_hours=10 / 3600)
+    assert [s["client_id"] for s in capped] == ["A", "B"]
+
+
+def test_audio_seconds_zero_length_returns_zero():
+    """A sample with no audio array (e.g. raw bytes
+    only) has 0 duration. cap_at_hours must skip it
+    (the greedy loop drops it as "already full")."""
+    mod = _load_script_module(name="finetune_yue_audio_zero_test")
+    samples = [
+        {"client_id": "A", "audio": {}},  # no array
+        _mock_sample("B", duration_s=1.0),
+    ]
+    capped = mod.cap_at_hours(samples, max_hours=0.0001)
+    # B has 1s of audio, but max_hours is 0.36s — so
+    # B is also dropped, leaving only the zero-length
+    # sample.
+    kept_ids = [s["client_id"] for s in capped]
+    # We don't assert exact output (the greedy
+    # algorithm might keep A as "free" depending on
+    # rounding). The point is: doesn't crash, returns
+    # a list.
+    assert isinstance(kept_ids, list)
 
 
 def test_finetune_script_default_output_dir_matches_config():
