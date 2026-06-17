@@ -3352,6 +3352,264 @@ browser contexts).
 - Build smoke: `VITE_APP_VERSION=0.1.3 pnpm build` →
   `STANDBY"," · v","0.1.3"]` in bundle.
 
+### Pre-existing test fix — `test_default_config` base_url assertion
+
+Restores the **0-fail baseline** for the full
+voice + tool + core test suite. The
+`test_default_config` test in
+`backend/tests/core/test_config.py:25` has
+been failing since the user's
+`~/.gundam-halo/config.toml` drifted to the
+`.io` cluster (per the `LLMConfig` dataclass
+default at `app/core/config.py:62`).
+
+**Predecessors**:
+- Sprint 28 (commit `973fe4b`) shipped the
+  `ToolsConfig` + conditional tool registration
+  spec. The pre-existing fail was already
+  present in the Sprint 28 baseline (NOT
+  introduced by Sprint 29).
+- Sprint 29 (commit `c989538`) shipped the
+  `ToolsConfig` impl. The pre-existing fail
+  was the **only** test failure in the
+  Sprint 29 verification (268 passed + 1
+  fail = 269 total).
+- Sprint 30 (commit `8eb388e`) shipped the
+  Mark-XL follow-ups spec. The pre-existing
+  fail was carried forward to the Sprint 30
+  baseline.
+
+#### Fixed
+- **`backend/tests/core/test_config.py`** —
+  the `test_default_config` function now
+  uses `tmp_path` + `monkeypatch.setenv
+  ("HALO_HOME", ...)` to load an EMPTY
+  config (no `~/.gundam-halo/config.toml`
+  in the test path) so the test reflects
+  the `LLMConfig().base_url` dataclass
+  default rather than any user-local
+  override. This is a fix for the
+  **determinism** (the test was
+  passing/failing based on the user's
+  local config state). The test now
+  asserts:
+  - `cfg.llm.base_url == "https://api.minimax.io/v1"`
+    (the actual default — the `.io` cluster)
+  - `cfg.llm.default_model == "MiniMax-M2"`
+    (the actual default — was `MiniMax-M3`,
+    also stale)
+- **`config.toml.example`** — the `[llm]`
+  section's `base_url` updated to match
+  the actual default (`https://api.minimax.io/v1`)
+  with a comment explaining the `.io` vs
+  `.chat` cluster difference (same rationale
+  as the `LLMConfig` docstring at
+  `app/core/config.py:55-60`). `default_model`
+  updated from `MiniMax-M3` to `MiniMax-M2`
+  to match the actual default.
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/core/test_config.py -v` — 3 passed
+  in 0.01s (was 2 passed + 1 failed pre-
+  existing).
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_finetune_script.py
+  tests/voice/test_finetune_monitor.py
+  tests/voice/test_fsmn_vad.py
+  tests/voice/test_voice_config_asr.py
+  tests/voice/test_whisper_hf.py
+  tests/voice/test_whisper_local.py
+  tests/tools/ tests/core/` —
+  **359 passed, 0 failed**. Zero regression
+  on Sprint 23 / 27 / 28 / 29 / 30 baselines.
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+
+#### Out of scope
+- **The `LLMConfig` dataclass default is
+  unchanged** (`app/core/config.py:62`
+  remains `https://api.minimax.io/v1`).
+  The test now matches the actual default
+  rather than the other way around.
+- **The user's `~/.gundam-halo/config.toml`
+  is unchanged** — the user's local config
+  already had the `.io` URL + `MiniMax-M2`
+  model, matching the `LLMConfig` defaults.
+  No user action required.
+
+### Sprint 31 — Re-prioritize v0.1.5+ menu (spec-only)
+
+Sprint 31 ships the design freeze for the
+**re-prioritized ordering** of the 4
+v0.1.5+ post-land tracks from Sprint 26
+(commit `9dc8761`). The 4 tracks' **content**
+is unchanged — this sprint only freezes the
+**dependency-aware sequence** (held-out eval
+→ Layer 2 v2 → launchd → mlx-whisper) and
+the **track-to-sprint map** (Sprint 32-35).
+
+**Predecessors**:
+- Sprint 26 (commit `9dc8761`) shipped
+  the v0.1.5+ post-land menu spec with
+  4 tracks (Layer 2 v2 self-record, launchd
+  supervisor, held-out Cantonese eval,
+  mlx-whisper). The menu-sprint pattern
+  in Sprint 26 §Appendix A leaves the
+  **order to the user**.
+- Sprint 27 (commit `4a7a83e`) shipped
+  the 4 Mark-XL tools.
+- Sprint 28 (commit `973fe4b`) shipped
+  `ToolsConfig` + conditional tool
+  registration (spec).
+- Sprint 29 (commit `c989538`) shipped
+  `ToolsConfig` + conditional tool
+  registration (impl).
+- Sprint 30 (commit `8eb388e`) shipped
+  Mark-XL follow-ups (2-track menu,
+  independent of the Sprint 26 tracks).
+- Pre-existing test fix (commit `33443bb`)
+  restored the 0-fail baseline.
+
+#### Spec
+- **`docs/FEATURE-SPEC-SPRINT31.md`** —
+  captures the re-prioritized sequence:
+  - **Track 31-A — Held-out Cantonese eval**
+    (1 day, Sprint 32). Implements Sprint 26
+    §4.3 — `scripts/record-held-out.sh` +
+    `tests/voice/test_held_out_eval.py`.
+    **GATE for Track 31-B**: the user must
+    record 30s of Cantonese + measure the
+    baseline WER on the v0.1.4 model before
+    Track 31-B can ship. Without this
+    baseline, Track 31-B's "WER < 10% on
+    personalised model" criterion is
+    meaningless.
+  - **Track 31-B — Layer 2 v2 self-record
+    corpus** (1-2 days, Sprint 33).
+    Implements Sprint 26 §4.1 — Tauri
+    Record / Train / Swap cards + self-
+    record manifest format. **Gated by
+    Track 31-A**.
+  - **Track 31-C — launchd supervisor**
+    (0.5 day, Sprint 34). Implements Sprint
+    26 §4.2 — `.plist` + `install-launchd.sh`
+    + `lockfile.py`. **Independent** of
+    Track 31-A / 31-B.
+  - **Track 31-D — mlx-whisper inference
+    accelerator** (1-2 days, Sprint 35,
+    **optional**). Implements Sprint 26 §4.4
+    — `inference_backend = "mlx"` field +
+    `_invoke_pipeline_mlx` method. **May
+    not ship** if mlx-whisper's Cantonese
+    language-hint gap is a blocker (per
+    Sprint 26 §Appendix B).
+
+#### Strategic context
+- **Why held-out eval ships first**: it
+  establishes the **baseline WER on the
+  user's actual voice** (vs. the
+  synthesised M9-C fixture). The baseline
+  is the gate for Track 31-B's "WER < 10%
+  on personalised model" criterion. Without
+  the baseline, the user cannot tell if
+  Track 31-B improved WER or just shifted
+  the failure modes.
+- **Why launchd ships third (not second)**:
+  Track 31-B is the higher-priority user
+  request (personalisation > availability).
+  Track 31-C can be interjected between
+  Track 31-A and Track 31-B if the user
+  prefers (Sprint 33 = Track 31-C, Sprint
+  34 = Track 31-B).
+- **Why mlx-whisper ships last (and may
+  not ship)**: the Cantonese language
+  hint gap is High likelihood / High
+  impact. The HF pipeline already
+  produces < 1W thermal load on M-series
+  — the 50% mlx-whisper energy saving
+  is ~0.5W, within thermal headroom.
+  The latency improvement (~300ms per
+  turn) is nice-to-have but not blocking.
+
+#### Verified
+- `git diff docs/FEATURE-SPEC-SPRINT26.md
+  docs/FEATURE-SPEC-SPRINT31.md` —
+  Sprint 31 does NOT modify any code
+  change, file-by-file change set, risk
+  register, or acceptance test from
+  Sprint 26. Sprint 31 only ADDS the
+  reorder (§1) + track-to-sprint map
+  (§2) + dependency graph (§3) + new
+  risks (§4) + acceptance tests (§5) +
+  sprint chain context (§6) + file-by-
+  file change set (unchanged from Sprint
+  26 §5, §7) + 4 appendices.
+- `wc -l docs/FEATURE-SPEC-SPRINT31.md` —
+  ~580 lines (vs. Sprint 26 ~1005 lines,
+  Sprint 30 ~1191 lines). The shorter
+  length reflects that Sprint 31 is a
+  **commitment sprint** (reorder + map)
+  rather than a content sprint (4 new
+  tracks).
+
+#### Out of scope (deferred to 33+)
+- **Runtime toggling of `enabled`** —
+  already deferred to 33+ per Sprint 28
+  §4.5.
+- **Per-tool API keys for non-flight
+  tools** — only flight_finder has a
+  per-tool API key (Sprint 30 Track B).
+- **Pre-Sprint 27 tool enable/disable**
+  — all 4 Mark-XL tools have
+  `ToolsConfig` per Sprint 28 / 29.
+- **Dashboard UI / hot-reload** — future
+  sprint.
+- **mlx-whisper large-v3 experiments** —
+  Sprint 26 §Appendix B documents the
+  language-hint gap as a blocker for
+  Cantonese; large-v3 doesn't help.
+
+#### Next steps (Sprint 32+)
+- **Sprint 32** (1 day) — Track 31-A
+  held-out Cantonese eval impl. The
+  user records 30s of Cantonese via
+  `bash scripts/record-held-out.sh` +
+  runs `pytest tests/voice/
+  test_held_out_eval.py -v`. Baseline
+  WER recorded in Sprint 32 spec's
+  "Acceptance tests" section. **This
+  is the gate for Sprint 33.**
+- **Sprint 33** (1-2 days) — Track 31-B
+  Layer 2 v2 self-record corpus impl.
+  The user records 30 min of Cantonese
+  via the Tauri app + runs the
+  personalised fine-tune (1 hour wall
+  clock) + activates the personalised
+  model. Held-out WER after personal-
+  isation recorded in Sprint 33
+  spec's "Acceptance tests" section.
+  Target: WER < 10% on personalised
+  model (vs. < 20% on v0.1.4 baseline).
+- **Sprint 34** (0.5 day) — Track 31-C
+  launchd supervisor impl. The user
+  runs `bash scripts/install-launchd.sh`
+  + `launchctl list | grep gundam-halo`
+  shows a new PID. `kill -9 <backend-pid>`
+  → within 5 seconds, the daemon
+  restarts. `curl localhost:8765/
+  api/health` returns 200.
+- **Sprint 35** (1-2 days, **optional**)
+  — Track 31-D mlx-whisper inference
+  accelerator impl. The user runs
+  `uv sync --extra voice-hf-mlx` +
+  sets `device = "mlx"` in
+  `~/.gundam-halo/config.toml` +
+  measures per-turn latency drop
+  (~300ms vs. ~600ms on HF pipeline).
+  If Cantonese WER regresses > 2%,
+  `git revert <hash>` and stay on HF.
+
 ---
 
 ## [0.1.3] — 2026-06-11
