@@ -1562,6 +1562,230 @@ decision tree.
 - **mlx-whisper inference** — per M9-E
   §"Fine-tune tooling".
 
+### Sprint 26 — v0.1.5+ post-land menu (4 tracks spec)
+
+Sprint 26 ships the design freeze for
+the **post-v0.1.4 cleanup work** — the
+deferred items from M9-E + Sprint 19b
+that are not required for v0.1.4 to
+ship but are the natural next steps
+once the v0.1.4 baseline is in
+production. This is a **SPEC-ONLY
+sprint, menu-style** — no code is
+written. The 4 tracks ship in Sprint
+27+ in whatever order the user picks
+based on priority.
+
+**Pre-condition (gate):** v0.1.4 is
+tagged in main. The user has shipped
+the Sprint 25 commit (Track 3
+augmented-note deletion) and verified
+the M9-C live re-run passes without
+the workaround. v0.1.4 is the
+**Common Voice yue baseline**: WER
+< 20% on the held-out test set, agent
+uses `file_read` endogenously, no
+workarounds.
+
+#### Spec
+- **docs/FEATURE-SPEC-SPRINT26.md** —
+  captures 4 tracks as a menu the
+  user picks from. Each track has a
+  file-by-file change set, an
+  acceptance criterion, and a risk
+  register. The 4 tracks are:
+
+  - **Track 1 — Layer 2 v2
+    self-record corpus** (Tauri app
+    Record / Train / Swap cards;
+    re-trains the v0.1.4 model on
+    30 min of user-recorded
+    Cantonese for personalisation;
+    expected WER drop from < 20% to
+    < 10% on the held-out test).
+  - **Track 2 — launchd supervisor**
+    (`.plist` file in
+    `~/Library/LaunchAgents/` +
+    lock file at
+    `~/.gundam-halo/.backend.lock`;
+    backend auto-restarts on crash
+    and starts at boot; manual dev
+    mode coexists via the lock).
+  - **Track 3 — held-out Cantonese
+    eval** (interactive 5-min
+    `scripts/record-held-out.sh` +
+    `tests/voice/test_held_out_eval.py`;
+    30-sec user-recorded WAV with
+    a hand-typed transcript;
+    WER < 15% threshold; user-
+    configurable).
+  - **Track 4 — mlx-whisper
+    inference accelerator**
+    (optional `device = "mlx"`
+    flag in `WhisperHFASR`; per-
+    turn latency drops from ~600ms
+    to ~300ms on M-series; **may
+    not ship** if mlx-whisper
+    doesn't support the Cantonese
+    language hint).
+
+#### Recommended track ordering
+- **Sprint 27** — Track 3 first
+  (1 day, gives the user the
+  baseline WER measurement before
+  they invest in Track 1).
+- **Sprint 28** — Track 1 second
+  (1-2 days, the user-driven
+  personalisation).
+- **Sprint 29** — Track 2 third
+  (0.5 day, quality-of-life
+  supervisor).
+- **Sprint 30+** — Track 4
+  experimental (1-2 days, may
+  not ship if mlx-whisper doesn't
+  support the Cantonese language
+  hint).
+
+#### Architecture note — menu-sprint
+pattern
+Sprint 26 captures all 4 tracks in
+one spec (rather than 4 separate
+specs or one impl sprint) because
+the tracks are **independent in
+implementation but interdependent
+in dependency graph** (Track 1
+depends on Track 3 for the WER
+measurement; Tracks 2 and 4 are
+independent of the others). The
+menu pattern lets the user pick
+the order without re-deriving
+the design. The pattern matches
+Sprint 22 (1 spec, 4 tracks, 3
+of which shipped in Sprint 23)
+and Sprint 24 (1 spec, the
+acceptance gate workflow that
+Sprint 25's impl template uses).
+
+#### Architecture note — mlx-whisper
+caveat
+mlx-whisper's API **doesn't
+support `language = "cantonese"`
+in `generate_kwargs`** at the
+time of writing (per public
+docs, mid-2026). Track 4 has 2
+workarounds: (a) post-process
+the output with the BERT
+corrector (Sprint 17b) to
+"Yue-ify" English hallucinations,
+or (b) per-language routing
+(`{"yue": "hf", "en": "mlx"}`).
+If neither works, the user
+reverts Track 4 and stays on
+the HF pipeline. Track 4 is
+**optional** — the HF pipeline
+is the v0.1.4 default.
+
+#### Architecture note — held-out
+test is the gate
+The held-out Cantonese eval
+(Track 3) is the **gate** for
+Layer 2 v2 (Track 1). The user
+runs Track 3 first to establish
+the v0.1.4 baseline WER (expected
+< 15% on the user's actual voice,
+vs. < 20% on the synthesised
+Common Voice yue test). If the
+baseline is good, Track 1's
+personalisation is a quality
+boost, not a requirement. If
+the baseline is poor (WER > 20%),
+the user re-trains with more
+self-record data before
+activating Track 1.
+
+#### File-by-file change set
+(when Sprint 27+ lands)
+
+| Path | Change | LoC est. |
+|---|---|---|
+| **Track 1** | | |
+| `frontend/src/routes/settings/VoiceTab.tsx` | Personalised Fine-tune section | +200 / 0 |
+| `frontend/src-tauri/src/commands.rs` | New IPC commands | +150 / 0 |
+| `frontend/src-tauri/src/recording.rs` | NEW — record + transcribe pipeline | +200 / 0 |
+| `backend/scripts/finetune_whisper_yue.py` | Document `--base_model_path` flag | +30 / 0 |
+| `backend/tests/voice/test_finetune_script.py` | Add 1 test for `--base_model_path` | +30 / 0 |
+| `backend/tests/voice/test_self_record_manifest.py` | NEW — 5-8 tests | +150 / 0 |
+| **Track 2** | | |
+| `scripts/install-launchd.sh` | NEW | +50 / 0 |
+| `scripts/com.gundam.halo.plist` | NEW — launchd XML | +30 / 0 |
+| `scripts/uninstall-launchd.sh` | NEW | +20 / 0 |
+| `backend/app/core/lockfile.py` | NEW | +80 / 0 |
+| `backend/app/main.py` | Wire lock file into lifespan | +10 / 0 |
+| `backend/tests/test_launchd_plist.py` | NEW — 3-5 lint tests | +100 / 0 |
+| `backend/tests/core/test_lockfile.py` | NEW — 4-6 tests | +120 / 0 |
+| **Track 3** | | |
+| `scripts/record-held-out.sh` | NEW — interactive 5-min record | +80 / 0 |
+| `backend/tests/voice/test_held_out_eval.py` | NEW — 3-4 tests | +100 / 0 |
+| **Track 4** | | |
+| `backend/app/voice/asr/whisper_hf.py` | Add `inference_backend` field + `_invoke_pipeline_mlx` | +80 / 0 |
+| `backend/app/voice/asr/asr_factory.py` | Forward `device = "mlx"` to `inference_backend = "mlx"` | +20 / 0 |
+| `backend/pyproject.toml` | New `voice-hf-mlx` extra | +5 / 0 |
+| `backend/tests/voice/test_whisper_hf.py` | Add 3-4 mlx tests (mocked) | +100 / 0 |
+| `docs/CHANGELOG.md` | v0.1.5+ release entry per track | +120 / 0 |
+| `docs/tickets/M9-E.md` | Update Layer 2 v2 status | +10 / 0 |
+
+**Total**: ~1,485 LoC across 18 files.
+~3-5 days wall clock when implemented,
+spread across Sprint 27 (Track 1+3,
+~2 days), Sprint 28 (Track 2, ~0.5
+day), Sprint 29 (Track 4, ~1-2 days,
+may not ship).
+
+#### Verified (this sprint — spec only)
+- `git diff --stat` clean (no source
+  changes; Sprint 26 is spec-only).
+- `pytest tests/voice/` — 188 passed,
+  2 skipped, 0 failed (Sprint 23
+  baseline preserved).
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+
+#### Out of scope (deferred to 28+)
+- **iOS / iPadOS** — per M9-E
+  §"Out of scope" (line 294).
+  Cockpit is a Tauri desktop app,
+  not a mobile app. Separate
+  ticket (M14?) needed to port
+  the voice layer to iOS — multi-
+  month effort.
+- **Code-switch tolerance** (mixed
+  Cantonese + English + Mandarin
+  in the same turn) — per M9-E
+  §"Out of scope" (line 295).
+  Common Voice yue fine-tune is
+  monolingual; code-switch
+  requires a code-switch corpus
+  (MDCC, line 234-235) and a
+  different fine-tune recipe.
+- **ASR streaming** (chunk-by-
+  chunk transcription) — per M9-E
+  §"Out of scope" (line 293).
+  Current pipeline transcribes
+  whole turn at turn-end, which
+  is fine for the cockpit's human-
+  paced UX.
+- **Multi-speaker / diarisation**
+  — per M9-E §"Out of scope"
+  (line 294). Gundam Halo is
+  single-user; diarisation is a
+  different domain (WhisperX,
+  pyannote.audio).
+- **Whisper large-v3 evaluation**
+  — per M9-E §"Out of scope"
+  (line 297). Large-v3 is ~3GB
+  and slow on MPS; not in scope
+  for a single-user Mac project.
+
 ### Sprint 19d addendum — training monitor (background supervision)
 
 Sprint 19d's spec said "actual training run is a
