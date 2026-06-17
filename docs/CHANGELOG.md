@@ -2317,6 +2317,231 @@ of hard-coded coordinates.
   mlx-whisper) — re-prioritize after Sprint
   27 lands.
 
+### Sprint 28 — ToolsConfig + conditional tool registration (spec)
+
+Sprint 28 ships the design freeze for
+the `ToolsConfig` + conditional tool
+registration refactor. This is a
+**SPEC-ONLY sprint** — no code is written.
+The implementation lands in Sprint 29
+(1 day wall clock) once the user signs
+off.
+
+**Predecessor**: Sprint 27 (commit
+`4a7a83e`) shipped the 4 Mark-XL tools
+(`web_search`, `youtube_summarize`,
+`flight_finder`, `send_message`) with all
+22 tools unconditionally registered in
+`default_tools()`. The Sprint 27 spec
+§4.4 documented a
+`cfg.tools.<name>.enabled` conditional
+registration pattern as a deferral note;
+Sprint 28 ships the implementation of
+that pattern.
+
+#### Spec
+- **docs/FEATURE-SPEC-SPRINT28.md** —
+  captures 5 new dataclasses
+  (`ToolsConfig` + 4 sub-configs:
+  `WebSearchConfig`,
+  `YouTubeSummarizeConfig`,
+  `FlightFinderConfig`,
+  `SendMessageConfig`), a generic
+  `_load_sub_config` helper to avoid
+  boilerplate, the 1-line change to
+  `Config` + `load_config()`, the
+  conditional registration in
+  `default_tools()` (4 `if` blocks), and
+  3 new test files (~200 LoC, ~15 tests).
+  The change is **forward-compatible**:
+  Sprint 27's `config.toml.example`
+  already has the `[tools.*]` sections;
+  Sprint 28 makes those sections actually
+  take effect.
+
+#### Changed (planned for Sprint 29+
+when the user signs off)
+
+- **backend**: `app/core/config.py` —
+  5 new dataclasses (`WebSearchConfig` /
+  `YouTubeSummarizeConfig` /
+  `FlightFinderConfig` /
+  `SendMessageConfig` /
+  `ToolsConfig`) + 1 new helper
+  (`_load_sub_config`) + 1 new loader
+  (`_load_tools_config`) + 1 new field on
+  `Config` (`tools: ToolsConfig`) + 1
+  new line in `load_config()` (the
+  `_load_tools_config(toml_data)` call).
+  ~120 LoC added; 0 LoC removed.
+- **backend**: `app/tools/builder.py` —
+  `default_tools()` reads
+  `get_config().tools.<name>.enabled`
+  and conditionally registers the 4
+  Mark-XL tools. The `get_config()`
+  import is **lazy** (inside the
+  function body) to avoid forcing a
+  TOML parse at module import time. ~15
+  LoC added; 0 LoC removed.
+- **backend**: `tests/core/test_tools_config.py`
+  NEW — 8 tests for the dataclass +
+  loader.
+- **backend**: `tests/tools/test_builder_conditional.py`
+  NEW — 6 tests for the conditional
+  registration.
+- **backend**: `tests/tools/test_builder.py`
+  UPDATED — 1 test name change (still
+  expects 22 in the default all-enabled
+  case) + 1 new test for the disabled
+  case.
+
+#### Architecture note — restart
+required caveat
+The `enabled` field is **not**
+runtime-tunable in v0.1.5+. The user
+must restart the backend for
+`enabled = false` to take effect. This
+is the **minimum viable** change — a
+future sprint (Sprint 30+) can wire
+`default_tools()` to be re-invoked
+when `tools.web_search.enabled` changes
+via the existing
+`put_voice_config` /
+`schedule_restart` pattern (Sprint
+19b). The runtime-toggling feature is
+intentionally deferred to keep Sprint
+28 small (1 day) and mechanical.
+
+#### Architecture note — `SendMessageConfig.enabled`
+defaults to **false**
+`SendMessageConfig.enabled` defaults
+to `False` (the only one of the 4
+sub-configs with a non-default
+`enabled`). This is intentional: the
+Sprint 27 spec §4.2 Track 27.4 marked
+`send_message` as opt-in because
+pyautogui is fragile (hard-coded
+coordinates + timings). The other 3
+sub-configs default to `True` because
+they have no fragile dependencies
+(web_search uses httpx; youtube_summarize
+falls back to oEmbed; flight_finder is
+a URL builder with no real flight
+data extraction).
+
+#### Architecture note — `_load_sub_config`
+generic helper
+The `_load_sub_config(section_dict,
+sub_config_class)` helper iterates the
+dataclass's fields via
+`dataclasses.fields(cls)` and pulls
+each from `section_dict.get(name,
+default)`. The helper scales to any
+future sub-config without code changes.
+The pattern is the same one used by
+the existing `_load_memory_config`
+and `_load_voice_config` (which
+inline the field-by-field read) —
+Sprint 28 generalises it.
+
+#### Architecture note — `default_tools()`
+lazy import pattern
+The `default_tools()` function in
+`builder.py` is called from
+`app/api/sessions.py:124` (inside a
+request handler, not at import time).
+The Sprint 28 implementation reads
+`get_config().tools.<name>.enabled`
+inside the function body, with a
+**lazy import** of `get_config` to
+avoid forcing a TOML parse at module
+import time. The lazy-import pattern
+is the same one used by
+`web_fetch.py` (lazy-imports `httpx`)
+and Mark-XL's `send_message.py`
+(lazy-imports `pyautogui`).
+
+#### Architecture note — test suite
+The test suite uses
+`monkeypatch.setattr(cfg.tools.web_search, "enabled", False)`
+to flip individual tools on/off at
+runtime. The `get_config()` singleton
+is already populated by the time the
+tests run, so the test can mutate the
+config object directly without going
+through the TOML parse path. The
+`test_default_tool_count_is_22` test
+(added in Sprint 27) keeps its
+22-tool assertion (the default state
+is all-4-enabled, which matches the
+default `ToolsConfig` defaults).
+
+#### File-by-file change set
+(when Sprint 29 lands)
+
+| Path | Change | LoC est. |
+|---|---|---|
+| `backend/app/core/config.py` | 5 new dataclasses + 1 helper + 1 loader + 1 Config field + 1 load_config line | +120 / 0 |
+| `backend/app/tools/builder.py` | Conditional registration in `default_tools()` | +15 / 0 |
+| `backend/tests/core/test_tools_config.py` | NEW | +130 / 0 |
+| `backend/tests/tools/test_builder_conditional.py` | NEW | +120 / 0 |
+| `backend/tests/tools/test_builder.py` | 1 test name change + 1 new test | +20 / -5 |
+| `config.toml.example` | No change (already has `[tools.*]` sections; comment updated to note restart caveat) | +5 / 0 |
+| `docs/CHANGELOG.md` | v0.1.5+ entry per Sprint 29 | +50 / 0 |
+
+**Total**: ~460 LoC across 7 files.
+~1 day wall clock when implemented
+(spec-only sprint + 1-day impl sprint).
+
+#### Verified (this sprint — spec only)
+- `git diff --stat` clean (no source
+  changes; Sprint 28 is spec-only).
+- `pytest tests/voice/` — 90 passed, 4
+  skipped, 0 failed (Sprint 27 baseline
+  preserved).
+- `pytest tests/tools/` — 172 passed,
+  0 failed (Sprint 27 baseline
+  preserved).
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+
+#### Out of scope (deferred to 29+)
+- **Runtime toggling of `enabled`** —
+  Sprint 30+. The user must restart
+  the backend; a future sprint can
+  wire `default_tools()` to be
+  re-invoked when
+  `tools.web_search.enabled` changes
+  via the existing
+  `put_voice_config` /
+  `schedule_restart` pattern (Sprint
+  19b).
+- **Per-tool API keys** —
+  `FlightFinderConfig` could accept
+  an aviationstack / serpapi key in a
+  future sprint (Sprint 31+). Sprint
+  28 keeps `ToolsConfig` extensible.
+- **Conditional registration for the
+  pre-Sprint 27 tools** — `file_read`,
+  `file_write`, etc. don't have
+  `enabled` fields today. Adding them
+  would be a 21-tool refactor. Out of
+  scope.
+- **Dashboard UI for tool
+  enable/disable** — a future sprint
+  can add a "Tools" tab in the
+  cockpit settings.
+- **Hot-reload of the tool list** —
+  when the user edits `config.toml`,
+  the backend currently requires a
+  restart. A future sprint can add a
+  `Watchdog` that detects mtime changes
+  and re-invokes `default_tools()`.
+- **v0.1.5+ post-land menu from Sprint
+  26** (Layer 2 v2 / launchd /
+  held-out eval / mlx-whisper) —
+  re-prioritize after Sprint 29 lands.
+
 ### Sprint 19d addendum — training monitor (background supervision)
 
 Sprint 19d's spec said "actual training run is a
