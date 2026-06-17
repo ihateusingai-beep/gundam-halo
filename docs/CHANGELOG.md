@@ -1786,6 +1786,313 @@ may not ship).
   and slow on MPS; not in scope
   for a single-user Mac project.
 
+### Sprint 27 — Mark-XL selective tool import (4 tools spec)
+
+Sprint 27 ships the design freeze
+for **cherry-picking 4 useful tools
+from Mark-XL** (a public-domain-
+aligned sibling project at
+https://github.com/FatihMakes/Mark-XL,
+MIT, 153 stars, 67 forks) into
+Gundam Halo's NativeReAct tool
+registry. This is a **SPEC-ONLY
+sprint, 5-7 days wall clock when
+implemented**. The implementation
+lands in Sprint 28+ (web_search +
+youtube_summarize, 2-3 days),
+Sprint 29 (flight_finder, 1-2
+days), and Sprint 30 (send_message,
+1-2 days, opt-in).
+
+**Sprint 27 supersedes Sprint 26's
+recommended Track 3 first ordering**
+(held-out Cantonese eval). The
+held-out eval is a 1-day sprint
+that depends on the user having
+run the v0.1.4 training session
+(a separate, 3h+ wall-clock
+session). The Mark-XL tool import
+is a 5-7 day sprint that doesn't
+depend on training. The user can
+re-prioritize after Sprint 30 lands
+— the held-out eval is in
+`docs/FEATURE-SPEC-SPRINT26.md`
+§4.3 and can ship as Sprint 27.5
+or 28.5 between Mark-XL impl
+sprints.
+
+#### Spec
+- **docs/FEATURE-SPEC-SPRINT27.md** —
+  captures 4 imported tools
+  (`web_search` / `youtube_summarize`
+  / `flight_finder` / `send_message`)
+  + 2 excluded tools with reasons
+  (`weather_report` is strictly
+  worse than the existing
+  Gundam Halo `weather.py`;
+  `computer_control` overlaps with
+  6 of the existing 21 tools +
+  pulls in pyautogui + vision LLM).
+  Each tool has a per-tool spec
+  with public signature, JSON
+  Schema, config keys, behavior,
+  voice implications, and tests.
+
+#### Changed (planned for Sprint 28+
+when the user picks the order)
+
+**4 imported tools** (each is a
+`BaseTool` subclass registered in
+`app/tools/builder.py::default_tools()`):
+- **backend**: `app/tools/web_search.py`
+  NEW — DDG (`ddgs` library) +
+  LLM summary, 2-3 sentence
+  TTS-friendly prose. Config:
+  `[tools.web_search] enabled /
+  max_results / summary_max_chars /
+  request_timeout_s`.
+- **backend**: `app/tools/youtube_summarize.py`
+  NEW — `youtube-transcript-api`
+  + LLM summary. The Mark-XL
+  `tkinter` URL prompt is
+  dropped — `url` is a required
+  parameter. Config: `[tools.youtube_summarize]
+  enabled / max_transcript_chars /
+  summary_max_chars`.
+- **backend**: `app/tools/flight_finder.py`
+  NEW — Playwright (preferred
+  over Mark-XL's Selenium) +
+  LLM-extract. The hard-coded
+  `EgoyMDI1LTAzLTE1agcIARIDSVNUcgcIARIDTEhS`
+  param is dropped (stale 2025-03-15
+  placeholder). Config:
+  `[tools.flight_finder] enabled /
+  driver / headless /
+  page_load_timeout_s /
+  request_timeout_s`.
+- **backend**: `app/tools/send_message.py`
+  NEW — pyautogui + pyperclip.
+  **Opt-in** (`enabled = false`
+  default) because pyautogui is
+  fragile (hard-coded coordinates,
+  hard-coded timings). Config:
+  `[tools.send_message] enabled /
+  os_system / typing_delay_s /
+  app_launch_wait_s /
+  contact_search_timeout_s`.
+
+**3 contract changes** that the
+importer must enforce on every
+Mark-XL tool:
+1. `async def run(self, **kwargs) -> str`
+   signature (NOT `def toolname
+   (parameters, player, session_memory)`).
+2. `parameters: Dict[str, Any]`
+   is a hand-written JSON Schema
+   dict (NOT a Python function
+   signature); wrapped into
+   OpenAI spec via `to_spec()`.
+3. `await asyncio.to_thread(self._sync_body, **kwargs)`
+   for any sync bodies (Mark-XL
+   uses `requests` / `subprocess` /
+   `time.sleep` / pyautogui).
+
+**Config migration**:
+- Drop Mark-XL's `config/api_keys.json`.
+- Add 4 `[tools.*]` sections to
+  `~/.gundam-halo/config.toml`.
+- Add a `[tools]` section to
+  `app/tools/builder.py::default_tools()`
+  that conditionally registers
+  each tool based on `cfg.tools.*.enabled`.
+- Update `config.toml.example`.
+
+**Dependency additions** (4 new
+opt-in extras in `pyproject.toml`):
+- `tool-web-search` = `ddgs>=5.0`
+- `tool-youtube-summarize` =
+  `youtube-transcript-api>=0.6`
+- `tool-flight-finder` = `playwright>=1.40`
+  (+ separate `playwright install
+  chromium`)
+- `tool-send-message` = `pyautogui>=0.9.54,
+  pyperclip>=1.8`
+
+#### Architecture note — why
+selective, not full fork
+A full fork of Mark-XL would
+mean: two codebases, two UIs
+(Tauri + PyQt6), two LLM backends
+(MiniMax + Ollama), two memory
+systems (SQLite+FAISS + JSON),
+two Mac control surfaces
+(AppleScript + pyautogui). The
+"two of everything" complexity
+is **steeper** than the value
+of any single Mark-XL feature.
+Selective import keeps the
+single Gundam Halo codebase +
+single Tauri cockpit and adds
+4 specific tools that the user
+actually needs.
+
+#### Architecture note — why 4
+tools, not 17
+Mark-XL ships 17 tools. Sprint
+27 imports **only 4** because:
+- 11 of the 17 either overlap
+  with Gundam Halo's existing
+  21 tools (6 of the 11) or
+  are too narrow (5 of the 11).
+- 2 of the 17 are strictly
+  worse than existing Gundam
+  Halo versions.
+- 4 of the 17 are the unique
+  value-add: web search,
+  YouTube summarize, flight
+  finder, send message.
+
+The user can re-evaluate the
+other 13 tools in future
+sprints if specific gaps emerge.
+
+#### Architecture note —
+`asyncio.to_thread` voice path
+implication
+The 4 tools' sync bodies can
+take 5-10s each. Wrapping in
+`asyncio.to_thread()` keeps
+the event loop responsive
+during the call. The agent
+loop is single-threaded (one
+tool at a time), so the
+realistic case is 1 tool at
+a time per turn. Python's
+default thread pool is min(32,
+os.cpu_count() + 4) = ~36 on
+M-series, so 1 concurrent tool
+is fine. The 60-second TTS
+budget per turn caps the
+tool's response length at
+1500 chars (200-500 words).
+
+#### Architecture note — voice-
+friendly prose requirement
+The 4 tools' LLM calls are
+prompted to return plain prose,
+not markdown fences, tables,
+or bullet points. The TTS reads
+the prose aloud in 4-12 seconds
+depending on the tool (web
+search 4-6s, YouTube 6-10s,
+flight 8-12s, send 1-2s). The
+existing `voice_sanitizer.py`
+strips basic markdown but the
+tool should pre-format where
+possible.
+
+#### Architecture note — license
+attribution
+Mark-XL is MIT licensed. The
+importer adds a `THIRD-PARTY-NOTICES.md`
+file with the Mark-XL license
++ a comment header in each
+imported tool file pointing at
+the Mark-XL source.
+
+#### File-by-file change set
+(when Sprint 28+ lands)
+
+| Path | Change | LoC est. |
+|---|---|---|
+| `backend/app/tools/web_search.py` | NEW | +120 / 0 |
+| `backend/app/tools/youtube_summarize.py` | NEW | +150 / 0 |
+| `backend/app/tools/flight_finder.py` | NEW | +200 / 0 |
+| `backend/app/tools/send_message.py` | NEW | +250 / 0 |
+| `backend/app/tools/builder.py` | Conditional registration | +30 / 0 |
+| `backend/app/core/config.py` | `ToolsConfig` dataclass | +60 / 0 |
+| `backend/pyproject.toml` | 4 opt-in extras | +25 / 0 |
+| `config.toml.example` | 4 `[tools.*]` sections | +40 / 0 |
+| `install.sh` | Commented-out tool extras | +10 / 0 |
+| `tests/tools/test_web_search.py` | NEW | +150 / 0 |
+| `tests/tools/test_youtube_summarize.py` | NEW | +150 / 0 |
+| `tests/tools/test_flight_finder.py` | NEW | +180 / 0 |
+| `tests/tools/test_send_message.py` | NEW | +200 / 0 |
+| `tests/tools/test_builder.py` | 4 conditional tests | +80 / 0 |
+| `THIRD-PARTY-NOTICES.md` | NEW (Mark-XL MIT) | +30 / 0 |
+| `docs/CHANGELOG.md` | v0.1.5+ entry per sprint | +60 / 0 |
+
+**Total**: ~1,735 LoC across 16 files.
+~5-7 days wall clock when implemented,
+spread across 2-3 sprints (28, 29, 30).
+
+#### Verified (this sprint — spec only)
+- `git diff --stat` clean (no source
+  changes; Sprint 27 is spec-only).
+- `pytest tests/voice/` — 188 passed,
+  2 skipped, 0 failed (Sprint 23
+  baseline preserved).
+- `pytest tests/agent/ tests/tools/`
+  — 80 passed, 0 failed (existing
+  tool registry baseline preserved).
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+
+#### Out of scope (deferred to 28+)
+- **Mark-XL PyQt6 UI** — Gundam
+  Halo uses Tauri 2 + Vite + React 19
+  + shadcn/ui + Tailwind v4 + Live2D
+  (cockpit). PyQt6 is a separate
+  desktop framework; integrating
+  it would require ripping out the
+  Tauri app (1.5-year investment).
+  **Not imported.**
+- **Ollama LLM swap** — Mark-XL
+  uses Ollama for inference. Gundam
+  Halo uses `MiniMax` API. Adding
+  an Ollama backend would be a
+  separate sprint; the user can
+  pick either or both.
+- **Mark-XL memory_manager.py** —
+  Mark-XL stores long-term memory
+  in `memory/long_term.json` (flat
+  JSON dict). Gundam Halo uses M11
+  / M11b / M12 (SQLite + FAISS).
+  The two are not interchangeable.
+- **Mark-XL task_queue.py** —
+  Mark-XL has a multi-step planner
+  + executor + error recovery.
+  Gundam Halo's NativeReAct is
+  single-step (the LLM drives the
+  next tool call, not a separate
+  queue). Sprint 27 does **not**
+  import the task queue.
+- **Mark-XL installer** — Mark-XL
+  has a `_bootstrap()` auto-install
+  that runs `pip install` on
+  first launch. Gundam Halo uses
+  `uv sync --extra voice --extra
+  voice-hf` etc. (no auto-install).
+- **Mark-XL `code_helper` /
+  `dev_agent` tools** — both
+  delegate to a sub-LLM agent for
+  multi-file project generation.
+  Gundam Halo doesn't have this
+  capability; out of scope.
+- **Mark-XL `screen_process` /
+  `desktop_control` tools** —
+  `screen_process` uses a vision
+  LLM (Ollama's llava or external),
+  `desktop_control` is cross-platform
+  wallpaper/organize/clean. Gundam
+  Halo has `screenshot` + `a11y` for
+  similar coverage.
+- **v0.1.5+ post-land menu items
+  from Sprint 26** (Layer 2 v2,
+  launchd supervisor, held-out
+  eval, mlx-whisper) — re-prioritize
+  after Sprint 30 lands.
+
 ### Sprint 19d addendum — training monitor (background supervision)
 
 Sprint 19d's spec said "actual training run is a
