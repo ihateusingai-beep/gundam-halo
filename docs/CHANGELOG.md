@@ -2836,6 +2836,302 @@ without `reset_config()` + `load_config()`.
   held-out eval / mlx-whisper) —
   re-prioritize after Sprint 29 lands.
 
+### Sprint 30 — Mark-XL follow-ups (2 tracks spec)
+
+Sprint 30 ships the design freeze for
+the **Mark-XL follow-up tracks** —
+the two v0.1.5+ honest stubs that
+Sprint 27 (commit `4a7a83e`) shipped
+get their real implementations. This
+is a **SPEC-ONLY sprint** — no code is
+written. The implementation lands in
+Sprint 31+ (1 day per track, 2 days
+total) once the user signs off.
+
+**Predecessors**:
+- Sprint 27 (commit `4a7a83e`)
+  shipped `send_message` as a stub
+  ("not yet implemented" message) and
+  `flight_finder` as a URL builder
+  (no flight-data extraction). Both
+  were honest defaults: the Mark-XL
+  pyautogui flow (hard-coded
+  coordinates) and Selenium flow
+  (DOM scraping) were too fragile
+  for v0.1.5+.
+- Sprint 27 spec §4.2 documented the
+  real impl as "future work (Sprint
+  31+)". Sprint 30 ships that future
+  work.
+
+#### Spec
+- **docs/FEATURE-SPEC-SPRINT30.md** —
+  captures 2 independent tracks:
+    - **Track A — `send_message` real
+      pyautogui impl** (1 day). Replace
+      the hard-coded coordinate
+      approach with a **YOLO-based
+      computer-vision detector** that
+      finds UI elements dynamically.
+      The YOLO model (`yolov8n-messaging`)
+      is **bundled with the project**
+      (~50MB, downloaded on first
+      use). 4 classes:
+      `contact_search_bar`,
+      `contact_result`, `message_bar`,
+      `send_button`. Inference is
+      CPU-only via `onnxruntime` (~50ms
+      per screenshot on M-series).
+    - **Track B — `flight_finder` real
+      extractor** (1 day). Replace
+      the URL builder with an
+      **aviationstack** call that
+      returns structured flight data.
+      aviationstack has a free tier
+      (100 requests/month) for
+      testing; the user can upgrade
+      to a paid plan ($50/month for
+      10,000 requests). The URL
+      builder stays as a fallback
+      when the API key is missing
+      or the API errors.
+
+  The 2 tracks are **independent** —
+  the user picks which to ship first
+  based on priority. Recommended
+  order: **Track A first** (no
+  external dependency, the user can
+  drive the computer-vision model
+  locally), then **Track B** (after
+  the user has the budget for a paid
+  API key).
+
+#### Changed (planned for Sprint 31+)
+
+- **Track A (Sprint 31)**:
+  - `backend/app/tools/send_message.py` —
+    replace the stub with a YOLO-based
+    detection pipeline. Add
+    `YOLODetector` class (wraps
+    `onnxruntime` + YOLOv8n),
+    screenshot capture via `mss`,
+    window bounding box via
+    `pygetwindow`. ~300 LoC.
+  - `backend/app/core/config.py` —
+    add `detection_confidence:
+    float = 0.7` to `SendMessageConfig`.
+  - `backend/pyproject.toml` —
+    extend `tool-send-message` extra
+    with `mss`, `pygetwindow`,
+    `onnxruntime`. ~5 LoC.
+  - `backend/scripts/download_yolo_model.py`
+    NEW — one-time download of
+    `yolov8n-messaging.onnx` from
+    Gundam Halo's model hub. ~50 LoC.
+  - `backend/tests/tools/test_send_message.py`
+    — update existing 19 tests to
+    assert the new behavior (still
+    no pyautogui in CI; mock the
+    YOLO detector). Add 4-6 new
+    tests for the YOLO detection
+    pipeline. ~80 LoC.
+
+- **Track B (Sprint 32)**:
+  - `backend/app/tools/flight_finder.py`
+    — replace the URL builder with
+    an aviationstack call. Add
+    `_fetch_from_aviationstack`,
+    `_format_flight_for_tts` helpers.
+    Keep the URL builder as a
+    fallback when `api_key` is empty
+    or the API errors. ~250 LoC.
+  - `backend/app/core/config.py` —
+    add `api_key: str = ""`,
+    `api_provider: str =
+    "aviationstack"`, `top_n: int = 5`
+    to `FlightFinderConfig`.
+  - `backend/tests/tools/test_flight_finder.py`
+    — update existing 30 tests to
+    assert the URL builder fallback.
+    Add 6-8 new tests for the
+    aviationstack path (mock `httpx`
+    with `respx`). ~120 LoC.
+  - `config.toml.example` — add
+    `[tools.flight_finder] api_key =
+    "..."` example. Update the
+    `tool-send-message` extra docs.
+  - `THIRD-PARTY-NOTICES.md` — add
+    YOLO model license (Ultralytics
+    YOLOv8, AGPL-3.0) + aviationstack
+    ToS reference.
+
+#### Architecture note — why YOLO over
+hard-coded coordinates (Track A)
+The Mark-XL `send_message.py` used
+hard-coded `click(200, 300)` calls.
+This is **fast** (no inference) but
+**brittle** (app UI redesigns break
+the tool silently). The YOLO-based
+approach in Sprint 31+ is **+45ms
+slower per detection** but
+**infinitely more robust** to app
+updates and Mac resolutions. The
+trade-off is favorable for a
+single-user Mac app where the user
+might re-install WhatsApp every 6
+months. Total disk cost: ~50MB for
+the YOLO model + ~30MB for
+`onnxruntime`.
+
+#### Architecture note — why aviationstack
+over alternatives (Track B)
+The spec picks **aviationstack** as
+the primary API because:
+1. **Free tier** (100 requests/month)
+   lets the user test the
+   integration without paying.
+2. **Stable JSON schema** (no HTML
+   scraping brittleness, unlike
+   serpapi).
+3. **Reasonable price** ($50/month
+   for 10,000 requests = $0.005
+   per request, very affordable
+   for a single-user cockpit).
+
+`serpapi` (Google Flights scraper) is
+the configurable fallback for users
+who already have a serpapi
+subscription. The spec keeps both as
+configurable via
+`FlightFinderConfig.api_provider`.
+
+#### Architecture note — test strategy
+The YOLO model and the aviationstack
+API **can't be tested in CI** (no
+display, no API key). The tests use
+`respx` and `unittest.mock` to mock
+the external dependencies:
+- Track A tests mock `mss.grab` and
+  `onnxruntime.InferenceSession`. The
+  real pyautogui flow is **manually
+  smoke-tested** on the user's Mac
+  before the user opts in.
+- Track B tests mock `httpx.get` with
+  `respx`. The real aviationstack
+  integration is **manually smoke-
+  tested** with the user's API key.
+
+A `make smoke-test-send-message`
+target is provided in
+`scripts/Makefile` for the user to
+run the smoke test manually (requires
+a display + Accessibility permission).
+
+#### Architecture note — privacy
+Both tracks are **privacy-respecting
+by default**:
+- **Track A**: zero data leaves the
+  user's Mac. The YOLO model runs
+  locally; screenshots are taken
+  in-process; no cloud API; no
+  telemetry.
+- **Track B**: only anonymous flight
+  search params (origin, destination,
+  date) leave the Mac. No PII, no
+  payment info. The user can opt
+  out of the API entirely (set
+  `api_key = ""` to fall back to
+  the URL builder).
+
+#### Architecture note — restart
+caveat
+Both `SendMessageConfig.detection_confidence`
+and `FlightFinderConfig.api_key` follow
+the same restart-required caveat as
+the `enabled` field (Sprint 28 spec
+§4.5). The user must restart the
+backend for changes to take effect.
+Runtime toggling is deferred to a
+future sprint.
+
+#### File-by-file change set
+(when Sprint 31+ lands)
+
+| Path | Change | LoC est. |
+|---|---|---|
+| `backend/app/tools/send_message.py` | YOLO-based detection pipeline | +300 / -10 |
+| `backend/app/core/config.py` | `detection_confidence` field | +5 / 0 |
+| `backend/pyproject.toml` | Extend `tool-send-message` extra | +5 / 0 |
+| `backend/scripts/download_yolo_model.py` | NEW | +50 / 0 |
+| `backend/tests/tools/test_send_message.py` | Update + 4-6 new tests | +80 / -20 |
+| `backend/app/tools/flight_finder.py` | aviationstack integration | +250 / -10 |
+| `backend/app/core/config.py` | `api_key` + `api_provider` + `top_n` fields | +15 / 0 |
+| `backend/tests/tools/test_flight_finder.py` | Update + 6-8 new tests | +120 / -30 |
+| `config.toml.example` | API key example | +10 / -5 |
+| `docs/CHANGELOG.md` | v0.1.5+ entry per Sprint 31+ | +60 / 0 |
+| `THIRD-PARTY-NOTICES.md` | YOLO + aviationstack attribution | +20 / 0 |
+
+**Total**: ~915 LoC across 11 files.
+~2 days wall clock when implemented
+(1 day per track).
+
+#### Verified (this sprint — spec only)
+- `git diff --stat` clean (no source
+  changes; Sprint 30 is spec-only).
+- `pytest tests/voice/` — 90 passed,
+  4 skipped, 0 failed (Sprint 27
+  baseline preserved).
+- `pytest tests/tools/` — 188 passed,
+  1 fail (pre-existing
+  `test_default_config` stale
+  `base_url` assertion; **NOT**
+  introduced by Sprint 30).
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+
+#### Out of scope (deferred to 33+)
+- **Runtime toggling of `enabled`** —
+  Sprint 33+. The user must restart
+  the backend; a future sprint can
+  wire `default_tools()` to be
+  re-invoked when
+  `tools.web_search.enabled` changes
+  via the existing
+  `put_voice_config` /
+  `schedule_restart` pattern (Sprint
+  19b).
+- **Per-tool API keys for non-flight
+  tools** — only `flight_finder`
+  accepts an API key in Sprint 30+.
+  A future sprint can add API keys
+  for `web_search` (Bing / Brave),
+  etc.
+- **Conditional registration for the
+  pre-Sprint 27 tools** — `file_read`,
+  `file_write`, etc. don't have
+  `enabled` fields today. Adding
+  them would be a 21-tool refactor.
+- **Dashboard UI for tool
+  enable/disable** — a future sprint
+  can add a "Tools" tab in the
+  cockpit settings.
+- **Hot-reload of the tool list** —
+  when the user edits `config.toml`,
+  the backend currently requires a
+  restart. A future sprint can add a
+  `Watchdog` that detects mtime
+  changes and re-invokes
+  `default_tools()`.
+- **Re-training the YOLO model** —
+  the user can collect new screenshots
+  and re-train the model in a future
+  sprint. Sprint 31 ships the v1
+  model only.
+- **v0.1.5+ post-land menu from Sprint
+  26** (Layer 2 v2 / launchd /
+  held-out eval / mlx-whisper) —
+  re-prioritize after Sprint 30 lands.
+
 ### Sprint 19d addendum — training monitor (background supervision)
 
 Sprint 19d's spec said "actual training run is a
