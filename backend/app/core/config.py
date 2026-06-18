@@ -323,15 +323,36 @@ class YouTubeSummarizeConfig:
 
 @dataclass
 class FlightFinderConfig:
-    """Settings for the FlightFinderTool (Sprint 27 Track 27.3).
+    """Settings for the FlightFinderTool (Sprint 27 Track 27.3,
+    Sprint 30 Track B).
 
-    The tool is a URL builder in v0.1.5+ — no real flight-data
-    extractor. A future sprint (Sprint 31+) can add a paid flight
-    API key here (aviationstack / serpapi / Skyscanner Business).
+    Sprint 30 Track B (per `docs/FEATURE-SPEC-SPRINT30.md` §4.3)
+    added the real aviationstack-based flight-data extractor.
+    The Sprint 27 URL builder stays as the fallback when the
+    user hasn't set an `api_key` (free-tier testing, opt-out,
+    or no paid account) or when the API errors
+    (401/403/429/5xx).
     """
     enabled: bool = True
-    # No config fields yet — the tool builds a clean
-    # Google Flights URL from origin/destination/date.
+    # Sprint 30 Track B: aviationstack access key. Leave
+    # empty to fall back to the Sprint 27 URL builder.
+    # Get a free key (100 requests/month) at
+    # https://aviationstack.com/signup. The paid tier
+    # ($50/month for 10,000 requests) covers heavier use.
+    api_key: str = ""
+    # Sprint 30 Track B: which flight API provider to use.
+    # Currently only "aviationstack" is wired in (per spec §4.2
+    # — aviationstack is the primary API). "serpapi" is
+    # reserved for a future sprint (see Appendix B in the
+    # spec). Any value other than "aviationstack" falls
+    # back to the URL builder.
+    api_provider: str = "aviationstack"
+    # Sprint 30 Track B: how many top flights to include in
+    # the prose summary (1-10, default 5). aviationstack's
+    # free tier returns ≤10 flights per request, so 5 is a
+    # reasonable cap that keeps the TTS response under the
+    # 60s budget.
+    top_n: int = 5
 
 
 @dataclass

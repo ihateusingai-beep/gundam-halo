@@ -1,45 +1,67 @@
-"""flight_finder tool — URL builder for Google Flights searches.
+"""flight_finder tool — aviationstack real extractor + URL builder fallback.
 
-Sprint 27 (per `docs/FEATURE-SPEC-SPRINT27.md` §4.2 Track 27.3).
+Sprint 27 (per `docs/FEATURE-SPEC-SPRINT27.md` §4.2 Track 27.3)
+shipped this tool as a **URL builder** — no flight-data
+extraction. The Mark-XL Selenium-based extractor was too
+fragile (DOM changes every 3-6 months) and pulled in a
+heavy `playwright` dep Gundam Halo's venv doesn't carry.
 
-Mark-XL's `flight_finder.py` uses Selenium to scrape
-Google Flights' rendered HTML. This is fragile (the
-DOM changes every 3-6 months) and adds a heavy
-`playwright`/`selenium` dep that Gundam Halo's venv
-doesn't carry.
+**Sprint 30 Track B** (per `docs/FEATURE-SPEC-SPRINT30.md`
+§4.2) replaces the URL-only behavior with a real flight-
+data extractor that calls the **aviationstack** API
+(free tier: 100 requests/month; paid: $50/month for
+10,000 requests). The URL builder stays as the
+fallback when:
 
-**Sprint 27 ships a more honest v0.1**: instead of
-pretending we can extract structured flight data
-without a paid API key, the tool builds a Google
-Flights URL + returns a TTS-friendly summary that
-the user can open in their browser. The agent's
-NativeReAct loop can then optionally call
-`webbrowser.open()` via the `open_app` tool to
-launch the URL.
+  1. The user hasn't set `[tools.flight_finder] api_key
+     = "..."` in `~/.gundam-halo/config.toml` (no paid
+     account, free-tier testing, or opt-out).
+  2. The aviationstack call fails — HTTP 401/403/429
+     (auth/rate-limit), 5xx (transient outage), or
+     timeout. The user gets a "API failed; falling back
+     to URL builder" note plus the URL they can open
+     in their browser.
 
-The tool is still useful — it converts messy user
-input ("next Tuesday", "HKG to TPE") into a clean
-date + IATA code + URL. The user gets a concrete
-next step ("open this URL in your browser") rather
-than a brittle auto-extraction that breaks every
-3-6 months.
+The aviationstack response is parsed into TTS-friendly
+prose via `_format_flight_for_tts()`:
 
-Future work (Sprint 31+): if the user adds a paid
-flight API key (aviationstack, serpapi, Skyscanner
-Business), the tool can grow a second path that
-returns real flight data. The current
-"URL builder" path stays as a fallback.
+  "Flight CX 450 on Cathay Pacific, departing HKG at
+   14:30, arriving TPE at 16:45, price $420."
+
+The top `FlightFinderConfig.top_n` (default 5) flights
+are returned, sorted by price (when available) then by
+scheduled departure time. `httpx` is the HTTP client
+(already in the venv per Sprint 17b); the import is
+**lazy** so the test suite can mock the HTTP layer
+without pulling in httpx at module import time.
+
+The URL builder still does the messy work of resolving
+"next Tuesday" / "HKG" / "Hong Kong" into clean IATA
+codes + ISO dates. The agent's NativeReAct loop can
+then call `open_app` to launch the URL in the user's
+browser.
 """
 from __future__ import annotations
 
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.tools._stubs import BaseTool
 
 logger = logging.getLogger(__name__)
+
+# aviationstack endpoint (HTTP — the free tier does
+# not require HTTPS; the paid tier does but works
+# over HTTPS too). Track B ships HTTP for the free
+# tier; the user can switch to HTTPS by changing
+# this constant if they want paid-tier guarantees.
+AVIATIONSTACK_BASE_URL = "http://api.aviationstack.com/v1/flights"
+# Default HTTP timeout (seconds). aviationstack's free
+# tier is usually <2s but a slow cluster can take
+# 5-10s; 30s is generous and matches httpx's docs.
+DEFAULT_API_TIMEOUT_S = 30.0
 
 # Common IATA airport codes for the user's most likely
 # routes. This is NOT a complete database; it's a hint
@@ -193,38 +215,280 @@ def _build_google_flights_url(
     return f"https://www.google.com/travel/flights?q={query}"
 
 
+# ---------------------------------------------------------------------------
+# aviationstack integration (Sprint 30 Track B)
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_from_aviationstack(
+    origin: str,
+    destination: str,
+    date: str,
+    api_key: str,
+    timeout_s: float = DEFAULT_API_TIMEOUT_S,
+) -> List[Dict[str, Any]]:
+    """Call the aviationstack API and return the flight list.
+
+    Args:
+        origin: Departure IATA code (e.g. "HKG").
+        destination: Arrival IATA code (e.g. "TPE").
+        date: Departure date in YYYY-MM-DD format.
+        api_key: The user's aviationstack access_key.
+        timeout_s: HTTP timeout in seconds (default 30s).
+
+    Returns:
+        A list of flight dicts (the raw `data` field from
+        the aviationstack response). Each dict has the
+        shape documented at
+        https://aviationstack.com/documentation
+        (fields: `airline.name`, `flight.iata`,
+         `departure.airport`, `departure.scheduled`,
+         `arrival.airport`, `arrival.scheduled`,
+         `flight_price`).
+
+    Raises:
+        FlightFinderError: On aviationstack-reported
+            errors (auth failure, rate limit, invalid
+            params — aviationstack returns
+            `{"error": {"code": ..., "info": ...}}` in
+            these cases).
+        httpx.HTTPStatusError: On non-2xx HTTP status
+            codes not covered by aviationstack's
+            `{"error": ...}` envelope (e.g. 5xx with no
+            JSON body, or transport errors). The caller
+            is expected to catch this and fall back to
+            the URL builder.
+        httpx.RequestError: On transport errors
+            (connection refused, DNS failure, timeout).
+            The caller is expected to catch this and fall
+            back to the URL builder.
+    """
+    # Lazy-import httpx so the module is importable in
+    # test environments that mock httpx at the
+    # `_fetch_from_aviationstack` call boundary
+    # (respx intercepts at httpx.AsyncClient level, not
+    # at import time, but lazy-import keeps the module
+    # surface clean).
+    import httpx  # type: ignore
+
+    params: Dict[str, str] = {
+        "access_key": api_key,
+        "dep_iata": origin,
+        "arr_iata": destination,
+        "flight_date": date,
+    }
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        resp = await client.get(AVIATIONSTACK_BASE_URL, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+    # aviationstack returns {"error": {"code": ...,
+    # "info": ...}} on auth failure / rate limit /
+    # invalid params even when the HTTP status is 200.
+    # Catch this envelope before returning data.
+    if isinstance(data, dict) and "error" in data:
+        err = data["error"]
+        if isinstance(err, dict):
+            info = err.get("info", "unknown error")
+        else:
+            info = str(err)
+        raise FlightFinderError(f"aviationstack error: {info}")
+
+    # Normal path: `{"data": [...]}` envelope.
+    if isinstance(data, dict):
+        return data.get("data", [])
+    # Unexpected shape (e.g. list at top level — defensive).
+    return []
+
+
+def _format_flight_for_tts(flight: Dict[str, Any]) -> str:
+    """Format a single aviationstack flight dict as a
+    TTS-friendly prose sentence.
+
+    Example output:
+        "Flight CX 450 on Cathay Pacific, departing HKG
+         at 2026-06-24T14:30:00+00:00, arriving TPE at
+         2026-06-24T16:45:00+00:00, price $420."
+
+    The function is **defensive**: missing fields
+    fall back to placeholders ("Unknown airline",
+    "?") so a partial aviationstack response still
+    renders something usable. The price field is
+    omitted when absent (aviationstack's free tier
+    doesn't include `flight_price`).
+
+    Args:
+        flight: A single flight dict from aviationstack
+            (the element of the `data` list).
+
+    Returns:
+        A single TTS-friendly prose sentence ending
+        in a period.
+    """
+    airline = (
+        flight.get("airline", {}).get("name", "Unknown airline")
+        if isinstance(flight.get("airline"), dict)
+        else "Unknown airline"
+    )
+    flight_num = (
+        flight.get("flight", {}).get("iata", "")
+        if isinstance(flight.get("flight"), dict)
+        else ""
+    )
+    dep = flight.get("departure", {}) or {}
+    arr = flight.get("arrival", {}) or {}
+    price = flight.get("flight_price", "")
+
+    parts: List[str] = []
+    if flight_num:
+        parts.append(f"Flight {flight_num} on {airline}")
+    else:
+        parts.append(f"Flight on {airline}")
+    parts.append(
+        f"departing {dep.get('airport', '?')} at {dep.get('scheduled', '?')}"
+    )
+    parts.append(
+        f"arriving {arr.get('airport', '?')} at {arr.get('scheduled', '?')}"
+    )
+    if price:
+        parts.append(f"price {price}")
+    return ", ".join(parts) + "."
+
+
+def _summarise_flights_for_tts(
+    flights: List[Dict[str, Any]],
+    origin: str,
+    destination: str,
+    date: str,
+    top_n: int = 5,
+) -> str:
+    """Sort + format the top-N flights as TTS-friendly prose.
+
+    Args:
+        flights: Raw flight list from aviationstack.
+        origin: Departure IATA code (used in the
+            prose header).
+        destination: Arrival IATA code.
+        date: Departure date (used in the header).
+        top_n: How many flights to include in the
+            prose summary (default 5; spec §4.3
+            `FlightFinderConfig.top_n`).
+
+    Returns:
+        A single TTS-friendly prose string. Example:
+
+            "Top 3 flights from HKG to TPE on 2026-06-24:
+             The 1st cheapest is Flight CX 450 on Cathay
+             Pacific, departing HKG at ..., arriving TPE
+             at ..., price $420. The 2nd cheapest is ..."
+
+    Sorting:
+        Primary key = price (lower first; flights
+        without a price sort last via the
+        `999999` sentinel). Secondary key = scheduled
+        departure time (earlier first) so flights
+        with the same price are in chronological
+        order.
+    """
+    if not flights:
+        return f"No flights found from {origin} to {destination} on {date}."
+
+    # Sort by price (missing → sentinel) then by
+    # scheduled departure. We use a tuple key so the
+    # Python sort is stable across runs.
+    def _sort_key(f: Dict[str, Any]) -> tuple:
+        price_raw = f.get("flight_price")
+        # aviationstack sometimes returns price as a
+        # string ("$420") or a number (420). Try to
+        # parse; fall back to the sentinel if neither
+        # works.
+        price_val: float
+        if isinstance(price_raw, (int, float)):
+            price_val = float(price_raw)
+        elif isinstance(price_raw, str):
+            # Strip currency symbols + commas.
+            cleaned = re.sub(r"[^\d.]", "", price_raw)
+            try:
+                price_val = float(cleaned)
+            except ValueError:
+                price_val = 999999.0
+        else:
+            price_val = 999999.0
+        scheduled = (
+            (f.get("departure") or {}).get("scheduled", "")
+        )
+        return (price_val, scheduled)
+
+    sorted_flights = sorted(flights, key=_sort_key)
+
+    top_flights = sorted_flights[: max(1, top_n)]
+    ordinal_labels = [
+        "1st", "2nd", "3rd", "4th", "5th",
+        "6th", "7th", "8th", "9th", "10th",
+    ]
+    sentences: List[str] = [
+        f"Top {len(top_flights)} flights from {origin} to {destination} on {date}:"
+    ]
+    for i, flight in enumerate(top_flights):
+        label = ordinal_labels[i] if i < len(ordinal_labels) else f"{i + 1}th"
+        sentences.append(
+            f"The {label} cheapest is {_format_flight_for_tts(flight)}"
+        )
+    return " ".join(sentences)
+
+
 class FlightFinderError(RuntimeError):
-    """Raised on flight search errors."""
+    """Raised on flight search errors.
+
+    aviationstack returns an `{"error": {"code": ...,
+    "info": ...}}` envelope on auth failure or
+    rate-limit (HTTP 200 with a JSON body). The
+    `_fetch_from_aviationstack` helper raises this
+    exception with the `info` text so the caller can
+    fall back to the URL builder with a useful error
+    message.
+    """
 
 
 class FlightFinderTool(BaseTool):
-    """Build a Google Flights search URL for a route.
+    """Find flights between two airports.
 
-    Returns a TTS-friendly summary with the resolved
-    IATA codes, dates, and a clickable URL. The agent's
-    NativeReAct loop can then call `open_app` or
-    `apple_script` to open the URL in the user's
-    default browser.
+    Sprint 30 Track B (per `docs/FEATURE-SPEC-SPRINT30.md`
+    §4.2) ships a real aviationstack-based extractor
+    with the Sprint 27 URL builder as a fallback. The
+    user opts in to the real extractor by setting
+    `[tools.flight_finder] api_key = "..."` in
+    `~/.gundam-halo/config.toml`. Without a key (or
+    when the API errors), the tool falls back to
+    building a Google Flights URL the user opens in
+    their browser — same behavior as Sprint 27.
 
-    Sprint 27 ships this as a URL builder (not a
-    flight-data extractor) because the v0.1.x
-    Gundam Halo venv doesn't carry `playwright` or
-    a paid flight API key. The Mark-XL Selenium path
-    was deemed too fragile for v0.1.5+. See the
-    file-level docstring for the future work to
-    add a paid-API path.
+    The aviationstack response is sorted by price
+    (when available) then by scheduled departure
+    time, and the top `top_n` (default 5) flights
+    are returned as TTS-friendly prose.
+
+    Returns TTS-friendly prose on the happy path:
+    "Top 5 flights from HKG to TPE on 2026-06-24: The
+     1st cheapest is Flight CX 450 on Cathay Pacific,
+     departing HKG at ..., arriving TPE at ..., price
+     $420. ..."
+
+    Returns a Google Flights URL on the fallback
+    path (no key / API error).
     """
 
     name = "flight_finder"
     description = (
-        "Build a Google Flights search URL for a route. "
-        "Pass IATA codes (HKG, TPE) or city names (Hong Kong, "
-        "Taipei). Date can be 'today', 'tomorrow', 'next Tuesday', "
-        "or 'YYYY-MM-DD'. Returns the resolved IATA codes, the "
-        "date, and a Google Flights URL. The agent can then call "
-        "`open_app` to launch the URL in the user's browser. "
-        "This is a URL builder, not a flight-data extractor — "
-        "the user opens the URL to see the actual flights."
+        "Find flights between two airports. Pass IATA codes "
+        "(HKG, TPE) or city names (Hong Kong, Taipei). Date can "
+        "be 'today', 'tomorrow', 'next Tuesday', or 'YYYY-MM-DD'. "
+        "If the aviationstack API key is configured in config.toml "
+        "(`[tools.flight_finder] api_key = \"...\"`), the tool "
+        "returns the top 5 flights as TTS-friendly prose, sorted "
+        "by price then by departure time. Without an API key, the "
+        "tool falls back to a Google Flights URL the user opens "
+        "in their browser."
     )
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -254,7 +518,10 @@ class FlightFinderTool(BaseTool):
                 "type": "string",
                 "description": (
                     "Return date for round trips (optional). Same "
-                    "format as `date`."
+                    "format as `date`. Informational only — "
+                    "aviationstack's free tier returns one-way "
+                    "flights; round-trip is approximated by the "
+                    "URL builder fallback."
                 ),
             },
             "passengers": {
@@ -266,14 +533,57 @@ class FlightFinderTool(BaseTool):
                 "enum": ["economy", "premium", "business", "first"],
                 "description": (
                     "Cabin class (default economy). Informational "
-                    "only — the URL builder doesn't pass cabin to "
-                    "Google Flights; the user selects it in the "
-                    "browser."
+                    "only — aviationstack's free tier doesn't filter "
+                    "by cabin; the URL builder doesn't pass cabin to "
+                    "Google Flights. The user selects it in the "
+                    "browser or pays for a cabin-filtered plan."
                 ),
             },
         },
         "required": ["origin", "destination", "date"],
     }
+
+    def __init__(self, config: Any = None) -> None:
+        """Initialise with optional `FlightFinderConfig`.
+
+        The `config` arg is a `FlightFinderConfig` dataclass
+        (from `app.core.config`) with fields:
+          - enabled: bool (default True)
+          - api_key: str (default "" — empty = URL builder
+            fallback)
+          - api_provider: str (default "aviationstack";
+            reserved for future sprint when serpapi is added)
+          - top_n: int (default 5; max 10)
+        """
+        super().__init__()
+        self._config = config
+
+    @property
+    def api_key(self) -> str:
+        """Read `api_key` from the FlightFinderConfig (or "")."""
+        if self._config is None:
+            return ""
+        return getattr(self._config, "api_key", "")
+
+    @property
+    def api_provider(self) -> str:
+        """Read `api_provider` from the FlightFinderConfig
+        (or "aviationstack")."""
+        if self._config is None:
+            return "aviationstack"
+        return getattr(self._config, "api_provider", "aviationstack")
+
+    @property
+    def top_n(self) -> int:
+        """Read `top_n` from the FlightFinderConfig (or 5).
+        Clamped to [1, 10]."""
+        if self._config is None:
+            return 5
+        try:
+            n = int(getattr(self._config, "top_n", 5))
+        except (TypeError, ValueError):
+            return 5
+        return max(1, min(10, n))
 
     async def run(
         self,
@@ -312,12 +622,112 @@ class FlightFinderTool(BaseTool):
             if not return_date_resolved:
                 return f"Error: could not parse return_date {return_date!r}"
 
-        # Build URL
-        url = _build_google_flights_url(
-            origin_code, dest_code, date_resolved, return_date_resolved, passengers
+        # Decide: aviationstack vs URL builder fallback.
+        # No api_key → URL builder (Sprint 27 default).
+        api_key = self.api_key.strip()
+        if not api_key:
+            logger.info(
+                "flight_finder: no api_key configured; "
+                "falling back to URL builder"
+            )
+            return self._format_url_builder_response(
+                origin, origin_code, destination, dest_code,
+                date_resolved, return_date_resolved, passengers, cabin,
+            )
+
+        # Try aviationstack (provider field reserved for
+        # future sprint; only "aviationstack" is wired in
+        # Track B).
+        if self.api_provider != "aviationstack":
+            logger.warning(
+                "flight_finder: api_provider=%r not yet supported; "
+                "falling back to URL builder",
+                self.api_provider,
+            )
+            return self._format_url_builder_response(
+                origin, origin_code, destination, dest_code,
+                date_resolved, return_date_resolved, passengers, cabin,
+            )
+
+        try:
+            flights = await _fetch_from_aviationstack(
+                origin_code, dest_code, date_resolved, api_key,
+            )
+        except FlightFinderError as e:
+            # Aviationstack returned {"error": ...}.
+            # Fall back to the URL builder with a note
+            # so the user knows why they're seeing the URL.
+            logger.warning(
+                "flight_finder: aviationstack returned error: %s; "
+                "falling back to URL builder",
+                e,
+            )
+            url_response = self._format_url_builder_response(
+                origin, origin_code, destination, dest_code,
+                date_resolved, return_date_resolved, passengers, cabin,
+            )
+            return f"{url_response}\n\n(Note: aviationstack API failed: {e}. Falling back to URL builder.)"
+        except Exception as e:  # httpx.HTTPStatusError, RequestError, etc.
+            # Transport / HTTP errors. Fall back with note.
+            logger.warning(
+                "flight_finder: aviationstack HTTP/transport error: %s; "
+                "falling back to URL builder",
+                e,
+            )
+            url_response = self._format_url_builder_response(
+                origin, origin_code, destination, dest_code,
+                date_resolved, return_date_resolved, passengers, cabin,
+            )
+            return f"{url_response}\n\n(Note: aviationstack API failed: {e}. Falling back to URL builder.)"
+
+        # Happy path: format the top-N flights as prose.
+        if not flights:
+            return f"No flights found from {origin_code} to {dest_code} on {date_resolved}."
+
+        return _summarise_flights_for_tts(
+            flights, origin_code, dest_code, date_resolved, top_n=self.top_n,
         )
 
-        # Format the response
+    def _format_url_builder_response(
+        self,
+        origin: str,
+        origin_code: str,
+        destination: str,
+        dest_code: str,
+        date_resolved: str,
+        return_date_resolved: Optional[str],
+        passengers: int,
+        cabin: str,
+    ) -> str:
+        """Build the Sprint 27 URL-builder response string.
+
+        Kept as a private helper so the URL builder
+        stays as a fallback for both the
+        "no api_key" and "api_key but API failed"
+        cases. The format is identical to Sprint 27
+        so the existing test suite assertions
+        continue to pass.
+
+        Args:
+            origin: User's original origin input
+                (e.g. "Hong Kong"). Used for the
+                prose header.
+            origin_code: Resolved IATA code
+                (e.g. "HKG").
+            destination, dest_code: As above.
+            date_resolved: ISO date (YYYY-MM-DD).
+            return_date_resolved: ISO date or None.
+            passengers: Number of passengers (>= 1).
+            cabin: Cabin class string.
+
+        Returns:
+            A TTS-friendly summary with the URL the
+            user can open in their browser.
+        """
+        url = _build_google_flights_url(
+            origin_code, dest_code, date_resolved,
+            return_date_resolved, passengers,
+        )
         trip_type = "round trip" if return_date_resolved else "one-way"
         passenger_label = "passenger" if passengers == 1 else "passengers"
         out = (
@@ -333,4 +743,4 @@ class FlightFinderTool(BaseTool):
         return out
 
 
-__all__ = ["FlightFinderTool", "FlightFinderError"]
+__all__ = ["FlightFinderTool", "FlightFinderError", "_fetch_from_aviationstack", "_format_flight_for_tts", "_summarise_flights_for_tts"]

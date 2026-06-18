@@ -146,6 +146,69 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
+## Aviationstack (Sprint 30 Track B)
+
+- **Service:** https://aviationstack.com
+- **ToS reference:** https://aviationstack.com/terms
+- **Sprint spec:** `docs/FEATURE-SPEC-SPRINT30.md` §4.2
+- **Pricing tiers** (as of 2026-06):
+  - Free: 100 requests/month (no credit card)
+  - Hobbyist: $10/month for 1,000 requests
+  - Pro: $50/month for 10,000 requests
+  - Business: $250/month for 100,000 requests
+- **Port scope:** the `FlightFinderTool` calls the
+  aviationstack REST endpoint
+  (`http://api.aviationstack.com/v1/flights`) with
+  `access_key`, `dep_iata`, `arr_iata`, and
+  `flight_date` parameters. The response is parsed
+  into TTS-friendly prose via
+  `_format_flight_for_tts()` and
+  `_summarise_flights_for_tts()`. The user must
+  supply their own `api_key` via
+  `[tools.flight_finder] api_key = "..."` in
+  `~/.gundam-halo/config.toml`. Without a key (or
+  when the API errors), the tool falls back to the
+  Sprint 27 URL builder.
+- **Dependencies:** no new Python deps — `httpx` is
+  already in the venv (added in Sprint 17b).
+- **Privacy:** the aviationstack API receives the
+  user's flight search params (origin, destination,
+  date) — equivalent to what the user would type into
+  Google Flights directly. **No PII is sent.** The
+  user can opt out of the API entirely (set
+  `api_key = ""` to fall back to the URL builder).
+- **Why aviationstack over alternatives** (per spec
+  Appendix B):
+  - Free tier (100 requests/month) — lets the user
+    test the integration without paying.
+  - Stable JSON schema (no HTML scraping
+    brittleness, unlike serpapi's Google Flights
+    scraper).
+  - Reasonable price ($50/month for 10,000 requests
+    = $0.005 per request, affordable for a
+    single-user cockpit).
+  - Skyscanner Business API requires a partnership;
+    Duffel / Kiwi Tequila are out of scope for v0.1.5+.
+- **Fallback behaviour:** the URL builder stays as
+  the fallback for three cases (per spec §4.5 risk
+  register rows 3, 4, 5):
+  1. `api_key` is empty (no paid account, free-tier
+     testing, or opt-out).
+  2. aviationstack returns an `{"error": ...}`
+     envelope (auth failure, rate limit, invalid
+     params).
+  3. HTTP 4xx / 5xx / transport errors (timeout,
+     connection refused).
+  In all three cases the tool returns the URL
+  builder response + a "Note: aviationstack API
+  failed: <error>" suffix so the user knows why
+  they're seeing the URL.
+- **Mocking in CI:** tests mock httpx via `respx`
+  (`tests/tools/test_flight_finder.py`). No live
+  API calls are made in CI.
+
+---
+
 ## Add or update a notice
 
 When you port code from a new third-party project, add a
