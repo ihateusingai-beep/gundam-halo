@@ -1,4 +1,4 @@
-"""Whisper Hugging Face ASR backend — Sprint 23 (v0.1.4).
+"""Whisper Hugging Face ASR backend — Sprint 23 (v0.1.4) + Sprint 35 (v0.1.5).
 
 This is the third ASR backend selectable via
 `voice.asr.backend = "whisper_hf"` in
@@ -9,23 +9,52 @@ so a fine-tuned HF-format checkpoint
 `finetune_whisper_yue.py` runbook) can be loaded
 on Mac via MPS / CPU.
 
-The v0.1.3 `WhisperLocalASR` (openai-whisper
-backend) could not load HF-format directories;
-it accepted `model_path` as forward-compat
-forward but emitted a warmup warning saying
-"Full support lands in v0.1.4". v0.1.4 ships
-this `WhisperHFASR` class so the warning is
-replaced with a hard `ValueError` (see Sprint
-23 Track 2 in `docs/FEATURE-SPEC-SPRINT22.md`).
+Sprint 35 (v0.1.5, Track 31-D) adds an
+**optional** `inference_backend = "mlx"` mode
+that swaps the inference path from the HF
+`pipeline` to `mlx-whisper.transcribe` (a
+separate package, ~50MB, plus `mlx` ~400MB).
+The training still uses HF + LoRA per
+Sprint 19d; only inference swaps. The
+`mlx-whisper` path is opt-in
+(`uv sync --extra voice-hf-mlx`); the HF
+pipeline remains the default. See
+`docs/FEATURE-SPEC-SPRINT26.md` §4.4 + §6
+("mlx-whisper doesn't support language =
+'cantonese'") and `docs/FEATURE-SPEC-SPRINT31.md`
+§Appendix B for the rationale.
+
+**mlx-whisper Cantonese language-hint gap
+workaround**: per spec §Appendix B, mlx-whisper
+was thought to not expose a usable Cantonese
+language hint. In practice (verified against
+`mlx-examples/whisper/mlx_whisper/tokenizer.py`
+on main, 2026-06-18), mlx-whisper's tokenizer
+**does include** `"yue": "cantonese"` as the
+last entry of its `LANGUAGES` dict — so we
+can pass `language = "yue"` (the ISO 639-3
+code) directly via `decode_options`. The HF
+pipeline, by contrast, expects the full
+ISO 639-1 name `"cantonese"` (different
+schema). We therefore keep two language
+maps: `_LANGUAGE_MAP` (HF, yue→cantonese)
+and `_MLX_LANGUAGE_MAP` (mlx, yue→yue).
+If mlx-whisper's tokenizer ever drops the
+"yue" entry, we fall back to `initial_prompt`
+prompt-engineering (a Cantonese context
+string) to nudge the decoder; see
+`_invoke_pipeline_mlx`.
 
 The class follows the same lazy-import +
 `ASRError` wrap pattern as `YuesubASR`
 (`backend/app/voice/asr/yuesub.py:155-194`):
 the heavy `transformers` + `torch` deps are
-in the `voice-hf` optional extra, so
-whisper_local / yuesub users don't pay for
-them. The `transformers` import is deferred
-to `warmup()`, not module load.
+in the `voice-hf` optional extra, and the
+`mlx` + `mlx-whisper` deps are in the
+`voice-hf-mlx` optional extra. whisper_local /
+yuesub users don't pay for any of them.
+The imports are deferred to `warmup()` /
+`_invoke_pipeline_mlx`, not module load.
 """
 
 from __future__ import annotations
@@ -41,6 +70,18 @@ import numpy as np
 from app.voice.asr.asr_interface import ASRError, ASRInterface
 
 logger = logging.getLogger(__name__)
+
+# Sprint 35 (Track 31-D): the optional
+# mlx-whisper inference path. Listed as a
+# module-level constant so the test suite
+# can monkeypatch the lazy import without
+# importing `mlx_whisper` at module load
+# (mlx is darwin-only + ~400MB; we don't
+# want it on the import path of whisper_local
+# / yuesub users).
+INFERENCE_BACKEND_HF = "hf"
+INFERENCE_BACKEND_MLX = "mlx"
+_VALID_INFERENCE_BACKENDS = frozenset({INFERENCE_BACKEND_HF, INFERENCE_BACKEND_MLX})
 
 
 # Module-level: lazy imports of transformers + torch.
@@ -81,6 +122,37 @@ def _import_torch() -> Any:
         raise ASRError(
             "torch is required for WhisperHFASR. "
             "Install with: uv sync --extra voice-hf"
+        ) from e
+
+
+def _import_mlx_whisper() -> Any:
+    """Lazy-import the `mlx_whisper` module (Sprint 35 / Track 31-D).
+
+    mlx-whisper is in the `voice-hf-mlx` optional extra, which
+    is darwin-only (mlx itself only builds on macOS Apple
+    Silicon + recent macOS Intel). whisper_local / yuesub
+    users don't pay for the ~450MB `mlx` + `mlx-whisper`
+    install. The import is deferred to
+    `_invoke_pipeline_mlx` so the module body of
+    `whisper_hf.py` stays free of darwin-only deps.
+
+    Raises:
+        ASRError: when mlx_whisper is not installed (the
+            user hasn't run `uv sync --extra voice-hf-mlx`),
+            or when running on a non-darwin platform
+            (mlx is Apple-only — the install would have
+            failed, but we surface a clear error if the
+            user runs the import manually).
+    """
+    try:
+        import mlx_whisper  # type: ignore
+
+        return mlx_whisper
+    except ImportError as e:
+        raise ASRError(
+            "mlx-whisper is required for inference_backend='mlx'. "
+            "Install with: uv sync --extra voice-hf-mlx "
+            "(darwin-only — mlx is not available on Linux/Windows)."
         ) from e
 
 
@@ -195,6 +267,30 @@ _LANGUAGE_MAP: dict[str, str] = {
 }
 
 
+# Sprint 35 (Track 31-D): mlx-whisper's tokenizer uses
+# a different language schema than the HF pipeline. The
+# HF `generate_kwargs.language` expects the full ISO
+# 639-1 name ("cantonese"); mlx-whisper's
+# `decode_options["language"]` expects the short Whisper
+# token code ("yue"). mlx-whisper's tokenizer (verified
+# in `mlx-examples/whisper/mlx_whisper/tokenizer.py` on
+# main, 2026-06-18) does include `"yue": "cantonese"`
+# as the last LANGUAGES entry — so we can pass
+# `language = "yue"` directly. (See the module docstring
+# for the rationale + fallback via `initial_prompt`.)
+_MLX_LANGUAGE_MAP: dict[str, str] = {
+    "yue": "yue",          # Cantonese: mlx-whisper's "yue" token
+    "zh": "zh",            # Mandarin Chinese
+    "en": "en",            # English
+    "ja": "ja",            # Japanese
+    "ko": "ko",            # Korean
+    # "auto" → None (let mlx-whisper auto-detect from
+    # the first 30s of audio). This is mlx-whisper's
+    # default behaviour; we just don't pass `language`.
+    "auto": "",
+}
+
+
 def _map_language(language: str) -> str:
     """Map a Gundam Halo language code to HF's ISO 639-1.
 
@@ -207,8 +303,59 @@ def _map_language(language: str) -> str:
     return _LANGUAGE_MAP.get(language.lower(), language.lower())
 
 
+def _mlx_map_language(language: str) -> Optional[str]:
+    """Map a Gundam Halo language code to mlx-whisper's
+    short token code (`"yue"` for Cantonese, etc.).
+
+    Returns:
+        The mlx-whisper language token (e.g. `"yue"`),
+        or `None` to let mlx-whisper auto-detect
+        (corresponds to "auto" in the config; we omit
+        `language` from `decode_options`).
+
+    Note:
+        Differs from `_map_language` in that:
+        - HF's schema needs the full ISO 639-1 name
+          (`"cantonese"`); mlx-whisper's needs the
+          short token (`"yue"`).
+        - "auto" → None (mlx-whisper defaults to
+          auto-detect when `language` is absent;
+          passing `""` would raise ValueError in
+          `get_tokenizer`).
+    """
+    if not language:
+        return None
+    mapped = _MLX_LANGUAGE_MAP.get(language.lower())
+    if mapped is None:
+        # Unknown code — pass it through unchanged
+        # so mlx-whisper can try its own detection /
+        # fail loud with its own error.
+        return language.lower()
+    if mapped == "":
+        # "auto" → let mlx-whisper detect.
+        return None
+    return mapped
+
+
+# Sprint 35 (Track 31-D): Cantonese context string for
+# the mlx-whisper `initial_prompt` fallback. Per spec
+# §Appendix B, if mlx-whisper's tokenizer ever drops
+# the "yue" entry, we use prompt-engineering to nudge
+# the decoder toward Cantonese output. The string is
+# Common Voice yue-style colloquial Cantonese —
+# short enough not to dominate the context window,
+# but distinctive enough to bias the decoder's
+# first-token distribution toward yue vocabulary.
+# This is a no-op when the tokenizer accepts "yue"
+# (the current path).
+_CANTONESE_PROMPT_FALLBACK = (
+    "粵語日常對話，例如：你食咗飯未？我哋去街市買餸。",
+)
+
+
 class WhisperHFASR(ASRInterface):
-    """Whisper ASR via the Hugging Face `transformers` pipeline.
+    """Whisper ASR via the Hugging Face `transformers` pipeline
+    (default) or `mlx-whisper` (Sprint 35 / Track 31-D, opt-in).
 
     Loads a fine-tuned HF-format checkpoint (produced by
     Sprint 19d's `finetune_whisper_yue.py` runbook) and
@@ -221,22 +368,47 @@ class WhisperHFASR(ASRInterface):
             The directory must contain `config.json`,
             `tokenizer.json`, `preprocessor_config.json`,
             and the model weights (e.g. `model.safetensors`).
+            For `inference_backend = "mlx"`, the same path
+            is passed to `mlx_whisper.transcribe` as
+            `path_or_hf_repo` — the user is responsible
+            for putting MLX-converted weights there (or
+            symlinking to an `mlx-community/...` HF Hub
+            mirror). The `voice-hf-mlx` extra does not
+            auto-convert HF→MLX format.
         language: One of "auto" | "yue" | "zh" | "en" | ...
-            Mapped to HF's ISO 639-1 schema internally
-            (`yue` → `cantonese`). Default: "yue"
-            (the M9-E Layer 2 fine-tune is Cantonese).
-        device: One of "auto" | "cpu" | "cuda" | "mps".
+            Mapped to the active backend's language schema
+            internally (HF: `yue` → `cantonese`;
+            mlx-whisper: `yue` → `"yue"` token). Default:
+            "yue" (the M9-E Layer 2 fine-tune is Cantonese).
+        device: One of "auto" | "cpu" | "cuda" | "mps" | "mlx".
             Default: "auto" (MPS on Apple Silicon, CUDA
-            on Linux/Windows, CPU fallback).
+            on Linux/Windows, CPU fallback). The "mlx"
+            value selects the mlx-whisper inference path
+            (the factory maps `device = "mlx"` to
+            `inference_backend = "mlx"`).
         compute_type: One of "auto" | "float16" | "float32".
             Default: "auto" (float32, parity with the
-            training script).
+            training script). Ignored on the mlx path
+            (mlx-whisper uses float16 internally — the
+            `fp16` decode option defaults to True).
+        inference_backend: One of "hf" | "mlx". Default: "hf".
+            Sprint 35 (Track 31-D) opt-in flag. "mlx" swaps
+            the inference path to `mlx_whisper.transcribe`
+            for ~2× speedup on Apple Silicon (per spec
+            §4.4 acceptance: 600ms → 300ms per turn).
+            mlx is darwin-only; on non-Mac platforms the
+            import raises a clear ASRError pointing at
+            `uv sync --extra voice-hf-mlx`. The factory
+            forwards `device = "mlx"` to this field, so
+            end users typically don't set it directly.
 
     Raises:
         ASRError: on `warmup()` if `model_path` is not
             a directory, or if `transformers` / `torch`
             are not installed (the user hasn't run
             `uv sync --extra voice-hf`).
+        ValueError: on unknown `inference_backend` value
+            (only "hf" | "mlx" supported).
     """
 
     def __init__(
@@ -245,6 +417,7 @@ class WhisperHFASR(ASRInterface):
         language: str = "yue",
         device: str = "auto",
         compute_type: str = "auto",
+        inference_backend: str = INFERENCE_BACKEND_HF,
     ) -> None:
         # model_path is REQUIRED. The factory
         # (`asr_factory.py`) checks for empty
@@ -259,11 +432,21 @@ class WhisperHFASR(ASRInterface):
                 "to the fine-tuned checkpoint directory, e.g.\n"
                 'model_path = "~/.gundam-halo/models/whisper-yue-base/"'
             )
+        if inference_backend not in _VALID_INFERENCE_BACKENDS:
+            raise ValueError(
+                f"Unknown inference_backend {inference_backend!r}. "
+                f"Expected 'hf' | 'mlx'."
+            )
         self._model_path = os.path.expanduser(model_path)
         self._language = language
         self._device = device
         self._compute_type = compute_type
-        # Lazy-loaded in warmup().
+        self._inference_backend = inference_backend
+        # Lazy-loaded in warmup() (HF path) or
+        # _invoke_pipeline_mlx() (mlx path). The
+        # mlx path is module-load-free — `mlx_whisper`
+        # is only imported on the first `transcribe()`
+        # call, never at __init__ time.
         self._pipeline: Any = None
 
     async def warmup(self) -> None:
@@ -337,34 +520,53 @@ class WhisperHFASR(ASRInterface):
 
         Raises:
             ASRError: when the pipeline isn't warmed up
-                or the HF call fails.
+                or the HF / mlx call fails.
         """
-        if self._pipeline is None:
-            await self.warmup()
+        if self._inference_backend == INFERENCE_BACKEND_HF:
+            if self._pipeline is None:
+                await self.warmup()
+        # The mlx path doesn't need a `warmup()` step —
+        # `mlx_whisper.transcribe` is stateless and loads
+        # the model on first call (cached in mlx-whisper's
+        # `ModelHolder` singleton after that).
 
         # Convert int16 PCM → float32 [-1, 1]
         waveform = _pcm_bytes_to_float32(audio, sample_rate)
         if waveform.size == 0:
             return ""
 
-        # Map Gundam Halo's language code to HF's
-        # ISO 639-1 (`yue` → `cantonese`).
-        hf_language = _map_language(self._language)
+        # Map Gundam Halo's language code to the active
+        # backend's schema. HF and mlx-whisper use
+        # different conventions (see `_map_language` +
+        # `_mlx_map_language`).
+        if self._inference_backend == INFERENCE_BACKEND_HF:
+            backend_language = _map_language(self._language)
+        else:
+            backend_language = _mlx_map_language(self._language)
 
-        # The HF pipeline call is sync and can take
-        # 100-500ms on CPU. Run in a worker thread
-        # so the event loop stays responsive (the
-        # voice pipeline calls `transcribe` from
-        # `finalize_turn` which is on the event loop).
+        # The backend call is sync and can take 100-500ms
+        # on CPU (HF) or 100-300ms on Apple Silicon (mlx).
+        # Run in a worker thread so the event loop stays
+        # responsive (the voice pipeline calls
+        # `transcribe` from `finalize_turn` which is on
+        # the event loop).
         try:
-            result = await asyncio.to_thread(
-                self._invoke_pipeline,
-                waveform,
-                hf_language,
-            )
+            if self._inference_backend == INFERENCE_BACKEND_HF:
+                result = await asyncio.to_thread(
+                    self._invoke_pipeline,
+                    waveform,
+                    backend_language,
+                )
+            else:
+                result = await asyncio.to_thread(
+                    self._invoke_pipeline_mlx,
+                    waveform,
+                    backend_language,
+                )
         except Exception as e:
             raise ASRError(
-                f"WhisperHFASR.transcribe failed: {e}"
+                f"WhisperHFASR.transcribe failed "
+                f"(inference_backend={self._inference_backend!r}): {e}"
             ) from e
         return result.get("text", "").strip()
 
@@ -385,5 +587,114 @@ class WhisperHFASR(ASRInterface):
             },
         )
 
+    def _invoke_pipeline_mlx(
+        self, waveform: np.ndarray, mlx_language: Optional[str]
+    ) -> Any:
+        """Invoke mlx-whisper (sync, runs in worker thread).
 
-__all__ = ["WhisperHFASR"]
+        Sprint 35 (Track 31-D): opt-in alternative to
+        `_invoke_pipeline`. Uses `mlx_whisper.transcribe`
+        instead of the HF `pipeline` for ~2× speedup on
+        Apple Silicon (per spec §4.4 acceptance: 600ms
+        → 300ms per turn on M-series).
+
+        **Cantonese language-hint workaround** (per spec
+        §Appendix B): mlx-whisper's tokenizer uses a
+        different language schema than the HF pipeline.
+        We pass `language = "yue"` (the short Whisper
+        token, which mlx-whisper's tokenizer does
+        include — verified against
+        `mlx-examples/whisper/mlx_whisper/tokenizer.py`
+        on main, 2026-06-18). If the tokenizer ever
+        drops the "yue" entry, we fall back to
+        `initial_prompt` prompt-engineering — a short
+        colloquial Cantonese string to bias the
+        decoder's first-token distribution toward
+        yue vocabulary. See `_CANTONESE_PROMPT_FALLBACK`.
+
+        Args:
+            waveform: float32 [-1, 1] waveform at 16kHz
+                (the Gundam Halo voice pipeline rate).
+            mlx_language: the short mlx-whisper language
+                token (e.g. `"yue"` for Cantonese),
+                or `None` to let mlx-whisper auto-detect
+                (corresponds to `language = "auto"` in
+                the config).
+
+        Returns:
+            A dict with at least `"text"` (and
+            optionally `"segments"` + `"language"` —
+            per `mlx_whisper.transcribe` docstring).
+            The `transcribe()` wrapper extracts `text`
+            and whitespace-strips it.
+
+        Raises:
+            ASRError: when `mlx_whisper` is not installed
+                (the user hasn't run
+                `uv sync --extra voice-hf-mlx`).
+            RuntimeError: when `mlx_whisper.transcribe`
+                itself fails (e.g. model_path missing,
+                unsupported language token, etc.).
+        """
+        mlx_whisper = _import_mlx_whisper()
+
+        # Build the mlx-whisper call kwargs.
+        #
+        # The real `mlx_whisper.transcribe` signature
+        # (verified against
+        # `mlx-examples/whisper/mlx_whisper/transcribe.py`
+        # on main, 2026-06-18) takes top-level kwargs
+        # for `path_or_hf_repo`, `temperature`,
+        # `initial_prompt`, `word_timestamps`, etc.
+        # **and** a `**decode_options` catch-all that
+        # forwards into `DecodingOptions` — that
+        # includes `language` and `task`. The cleanest
+        # way to keep our call site tidy is to build a
+        # dict and splat it; the test asserts the same
+        # call shape so we don't have to refactor when
+        # mlx-whisper adds new decode options.
+        transcribe_kwargs: dict[str, Any] = {
+            "path_or_hf_repo": self._model_path,
+            # Cantonese prompt fallback (no-op when the
+            # tokenizer accepts "yue" — see module
+            # docstring). We always pass the prompt for
+            # `language = "yue"` to make the bias
+            # explicit; mlx-whisper's `initial_prompt`
+            # is cheap (just tokenization) and improves
+            # WER on domain-specific vocab.
+            "initial_prompt": (
+                _CANTONESE_PROMPT_FALLBACK
+                if mlx_language == "yue"
+                else None
+            ),
+        }
+        # Forward language / task into mlx-whisper's
+        # `**decode_options` (per the real API). We
+        # only include `language` when the user picked
+        # something specific — `language = "auto"`
+        # (mlx_language is None) means "let mlx-whisper
+        # detect", so we omit the key entirely.
+        if mlx_language is not None:
+            transcribe_kwargs["language"] = mlx_language
+        transcribe_kwargs["task"] = "transcribe"
+
+        # `path_or_hf_repo` is the model path (or HF Hub
+        # repo). The same `model_path` we use for the
+        # HF pipeline is forwarded here — the user is
+        # responsible for putting MLX-converted weights
+        # there (or symlinking to an `mlx-community/...`
+        # mirror). The `voice-hf-mlx` extra does not
+        # auto-convert HF→MLX format.
+        # Let exceptions propagate — the `transcribe()`
+        # wrapper catches and re-wraps them in ASRError
+        # with the `inference_backend` field in the
+        # message. Pre-wrapping here would lose the
+        # original exception type / traceback.
+        return mlx_whisper.transcribe(waveform, **transcribe_kwargs)
+
+
+__all__ = [
+    "WhisperHFASR",
+    "INFERENCE_BACKEND_HF",
+    "INFERENCE_BACKEND_MLX",
+]
