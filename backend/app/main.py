@@ -29,6 +29,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_config
 from app.core.events import get_event_bus, reset_event_bus
+from app.core.lockfile import (
+    LockHeldError,
+    acquire as acquire_backend_lock,
+    default_lock_path,
+    release as release_backend_lock,
+)
 from app.core.registry import (
     AgentRegistry,
     ChannelRegistry,
@@ -107,6 +113,31 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             "log_level": cfg.log_level,
             "minimax_model": cfg.llm.default_model,
         },
+    )
+
+    # Sprint 34 / Track 2 (Sprint 26 §4.2): acquire the single-instance
+    # lock file BEFORE any other init. If the launchd-supervised
+    # daemon is already running, or another manual dev process is
+    # up, we exit cleanly with a clear error pointing at the holder.
+    # The acquire() call is sync + fast (fcntl.flock is non-blocking);
+    # the rare slow path is when the directory doesn't exist yet,
+    # which we mkdir above.
+    try:
+        lock_info = acquire_backend_lock(path=default_lock_path(halo_home=cfg.home))
+    except LockHeldError as e:
+        logger.error(str(e))
+        # Print to stderr so `uvicorn` and `launchd` both surface it
+        # in their respective logs. We don't raise — we just exit
+        # the lifespan so the app shuts down cleanly with code 1.
+        import sys as _sys
+
+        print(str(e), file=_sys.stderr)
+        raise SystemExit(1) from None
+    logger.debug(
+        "Backend lock acquired (pid=%d host=%s path=%s)",
+        lock_info.pid,
+        lock_info.host,
+        default_lock_path(halo_home=cfg.home),
     )
 
     # Initialize event bus
@@ -223,6 +254,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         reset_background_embedder()
     except Exception:
         pass
+    # Sprint 34 / Track 2: release the backend lock so the next
+    # process (manual `./run.sh` or launchd's respawn) can acquire
+    # it cleanly. Best-effort; the file may already be gone.
+    try:
+        release_backend_lock(path=default_lock_path(halo_home=cfg.home))
+    except Exception as e:
+        logger.debug("Lock release at shutdown failed (non-fatal): %s", e)
 
 
 def create_app() -> FastAPI:
