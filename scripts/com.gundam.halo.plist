@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.gundam.halo.plist — launchd supervisor for the Gundam Halo backend.
+
+  Sprint 26 §4.2 (Track 2): runs the backend at user login and
+  auto-restarts on crash (5s backoff). Respects the lock file
+  at __HALO_HOME__/.backend.lock so manual `./run.sh` dev mode
+  exits cleanly with a conflict error.
+
+  This file is TEMPLATE. The install-launchd.sh script
+  substitutes the __HALO_*__ placeholders with the actual user
+  paths before copying to ~/Library/LaunchAgents/. DO NOT
+  install this file directly; use:
+
+      bash scripts/install-launchd.sh
+-->
+<plist version="1.0">
+<dict>
+    <!-- Reverse-DNS label for `launchctl list | grep gundam-halo` -->
+    <key>Label</key>
+    <string>com.gundam.halo</string>
+
+    <!--
+      ProgramArguments: launch uvicorn as a child of launchd.
+      The no-interactive flag (passed as the 3rd arg) hints
+      the backend to never read from stdin. launchd has no tty
+      and would otherwise block on a tty prompt.
+
+      The full path to the venv uvicorn binary is substituted
+      from __HALO_REPO__ at install time. This avoids the PATH
+      issue where launchd's PATH is /usr/bin:/bin:/usr/sbin:/sbin
+      and does not include the user's brew / pyenv shims.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HALO_REPO__/backend/.venv/bin/uvicorn</string>
+        <string>app.main:app</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8765</string>
+        <string>--no-access-log</string>
+    </array>
+
+    <!--
+      WorkingDirectory: the user's Gundam Halo checkout.
+      Required so uvicorn can find `app.main:app` (relative import).
+    -->
+    <key>WorkingDirectory</key>
+    <string>__HALO_REPO__/backend</string>
+
+    <!--
+      RunAtLoad: start the backend as soon as launchd loads the
+      plist (i.e. at user login). The user can disable this by
+      `launchctl unload` or by running uninstall-launchd.sh.
+    -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!--
+      KeepAlive: restart the backend whenever it dies, but ONLY
+      on a crash (non-zero exit). SuccessfulExit=false tells
+      launchd to NOT restart on a clean exit (exit code 0) —
+      that means "the user explicitly stopped the backend" and
+      we should respect that.
+
+      Without SuccessfulExit=false, a clean `./run.sh` exit
+      would loop forever (launchd would re-spawn the backend
+      every time it exits 0). With it, a manual
+      `launchctl stop com.gundam.halo` is the only way to
+      stop the supervisor.
+    -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!--
+      ThrottleInterval: minimum 5 seconds between restarts. If
+      the backend crashes in a tight loop, launchd won't
+      spin-fork the box. Combined with KeepAlive above.
+    -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <!--
+      StandardOutPath / StandardErrorPath: log to
+      __HALO_HOME__/logs/launchd.out.log / .err.log. The
+      install script creates the logs/ dir before launchctl
+      load. The files are append-mode (launchd reopens them
+      on restart, so logs accumulate).
+    -->
+    <key>StandardOutPath</key>
+    <string>__HALO_HOME__/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HALO_HOME__/logs/launchd.err.log</string>
+
+    <!--
+      EnvironmentVariables: HALO_HOME tells the backend where
+      the user's config.toml lives. Without this, the backend
+      would default to ~/.gundam-halo/ — fine for most users,
+      but explicit is better than implicit. PATH is set to
+      the system default + /usr/local/bin + /opt/homebrew/bin
+      so the backend can find ffmpeg, git, etc.
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HALO_HOME</key>
+        <string>__HALO_HOME__</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!--
+      ProcessType: Background. We don't need a UI session;
+      the backend serves a websocket + REST API. The Tauri
+      app is a separate process (or a launchd Labeled Bundle
+      in a future sprint).
+    -->
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
