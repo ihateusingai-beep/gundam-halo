@@ -52,6 +52,8 @@ from app.core.config import (
     get_config,
 )
 from app.core.secrets_store import SECRET_KEYS, get_secret_store
+from app.core.toml_doc import read_doc as _toml_read
+from app.core.toml_doc import write_doc as _toml_write
 from app.core.setup_state import (
     ALLOWED_ASR_BACKENDS,
     ALLOWED_LLM_PROVIDERS,
@@ -190,46 +192,6 @@ class ResetRequest(BaseModel):
 
 def _toml_path(home: Path) -> Path:
     return Path(home) / "config.toml"
-
-
-def _load_toml_doc(path: Path) -> tuple[tomlkit.TOMLDocument, bool]:
-    """Load a TOML document, returning ``(doc, existed)``.
-
-    If the file doesn't exist, returns an empty document and existed=False.
-    """
-    if path.exists():
-        with open(path, encoding="utf-8") as f:
-            return tomlkit.load(f), True
-    return tomlkit.document(), False
-
-
-def _write_toml_doc(path: Path, doc: tomlkit.TOMLDocument) -> None:
-    """Atomically write a TOML document to *path*."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    body = tomlkit.dumps(doc)
-    tmp_fd, tmp_path = _tmp_file_in(path.parent)
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            f.write(body)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-def _tmp_file_in(directory: Path) -> tuple[int, str]:
-    """Create a uniquely-named tmp file in *directory*; return (fd, path)."""
-    import tempfile
-
-    return tempfile.mkstemp(prefix=".config.toml.", dir=str(directory), text=True)
 
 
 def _update_llm(doc: tomlkit.TOMLDocument, payload: LLMSetupRequest) -> None:
@@ -677,9 +639,9 @@ async def post_setup_llm(payload: LLMSetupRequest) -> dict[str, Any]:
     home = _get_halo_home()
     toml_path = _toml_path(home)
     try:
-        doc, _ = _load_toml_doc(toml_path)
+        doc = _toml_read(toml_path)
         _update_llm(doc, payload)
-        _write_toml_doc(toml_path, doc)
+        _toml_write(toml_path, doc)
     except Exception as e:
         logger.exception("setup/llm: failed to write config.toml")
         return _toml_write_err(e)
@@ -732,9 +694,9 @@ async def post_setup_voice_asr(payload: VoiceASRRequest) -> dict[str, Any]:
     home = _get_halo_home()
     toml_path = _toml_path(home)
     try:
-        doc, _ = _load_toml_doc(toml_path)
+        doc = _toml_read(toml_path)
         _update_voice_asr(doc, payload)
-        _write_toml_doc(toml_path, doc)
+        _toml_write(toml_path, doc)
     except Exception as e:
         logger.exception("setup/voice-asr: failed to write config.toml")
         return _toml_write_err(e)
@@ -766,9 +728,9 @@ async def post_setup_voice_tts(payload: VoiceTTSRequest) -> dict[str, Any]:
     home = _get_halo_home()
     toml_path = _toml_path(home)
     try:
-        doc, _ = _load_toml_doc(toml_path)
+        doc = _toml_read(toml_path)
         _update_voice_tts(doc, payload)
-        _write_toml_doc(toml_path, doc)
+        _toml_write(toml_path, doc)
     except Exception as e:
         logger.exception("setup/voice-tts: failed to write config.toml")
         return _toml_write_err(e)
@@ -792,9 +754,9 @@ async def post_setup_theme(payload: ThemeRequest) -> dict[str, Any]:
     home = _get_halo_home()
     toml_path = _toml_path(home)
     try:
-        doc, _ = _load_toml_doc(toml_path)
+        doc = _toml_read(toml_path)
         _update_theme(doc, payload.theme)
-        _write_toml_doc(toml_path, doc)
+        _toml_write(toml_path, doc)
     except Exception as e:
         logger.exception("setup/theme: failed to write config.toml")
         return _toml_write_err(e)
@@ -821,9 +783,9 @@ async def post_setup_tailscale(payload: TailscaleRequest) -> dict[str, Any]:
     home = _get_halo_home()
     toml_path = _toml_path(home)
     try:
-        doc, _ = _load_toml_doc(toml_path)
+        doc = _toml_read(toml_path)
         _update_tailscale(doc, payload.hostname, payload.require_tailscale)
-        _write_toml_doc(toml_path, doc)
+        _toml_write(toml_path, doc)
     except Exception as e:
         logger.exception("setup/tailscale: failed to write config.toml")
         return _toml_write_err(e)
@@ -967,7 +929,7 @@ async def post_setup_skip() -> dict[str, Any]:
             doc["server"]["tailscale_hostname"] = "gundam-halo"
             doc["voice"] = tomlkit.table()
             doc["voice"]["enabled"] = False
-            _write_toml_doc(toml_path, doc)
+            _toml_write(toml_path, doc)
         except Exception as e:
             logger.exception("setup/skip: failed to write minimal config.toml")
             return _err_payload(

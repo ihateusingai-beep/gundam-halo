@@ -40,6 +40,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from app.core.config import get_config
+from app.core.toml_doc import read_doc, update_section_key, write_doc
 from app.voice.asr.asr_factory import create_asr
 from app.voice.halo_responder import (
     DEFAULT_EMOTION,
@@ -903,8 +904,6 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
         surface `restart_required: true` so the dashboard can
         prompt the user explicitly).
     """
-    import asyncio
-    import re
     from pathlib import Path
 
     # ---- wake_phrases validation (unchanged from Sprint 16) ----
@@ -1082,108 +1081,34 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
     from app.core import config as config_mod
     config_mod._config = None
 
-    # Persist to config.toml. We use a simple, targeted edit that
-    # only touches the [voice] lines we own. Other [voice]
-    # keys are left alone.
+    # Persist to config.toml. We use `tomlkit` via `app.core.toml_doc`
+    # to read + mutate the doc in-place, then atomically write it
+    # back. The previous regex path was fragile (didn't handle
+    # multiline values or escaped strings); tomlkit round-trips
+    # the document while preserving comments and structure.
+    #
+    # Each `update_section_key` call auto-creates the target
+    # section + any intermediate dotted-path tables (e.g. writing
+    # to "voice.asr" auto-creates `[voice]` if missing). This
+    # replaces the old regex + "append at end of file" fallback.
     config_path = Path(cfg.home) / "config.toml"
     try:
-        if config_path.exists():
-            text = config_path.read_text(encoding="utf-8")
-        else:
-            text = ""
-
-        # ---- wake_phrases line ----
-        new_phrases_line = f"wake_phrases = {_toml_list(normalized)}\n"
-        text, n = re.subn(
-            r"(?m)^wake_phrases\s*=\s*\[.*?\]\s*$",
-            new_phrases_line.rstrip(),
-            text,
-            count=1,
-        )
-        if n == 0:
-            if "[voice]" not in text:
-                if not text.endswith("\n"):
-                    text += "\n"
-                text += "\n[voice]\n" + new_phrases_line
-            else:
-                if not text.endswith("\n"):
-                    text += "\n"
-                text += new_phrases_line
-
-        # ---- strict_wake_phrase line (Sprint 17a) ----
-        new_strict_line = f"strict_wake_phrase = {str(new_strict).lower()}\n"
-        text, n = re.subn(
-            r"(?m)^strict_wake_phrase\s*=\s*(?:true|false)\s*$",
-            new_strict_line.rstrip(),
-            text,
-            count=1,
-        )
-        if n == 0:
-            # No existing strict_wake_phrase line — append. If
-            # [voice] exists in the file we drop the key right
-            # after the wake_phrases line; otherwise we create
-            # a [voice] section. For simplicity we just append
-            # at end of file; TOML is forgiving about ordering.
-            if not text.endswith("\n"):
-                text += "\n"
-            text += new_strict_line
-
-        # ---- Sprint 19c: always_on_mic line (under [voice]) ----
-        # Only edit if the user actually sent a value. Uses
-        # the same pattern as strict_wake_phrase (a flat
-        # bool under [voice]) since both are top-level
-        # voice preferences.
+        doc = read_doc(config_path)
+        update_section_key(doc, "voice", "wake_phrases", normalized)
+        update_section_key(doc, "voice", "strict_wake_phrase", new_strict)
         if new_always_on_mic is not None:
-            new_aom_line = f"always_on_mic = {str(new_always_on_mic).lower()}\n"
-            text, n = re.subn(
-                r"(?m)^always_on_mic\s*=\s*(?:true|false)\s*$",
-                new_aom_line.rstrip(),
-                text,
-                count=1,
+            update_section_key(
+                doc, "voice", "always_on_mic", new_always_on_mic
             )
-            if n == 0:
-                # No existing line — append at the end of
-                # the file (TOML is forgiving about
-                # ordering).
-                if not text.endswith("\n"):
-                    text += "\n"
-                text += new_aom_line
-
-        # ---- Sprint 18: asr_backend line (under [voice.asr]) ----
-        # Only edit if the user actually sent a value. We
-        # target a line starting with `backend = ...` inside
-        # the [voice.asr] section by anchoring to the section
-        # header (use a lazy match: from [voice.asr] up to the
-        # next section header).
         if new_asr_backend is not None:
-            new_asr_backend_line = f"backend = {json.dumps(new_asr_backend)}"
-            text, n = _replace_section_key(
-                text,
-                section="voice.asr",
-                key="backend",
-                new_value=new_asr_backend_line,
+            update_section_key(
+                doc, "voice.asr", "backend", new_asr_backend
             )
-            if n == 0:
-                # No [voice.asr] section yet — append a new one.
-                if not text.endswith("\n"):
-                    text += "\n"
-                text += "\n[voice.asr]\n" + new_asr_backend_line + "\n"
-
-        # ---- Sprint 18: asr_corrector line (under [voice.asr]) ----
         if new_asr_corrector is not None:
-            new_asr_corrector_line = f"corrector = {json.dumps(new_asr_corrector)}"
-            text, n = _replace_section_key(
-                text,
-                section="voice.asr",
-                key="corrector",
-                new_value=new_asr_corrector_line,
+            update_section_key(
+                doc, "voice.asr", "corrector", new_asr_corrector
             )
-            if n == 0:
-                if not text.endswith("\n"):
-                    text += "\n"
-                text += "\n[voice.asr]\n" + new_asr_corrector_line + "\n"
-
-        config_path.write_text(text, encoding="utf-8")
+        write_doc(config_path, doc)
     except Exception as e:
         logger.error(f"failed to persist voice config: {e}")
         # We've already updated the in-memory config; surface the
@@ -1210,74 +1135,3 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
         "restart_scheduled": restart_scheduled,
         "persisted": True,
     }
-
-
-def _toml_list(items: list[str]) -> str:
-    """Render a Python list[str] as a TOML array literal."""
-    inner = ", ".join(f'"{s}"' for s in items)
-    return f"[{inner}]"
-
-
-def _replace_section_key(
-    text: str, section: str, key: str, new_value: str
-) -> tuple[str, int]:
-    """Replace `key = ...` inside the [section] block.
-
-    Anchors to the `[section]` header and stops at the next
-    `[other_section]` header. Returns (text, replacement_count).
-
-    Behavior:
-      - If the section exists AND the key exists inside it:
-        replace the key's value. Returns (new_text, 1).
-      - If the section exists AND the key does NOT exist:
-        append the key inside the section (before the next
-        section header or EOF). Returns (new_text, 1).
-      - If the section does NOT exist: return (text, 0) and let
-        the caller append a new section. (Sprint 18: this is
-        the "first-time config save" path.)
-
-    We don't use a full TOML parser here because config.toml is
-    small and we want a minimal-edit, no-surprise diff. The
-    pattern handles inline strings (`backend = "yuesub"`) and
-    scalars (`corrector = "bert"`); we don't expect arrays or
-    tables on these particular lines.
-
-    Sprint 18: this is used by `put_voice_config` to write
-    `voice.asr.backend` and `voice.asr.corrector` to disk
-    without disturbing the user's other [voice] keys. The
-    "append key inside existing section" branch fixes the
-    early-2026-06-15 bug where the previous impl returned
-    (text, 0) for a missing key, causing the caller to append
-    a *new* [section] header, which then collided with the
-    existing one in real config.toml files (where the user
-    already has [voice.asr] but no `corrector` line).
-    """
-    import re
-
-    # Match the section header, then any lines until the next
-    # [section] header (or EOF). Inside that block, replace
-    # the key = value line.
-    # Pattern: `^[\s]*\[section\][\s]*\n` ... up to next `^[\s]*\[` or EOF
-    section_pat = re.compile(
-        rf"(?ms)^\s*\[{re.escape(section)}\]\s*\n(?P<body>.*?)(?=^\s*\[|\Z)"
-    )
-    m = section_pat.search(text)
-    if m is None:
-        return text, 0
-    body = m.group("body")
-    # Replace key = value inside the body
-    key_pat = re.compile(
-        rf"(?m)^\s*{re.escape(key)}\s*=\s*.*?$"
-    )
-    new_body, n = key_pat.subn(new_value, body, count=1)
-    if n == 1:
-        new_text = text[:m.start("body")] + new_body + text[m.end("body"):]
-        return new_text, 1
-    # Key not present in the section. Append it inside the
-    # section body (so we don't accidentally create a
-    # duplicate [section] header downstream). Trim trailing
-    # whitespace from the body and add a newline before the
-    # new key.
-    body_with_new = body.rstrip() + "\n" + new_value + "\n"
-    new_text = text[:m.start("body")] + body_with_new + text[m.end("body"):]
-    return new_text, 1
