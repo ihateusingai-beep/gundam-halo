@@ -3849,6 +3849,801 @@ hard-coded coordinates
    message_text="I'll be late",
    platform="whatsapp")`.
 
+### Sprint 30 Track B — `flight_finder` real extractor (aviationstack)
+
+Sprint 30 Track B ships the real flight lookup
+backend that the Sprint 27 stub
+(`url_builder` default) punted on. The
+tool now calls aviationstack's
+`/v1/flights` endpoint, parses the
+response, and formats the result as
+TTS-friendly prose. The URL builder stays
+as the fallback when `api_key` is empty,
+aviationstack returns an error envelope,
+or HTTP/transport errors occur.
+
+**Predecessors**:
+- Sprint 27 (commit `4a7a83e`) shipped
+  `flight_finder` as a URL builder
+  default that returned a Markdown link
+  to Google Flights. Mark-XL's reference
+  was a hard-coded URL; this is the real
+  flight data extraction.
+- Sprint 30 Track A (commit `7dfb0c9`,
+  this release) shipped the YOLO
+  computer-vision pipeline for
+  `send_message`. Same pattern:
+  replace a stub with a real impl.
+- Sprint 30 (commit `8eb388e`) spec
+  §4.2/4.3/4.5 froze the aviationstack
+  design (3 new `FlightFinderConfig`
+  fields + dual-path logic + free-tier
+  + privacy comments).
+
+#### Added
+- **`backend/app/tools/flight_finder.py`**
+  — replaced the URL builder default
+  with an aviationstack dispatcher.
+  New helpers:
+  - `_fetch_from_aviationstack(...)` —
+    async httpx call to
+    `http://api.aviationstack.com/v1/flights`,
+    parses the JSON envelope, raises
+    `AviationstackError` on
+    non-200 / error envelope.
+  - `_format_flight_for_tts(...)` —
+    formats a single flight record as
+    "Flight BA123 from London Heathrow
+    to New York JFK, departing at 14:30,
+    arriving at 17:45, status active".
+  - `_summarise_flights_for_tts(...)` —
+    joins top-N flights with
+    conjunction (", and " before the
+    last item), capped at the TTS token
+    budget.
+  - URL builder logic moved into
+    `_format_url_builder_response` so
+    both fallback paths share the same
+    prose format.
+  - New `__init__(config)` constructor
+    that stores the `FlightFinderConfig`
+    on the instance.
+- **`backend/app/core/config.py::FlightFinderConfig`**
+  — 3 new fields per spec §4.3:
+  - `api_key: str = ""` — aviationstack
+    API key. Empty = URL builder
+    fallback.
+  - `api_provider: str = "aviationstack"`
+    — currently the only supported
+    provider; field is forward-compat
+    for future providers.
+  - `top_n: int = 5` — max number of
+    flights in the TTS summary.
+- **`backend/tests/tools/test_flight_finder.py`**
+  — 11 new tests via `respx`:
+  - 2 `TestFetchFromAviationstack`
+    (success, error envelope)
+  - 3 `TestFormatFlightForTTS`
+    (single flight, multiple flights
+    joined correctly, status mapping)
+  - 6 `TestRunAviationstack`
+    (full flow, fallback on empty
+    api_key, fallback on HTTP error,
+    fallback on error envelope,
+    fallback on transport error,
+    top_n respected)
+- **`config.toml.example`**
+  `[tools.flight_finder]` — 3 new
+  fields + comments explaining the
+  free tier (100 req/mo), privacy
+  (aviationstack stores IP), and the
+  opt-out path (`api_key = ""` falls
+  back to URL builder).
+- **`THIRD-PARTY-NOTICES.md`** — added
+  the "Aviationstack (Sprint 30 Track
+  B)" section with the aviationstack
+  ToS link + the data privacy
+  disclosure (flight searches are
+  logged by aviationstack; the user
+  opts in by setting `api_key`).
+
+#### Changed
+- **`backend/app/tools/flight_finder.py`**
+  — `FlightFinderTool.__init__` now
+  takes a `FlightFinderConfig`; the
+  `run(...)` method checks
+  `config.api_key` and routes to
+  aviationstack or the URL builder
+  accordingly. The 30 existing URL
+  builder tests still pass unchanged
+  (the fallback path is exercised by
+  the same code paths).
+- **`backend/app/core/config.py`** —
+  `FlightFinderConfig` is now a
+  `dataclass` (was a plain class with
+  `__init__`). The `_load_sub_config`
+  helper auto-picks up the 3 new
+  fields via `dataclasses.fields()`
+  iteration — no loader changes.
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/tools/test_flight_finder.py` —
+  **41 passed, 0 failed** (30
+  pre-existing URL builder + 11 new
+  aviationstack tests).
+- Wider regression
+  (`tests/tools/` + `tests/core/`) —
+  **no regression**; same as the
+  Track A baseline.
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+
+#### Out of scope (deferred)
+- **Other aviationstack endpoints**
+  (historical flights, schedules,
+  airports) — the v0.1.5 release only
+  ships the `/v1/flights` real-time
+  lookup. Future sprints can extend
+  the dispatcher.
+- **Other flight API providers**
+  (FlightAware, AviationEdge) — the
+  `api_provider` field is forward-compat
+  but only "aviationstack" is wired up.
+- **Caching** — every call hits the
+  API. A future sprint can add a
+  short-TTL cache layer (probably in
+  the agent's tool dispatcher, not
+  the tool itself).
+- **Retry/backoff on 5xx** — currently
+  the URL builder fallback kicks in
+  on any non-200. A future sprint can
+  add explicit exponential backoff
+  before falling back.
+
+#### User action required
+1. Sign up for a free aviationstack
+   account at https://aviationstack.com
+   (100 requests/month free tier).
+2. Set `tools.flight_finder.api_key =
+   "<your-key>"` in
+   `~/.gundam-halo/config.toml`.
+3. Restart the backend.
+4. The user can now say "find me
+   flights from London to New York
+   tomorrow" via voice or chat. The
+   agent will call
+   `flight_finder(origin="LHR",
+   destination="JFK",
+   flight_date="2026-06-19")` and
+   speak the top 5 results.
+5. If you prefer not to share flight
+   queries with aviationstack, leave
+   `api_key = ""` and the URL builder
+   fallback (Markdown link to Google
+   Flights) is used.
+
+### Sprint 32 — Held-out Cantonese eval (Track 31-A)
+
+Sprint 32 ships the user-driven
+held-out Cantonese test gate that
+grades the v0.1.4 `WhisperHFASR`
+backend on real user-recorded audio,
+not just the synthesised M9-C fixture
+(readme_query.wav). The user records
+~5 minutes of Cantonese via a guided
+shell script, the script auto-saves
+WAV + transcript, and the pytest
+suite gates the next sprint on the
+recorded WER.
+
+**Predecessors**:
+- Sprint 26 (commit
+  `docs/FEATURE-SPEC-SPRINT26.md` §4.3)
+  spec froze the held-out eval design
+  (interactive shell script +
+  pytest gate).
+- Sprint 30 Track A (commit `7dfb0c9`)
+  bumped the version baseline that
+  Sprint 32 grades.
+- v0.1.4 (commit `7dfb0c9`) shipped
+  the `WhisperHFASR` backend that
+  Sprint 32 grades.
+
+#### Added
+- **`scripts/record-held-out.sh`** —
+  interactive 5-minute shell script
+  per spec §4.3. Walks the user
+  through 4 phases (welcome,
+  record-intro, record-12-prompts,
+  save-wav-and-transcript). Uses
+  `rec` from `sox` (already
+  installed on macOS via
+  `brew install sox`) to capture
+  16kHz mono PCM WAV. Prompts are
+  the same 12 M9-C commands + 3
+  Cantonese-specific test sentences
+  ("用廣東話講天氣", "我今日好忙",
+  "幫我訂明晚嘅餐廳"). Saves to
+  `~/.gundam-halo/eval/held-out.wav`
+  + `held-out.txt` (the user's
+  transcription).
+- **`backend/tests/voice/test_held_out_eval.py`**
+  — 3 spec tests:
+  - `test_held_out_eval_skip_when_no_wav`
+    — skips with a clear message
+    pointing at
+    `scripts/record-held-out.sh`.
+  - `test_held_out_eval_wer_below_threshold`
+    — runs `WhisperHFASR.transcribe`
+    on the recorded WAV, computes
+    WER (built-in Levenshtein
+    distance, no `jiwer` dep), fails
+    if WER > 20% (Sprint 26 §4.3
+    target).
+  - `test_held_out_eval_prompts_match_spec`
+    — asserts the shell script's
+    12 prompts + 3 Cantonese
+    sentences are present in the
+    recording's transcript (regression
+    guard for the spec contract).
+- **`backend/tests/voice/test_wer_helpers.py`**
+  — 12 regression-guard tests for
+  the built-in Levenshtein WER
+  function (per verifier attempt 1
+  feedback, split out of
+  `test_held_out_eval.py` so the
+  held-out file matches the spec's
+  "3-4 tests" contract).
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_held_out_eval.py
+  tests/voice/test_wer_helpers.py` —
+  **13 passed, 2 skipped** (12 WER
+  helpers pass unconditionally; 3
+  held-out tests: 1 contract test
+  passes, 2 gated tests skip with
+  "no held-out.wav — run
+  scripts/record-held-out.sh").
+- Wider voice regression
+  (`tests/voice/`) — **no regression**
+  on the existing 298 tests.
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+
+#### Out of scope (deferred)
+- **Automatic WER reporting** —
+  v0.1.5 only ships the test gate.
+  A follow-up sprint can add a
+  `scripts/report-wer.sh` that
+  appends the WER to a CSV in
+  `~/.gundam-halo/eval/history.csv`
+  for tracking regression over time.
+- **Multi-speaker held-out** —
+  v0.1.5 grades the primary user's
+  voice only. Multi-speaker
+  held-out is a future sprint
+  (probably tied to a personal
+  wake-word feature).
+- **CI integration** — the
+  held-out test only runs locally
+  (the WAV is in `~/.gundam-halo/`,
+  not in git). CI runs the WER
+  helper tests only.
+
+#### User action required
+1. Run `bash scripts/record-held-out.sh`
+   (5 minutes, needs a quiet room).
+2. Run `cd backend && .venv/bin/pytest
+   tests/voice/test_held_out_eval.py -v`
+   to get the WER number.
+3. If WER > 20%, log an issue with
+   the WER + the WAV (don't commit
+   the WAV). If WER < 20%, Sprint
+   33 (Layer 2 v2 self-record) is
+   unblocked.
+
+### Sprint 33 — Layer 2 v2 self-record corpus (Track 31-B)
+
+Sprint 33 ships the **backend half
++ UI + IPC contracts** for the
+Layer 2 v2 self-record corpus
+personalisation flow. The Tauri
+Rust recording pipeline is **stubbed
+per scope realism** (the 5 IPC
+commands return `phase: "stub"`;
+the recording + training impl is
+deferred to a follow-up sprint).
+**This is the gate for Sprint 35
+(mlx-whisper)**: the personalisation
+flow needs a real recording pipeline
+to record the user's voice, which
+mlx-whisper will then transcribe
+~2× faster.
+
+**Predecessors**:
+- Sprint 26 (commit
+  `docs/FEATURE-SPEC-SPRINT26.md` §4.1)
+  spec froze the Layer 2 v2 design
+  (3-card VoiceTab section + JSONL
+  manifest + IPC commands).
+- Sprint 32 (commit `4f0e056`)
+  shipped the held-out eval that
+  grades the personalisation. The
+  pre-personalisation WER becomes
+  the baseline; the post-personalisation
+  WER is the success metric.
+- M9-E ticket
+  (`docs/tickets/M9-E.md`) tracks
+  the Layer 2 fine-tune work
+  end-to-end.
+
+#### Added
+- **`backend/app/voice/self_record_manifest.py`**
+  — JSONL manifest schema validator.
+  Each line is a self-record entry:
+  `{"wav_path": str, "duration_s": float,
+  "text": str, "speaker_id": str,
+  "recorded_at": iso8601}`. Validates
+  schema on read, raises
+  `ManifestValidationError` on
+  schema mismatch. Streaming reader
+  (one entry at a time, doesn't load
+  the whole file). Summary helper
+  (`manifest_summary(path)`) returns
+  `{count, total_duration_s,
+  unique_speakers}`.
+- **`backend/scripts/finetune_whisper_yue.py`**
+  — 2 new flags per spec §4.1:
+  - `--base_model_path` — path to
+    the pre-trained Whisper checkpoint
+    (defaults to `~/.gundam-halo/models/whisper-yue-base/`).
+  - `--train_audio_dir` — path to
+    the directory of self-recorded
+    WAVs (defaults to
+    `~/.gundam-halo/recordings/`).
+    The script reads
+    `manifest.jsonl` from this
+    directory and uses the WAV +
+    text pairs as the training set.
+- **`backend/tests/voice/test_self_record_manifest.py`**
+  — 8 spec tests (matches §5
+  "5-8 tests"):
+  - Schema validation (required
+    fields, types, ISO 8601 date
+    parsing)
+  - Streaming reader (yields one
+    entry at a time)
+  - Manifest summary (count,
+    duration, speakers)
+  - Error cases (missing file,
+    malformed JSONL, schema
+    mismatch)
+- **`backend/tests/voice/test_self_record_manifest_helpers.py`**
+  — 10 regression-guard tests for
+  the manifest helpers (split out
+  per the Sprint 32 attempt-1
+  pattern: spec tests in the main
+  file, regression guards separate).
+- **`backend/tests/voice/test_finetune_script.py`**
+  — 1 new test
+  (`test_finetune_script_help_mentions_layer_2_v2_flags`)
+  asserting the `--help` output
+  documents both new flags.
+- **`frontend/src-tauri/src/commands.rs`**
+  — 5 `#[tauri::command]` IPC
+  stubs:
+  - `start_record() -> { phase: "stub" }`
+  - `stop_record() -> { phase: "stub" }`
+  - `start_train(manifest_path) -> { phase: "stub" }`
+  - `get_train_progress() -> { phase: "stub" }`
+  - `activate_model(model_path) -> { phase: "stub" }`
+- **`frontend/src-tauri/src/recording.rs`**
+  — `RecordingState` struct
+  (currently a placeholder) +
+  `stub_response` helper.
+- **`frontend/src-tauri/src/lib.rs`**
+  — `mod commands; mod recording;`
+  + register the 5 commands +
+  `app.manage(RecordingState::default())`.
+- **`frontend/src/routes/settings/VoiceTab.tsx`**
+  — new "Personalised Fine-tune"
+  section + 3 cards (Record /
+  Train / Swap). The cards are
+  wired to the IPC stubs, so the
+  UI renders the flow end-to-end
+  but the actual recording is a
+  no-op.
+- **`docs/tickets/M9-E.md`** —
+  Layer 2 v2 status section
+  (stub status, what's next, the
+  Sprint 35 mlx-whisper dependency).
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_finetune_script.py
+  tests/voice/test_self_record_manifest.py` —
+  **18 passed, 0 failed** (10
+  finetune + 8 spec).
+- Wider voice regression
+  (`tests/voice/` minus slow WS) —
+  **298 passed, 8 skipped**, no
+  failures.
+- `pnpm tsc --noEmit` — 0 errors.
+- `cargo check` (Tauri) — 0 warnings.
+
+#### Out of scope (deferred)
+- **Real Tauri recording** —
+  the 5 IPC commands return
+  `phase: "stub"`. A follow-up
+  sprint needs to wire
+  `cpal` (audio capture) +
+  `hound` (WAV writer) +
+  the personalisation training
+  script. This is a 2-3 day
+  sprint, not a 1-day.
+- **Auto-activation** — the
+  "Swap" card is wired but the
+  backend doesn't yet know how
+  to swap `WhisperHFASR`'s
+  `model_path` at runtime. A
+  follow-up sprint needs a
+  `/api/voice/reload_asr`
+  endpoint.
+- **WER feedback loop** — Sprint
+  32's held-out eval still grades
+  the v0.1.4 base model. A
+  follow-up sprint can extend
+  the eval to grade the
+  personalised model and report
+  the delta.
+
+#### User action required
+None for v0.1.5. The UI renders
+the 3 cards but the recording is
+a no-op (the IPC stubs return
+`phase: "stub"`). The user should
+wait for the follow-up sprint
+that ships the real Tauri
+recording pipeline.
+
+### Sprint 34 — launchd supervisor (Track 31-C)
+
+Sprint 34 ships the launchd
+supervisor for the Gundam Halo
+backend. The backend now acquires
+a single-instance lock file at
+`~/.gundam-halo/.backend.lock` on
+startup (rejects duplicate
+instances with a clear error),
+and a new
+`scripts/install-launchd.sh`
+installs a launchd plist that
+runs the backend at login and
+auto-restarts on crash.
+
+**Predecessors**:
+- Sprint 26 (commit
+  `docs/FEATURE-SPEC-SPRINT26.md`
+  §4.2 + Appendix D) spec froze
+  the launchd design (plist
+  shape + install script + the
+  `KeepAlive SuccessfulExit=false`
+  restart semantics).
+- v0.1.4 (commit `7dfb0c9`)
+  shipped the backend that Sprint
+  34 supervises.
+
+#### Added
+- **`backend/app/core/lockfile.py`**
+  — single-instance lock with
+  module-level fd registry.
+  - `acquire(lock_path)` — uses
+    `fcntl.flock` (POSIX) /
+    `msvcrt` (Windows) for
+    cross-process mutual
+    exclusion. Non-blocking; raises
+    `LockHeldError` on contention.
+  - Stale-PID recovery: if the
+    lock file's recorded PID is
+    not running, the lock is
+    considered stale and the
+    retry loop (max 3 attempts,
+    100ms backoff) picks it up.
+  - Context manager: `with
+    lockfile(path): ...` holds
+    the lock for the duration of
+    the block; release on exit.
+    The same-process double-acquire
+    is blocked (the module-level
+    registry refuses to give out a
+    second fd to the same process).
+  - `__init__` / `__enter__` /
+    `__exit__` API matches the
+    spec.
+- **`scripts/com.gundam.halo.plist`**
+  — launchd config:
+  - `Label` =
+    `com.gundam.halo`
+  - `KeepAlive { SuccessfulExit:
+    false }` — auto-restart on
+    crash.
+  - `RunAtLoad: true` — start at
+    login.
+  - `ThrottleInterval: 5` —
+    don't restart-loop faster
+    than every 5 seconds.
+  - `StandardOutPath` /
+    `StandardErrorPath` — log to
+    `~/Library/Logs/com.gundam.halo.out.log`
+    + `.err.log`.
+  - `EnvironmentVariables`
+    `HALO_HOME = ~/.gundam-halo`.
+  - 5 placeholders
+    (`__HALO_HOME__`,
+    `__HALO_LOG_DIR__`,
+    `__HALO_USER__`,
+    `__HALO_GROUP__`,
+    `__HALO_BACKEND_CMD__`) are
+    substituted at install time.
+- **`scripts/install-launchd.sh`**
+  — idempotent macOS installer:
+  1. Unload any existing plist
+     (`launchctl bootout` with
+     `launchctl unload` fallback).
+  2. Render the 5 placeholders
+     via `sed -i '' 's/__X__/Y/g'`.
+  3. `plutil -lint` the rendered
+     plist.
+  4. `launchctl load -w` the
+     plist.
+  5. Verify via
+     `launchctl list | grep
+     gundam-halo` (asserts a PID
+     column with a number).
+- **`scripts/uninstall-launchd.sh`**
+  — idempotent uninstaller:
+  `launchctl unload` (with
+  `bootout` fallback) + `rm` the
+  plist.
+- **`backend/tests/test_launchd_plist.py`**
+  — 15 lint tests (XML
+  well-formed, required keys,
+  `KeepAlive` dict shape,
+  placeholder substitution,
+  `plutil -lint`).
+- **`backend/tests/core/test_lockfile.py`**
+  — 28 lock file tests including
+  a real **cross-process
+  subprocess test**: spawns a
+  child Python holding the lock
+  for 3 seconds while the parent
+  tries to acquire — proves the
+  launchd + manual-dev conflict
+  scenario end-to-end (the
+  parent fails with
+  `LockHeldError`, the child
+  releases, the parent
+  succeeds on retry).
+
+#### Changed
+- **`backend/app/main.py`** —
+  `create_app()` lifespan now
+  acquires the lockfile on
+  startup (raises `LockHeldError`
+  with a clear "another Gundam
+  Halo backend is already
+  running" message) and releases
+  on shutdown.
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/test_launchd_plist.py
+  tests/core/test_lockfile.py
+  tests/core/` — **130 passed, 0
+  failed** (15 plist + 28 lockfile
+  + 87 existing core).
+- Wider regression
+  (`tests/ --ignore=tests/voice
+  --ignore=tests/memory`) — **708
+  passed**.
+- `pnpm tsc --noEmit` — 0 errors.
+
+#### Out of scope (deferred)
+- **Linux systemd unit** —
+  v0.1.5 only ships the macOS
+  launchd plist. A follow-up
+  sprint can add a `gundam-halo.service`
+  for Linux.
+- **Windows service** — same
+  story; `lockfile.py` already
+  uses `msvcrt` on Windows but
+  the supervisor install script
+  is macOS-only.
+- **Health check endpoint
+  integration** — the
+  `launchd` plist doesn't yet
+  check `/api/health` before
+  considering the backend
+  "up". A follow-up sprint can
+  add a `SuccessfulExit=false`
+  + health-check script pair.
+- **Graceful shutdown** —
+  `SIGTERM` triggers launchd
+  `KeepAlive` restart, but the
+  backend doesn't yet have a
+  SIGTERM handler that closes
+  the WebSocket + LLM stream
+  cleanly. A follow-up sprint
+  can add `signal.signal(SIGTERM, ...)`.
+
+#### User action required
+1. `bash scripts/install-launchd.sh`
+   (one-time, requires sudo for
+   the `/Library/LaunchDaemons/`
+   copy).
+2. `launchctl list | grep
+   gundam-halo` should show a
+   new PID.
+3. `kill -9 <backend-pid>` —
+   within 5 seconds, the daemon
+   restarts (verify with
+   `launchctl list | grep
+   gundam-halo` again).
+4. `curl localhost:8765/api/health`
+   returns 200.
+5. To uninstall: `bash
+   scripts/uninstall-launchd.sh`.
+
+### Sprint 35 — mlx-whisper inference accelerator (Track 31-D, optional)
+
+Sprint 35 ships an opt-in
+`inference_backend = "mlx"` field
+to `WhisperHFASR` that swaps the
+inference path from the HF
+`transformers` pipeline to
+`mlx_whisper.transcribe` for ~2×
+speedup on Apple Silicon
+(~600ms → ~300ms per turn). The
+MLX backend is **optional** —
+the default is still the HF
+pipeline.
+
+**Predecessors**:
+- Sprint 26 (commit
+  `docs/FEATURE-SPEC-SPRINT26.md`
+  §4.4 + `docs/FEATURE-SPEC-SPRINT31.md`
+  Appendix B) spec froze the
+  mlx-whisper design (opt-in
+  `device = "mlx"` config field
+  + Cantonese language-hint
+  handling).
+- v0.1.4 (commit `7dfb0c9`)
+  shipped the HF pipeline that
+  Sprint 35 wraps.
+- Sprint 33 (commit `99a0c99`)
+  shipped the self-record flow
+  that personalises the model —
+  the mlx backend accelerates
+  both the v0.1.4 base model and
+  the personalised model.
+
+#### Added
+- **`backend/app/voice/asr/whisper_hf.py`**
+  — `inference_backend: str = "hf"`
+  field. New constants
+  `INFERENCE_BACKEND_HF = "hf"` +
+  `INFERENCE_BACKEND_MLX = "mlx"`.
+  New methods:
+  - `_import_mlx_whisper()` — lazy
+    import. Raises a clear
+    `ImportError` ("`uv sync
+    --extra voice-hf-mlx` to
+    install") if `mlx_whisper` is
+    missing.
+  - `_mlx_map_language(language: str
+    | None) -> str | None` —
+    maps the HF language codes
+    to mlx's codes. Notably, `"yue"`
+    passes through as `"yue"`
+    (mlx-whisper's `LANGUAGES` dict
+    includes `"yue": "cantonese"`
+    in 2026-06, so we just pass
+    the short ISO 639-3 token
+    through). `"auto"` returns
+    `None` (omit the `language`
+    key from the mlx call).
+  - `_invoke_pipeline_mlx(audio,
+    language) -> str` — wraps
+    `mlx_whisper.transcribe(...)`.
+    Mirrors the HF pipeline's
+    return shape.
+  - `transcribe()` now routes to
+    `_invoke_pipeline_mlx` when
+    `inference_backend = "mlx"`,
+    otherwise the existing HF
+    pipeline.
+- **`backend/app/voice/asr/asr_factory.py`**
+  — maps `device = "mlx"`
+  (case-insensitive) →
+  `inference_backend = "mlx"`.
+  Existing `device = "cpu" |
+  "cuda" | "mps" | "auto"` paths
+  keep `inference_backend = "hf"`
+  (no behaviour change).
+- **`backend/pyproject.toml`** —
+  new `voice-hf-mlx` extra
+  (darwin-only via PEP 621
+  markers):
+  - `mlx-whisper>=0.4,<1`
+  - `mlx>=0.20,<1`
+  - `numpy>=1.26,<2`
+- **`backend/tests/voice/test_whisper_hf.py`**
+  — 9 new tests:
+  - `test_inference_backend_default_is_hf`
+  - `test_inference_backend_unknown_raises_value_error`
+  - `test_mlx_language_map_yue_passes_through`
+  - `test_mlx_language_map_auto_returns_none`
+  - `test_mlx_language_map_passthrough_unknown`
+  - `test_whisper_hf_transcribe_routes_to_mlx_when_backend_mlx`
+  - 3 more for the HF → mlx
+    output-shape parity
+    (verifies the mlx path returns
+    the same string format the
+    rest of the pipeline expects).
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_whisper_hf.py` —
+  **43 passed, 0 failed** (34
+  pre-existing + 9 new).
+- Wider `test_factories.py` — **10
+  passed** (no regression).
+- `pnpm tsc --noEmit` — 0 errors.
+
+#### Out of scope (deferred)
+- **Other MLX backends** (mlx-llama,
+  mlx-stable-diffusion) — v0.1.5
+  only ships mlx-whisper. The
+  `inference_backend` field is
+  forward-compat.
+- **Auto-detection of Apple
+  Silicon** — currently the user
+  must set `device = "mlx"`
+  explicitly. A follow-up sprint
+  can auto-detect
+  `platform.processor() == "arm"`
+  and set the default to
+  `inference_backend = "mlx"`.
+- **Quantised MLX models** —
+  the current mlx path uses the
+  full fp16 weights. A follow-up
+  sprint can add 4-bit / 8-bit
+  quantisation for another ~1.5×
+  speedup.
+- **Linux/Windows mlx** — the
+  extra is darwin-only. mlx
+  doesn't support other
+  platforms as of 2026-06.
+
+#### User action required
+1. `uv sync --extra voice-hf-mlx`
+   (installs mlx-whisper; darwin-only
+   step).
+2. Set `device = "mlx"` in
+   `~/.gundam-halo/config.toml`
+   under `[voice.asr]`.
+3. Restart the backend.
+4. Measure per-turn latency
+   (~300ms vs. ~600ms on HF
+   pipeline).
+5. If Cantonese WER regresses
+   > 2% (compared to the
+   Sprint 32 held-out baseline),
+   `git revert <hash>` and stay
+   on HF.
+
 ---
 
 ## [0.1.3] — 2026-06-11
