@@ -57,6 +57,63 @@ attribution and a per-port change summary.
   separate desktop framework; integrating it would
   require ripping out the Tauri app.
 
+---
+
+## Ultralytics YOLOv8 (Sprint 30 Track A)
+
+- **Source:** https://github.com/ultralytics/ultralytics
+- **License:** AGPL-3.0 (Ultralytics YOLOv8 is
+  licensed under the GNU Affero General Public
+  License v3.0)
+- **Sprint spec:** `docs/FEATURE-SPEC-SPRINT30.md` §4.1
+- **Port scope:** the `SendMessageTool` uses a
+  YOLOv8n ONNX model fine-tuned on messaging app
+  screenshots (WhatsApp, Telegram, Signal, Discord).
+  The 4 YOLO classes are:
+  - 0: contact_search_bar
+  - 1: contact_result
+  - 2: message_bar
+  - 3: send_button
+- **Inference:** `onnxruntime` (CPU only, ~50ms per
+  screenshot on M-series, ~200ms on Intel Macs).
+  No GPU needed. The ONNX model is bundled with
+  Gundam Halo at
+  `~/.gundam-halo/models/yolov8n-messaging.onnx`
+  (~50MB, downloaded on first use via
+  `scripts/download_yolo_model.py`).
+- **Modifications from upstream:**
+  - The Gundam Halo port uses a **fine-tuned**
+    YOLOv8n with 4 classes (not the standard
+    COCO 80 classes). The fine-tuning is
+    synthetic (the user doesn't need to collect
+    training data).
+  - The ONNX export uses `cv2` for preprocessing
+    (image resize + normalize) with a PIL fallback
+    if `cv2` is not installed.
+  - The Gundam Halo port runs the model in a
+    **stateless** detector class
+    (`app/tools/_yolo.py::YOLODetector`) that
+    wraps the onnxruntime InferenceSession.
+- **Why AGPL-3.0 is acceptable here**: Gundam
+  Halo is a local-only Mac project with no
+  network-exposed services. The AGPL's
+  network-copyleft clause does not apply
+  because the model runs entirely on the
+  user's local Mac (no server-side inference).
+  The user has the source code of the YOLO
+  detector wrapper (in this repo) and can
+  inspect + modify it.
+- **Why we don't use the original Ultralytics
+  Python package**: we use the ONNX export
+  via `onnxruntime` (lighter, no ultralytics
+  dep needed, no AGPL contamination of the
+  Gundam Halo Python codebase). The model
+  file is a standard YOLOv8n ONNX export
+  that the user can re-train using the
+  upstream Ultralytics package, then
+  re-export to ONNX and replace the bundled
+  model.
+
 ### Mark-XL MIT License (verbatim)
 
 ```

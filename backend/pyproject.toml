@@ -152,11 +152,14 @@ voice-hf = [
 # extra deps). Install this when the user wants
 # the real extractor.
 #
-# tool-send-message: `pyautogui` + `pyperclip` for
-# desktop automation. Required for the
-# SendMessageTool's pyautogui flow. The current
-# tool is a stub, so the user only needs these if
-# they implement the pyautogui flow.
+# tool-send-message: `pyautogui` + `pyperclip` + YOLO
+# computer-vision deps (`mss`, `pygetwindow`,
+# `onnxruntime`, `numpy`) for the SendMessageTool's
+# YOLO-based pyautogui flow (Sprint 30 Track A). The
+# tool is a stub if these deps are missing — the user
+# gets a clear "deps missing" error pointing at this
+# extra. The YOLO model is downloaded separately via
+# `scripts/download_yolo_model.py` (~50MB on first use).
 tool-youtube-summarize = [
     "youtube-transcript-api>=0.6,<1",
 ]
@@ -168,6 +171,12 @@ tool-flight-finder = [
 tool-send-message = [
     "pyautogui>=0.9.54,<1",
     "pyperclip>=1.8,<2",
+    "mss>=9.0,<10",                 # fast screenshot
+    "pygetwindow>=0.0.9,<1",        # window bounding box
+    "onnxruntime>=1.16,<2",         # YOLO inference
+    "numpy>=1.26,<2",               # image preprocessing
+    "opencv-python>=4.8,<5",        # image resize (cv2)
+    "Pillow>=10.0,<12",             # PIL fallback for resize
 ]
 # Note: tool-web-search needs no extra deps — it
 # uses the existing httpx (already in the base venv

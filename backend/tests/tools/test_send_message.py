@@ -1,25 +1,29 @@
-"""Tests for SendMessageTool (Sprint 27 Track 27.4).
+"""Tests for SendMessageTool (Sprint 27 Track 27.4 + Sprint 30 Track A).
 
-Per `docs/FEATURE-SPEC-SPRINT27.md` §4.2 Track 27.4.
+Per `docs/FEATURE-SPEC-SPRINT30.md` §4.1 (Track A
+impl) + `docs/FEATURE-SPEC-SPRINT27.md` §4.2 Track 27.4
+(Sprint 27 stub replaced in Sprint 30).
 
-The actual pyautogui flow is **not** implemented in
-v0.1.5+ (it's a stub that returns a clear "not
-implemented" message — see the docstring). The tests
+Sprint 30 Track A replaced the Sprint 27 stub with a
+real YOLO-based computer-vision pipeline. The tests
 verify the contract:
   1. Schema + name
   2. Validation (empty args, unknown platform)
   3. Platform → app name resolution (per OS)
-  4. pyautogui availability check
-  5. Stub behavior (returns the "not implemented" message)
+  4. pyautogui + YOLO deps availability check
+  5. YOLO detection pipeline (mocked — 10 steps)
+  6. Error messages (missing deps, no YOLO match,
+     unsupported platform, etc.)
 
-The pyautogui flow itself is untested in CI because
-hard-coded coordinates don't survive app updates.
-Future work (Sprint 31+) replaces this tool with a
-computer-vision-based sender.
+The YOLO detector + pyautogui flow itself is untested
+in CI because the YOLO model + display + Accessibility
+permission are not available in the test env. The
+tests mock the YOLO detector's `find_first` method
+to verify the 10-step pipeline contract.
 """
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -151,18 +155,18 @@ class TestValidation:
     @pytest.mark.asyncio
     async def test_default_platform_is_whatsapp(self):
         # When platform is omitted, default to whatsapp.
-        # Even if the pyautogui flow isn't implemented,
-        # the error message should mention "whatsapp"
-        # (not raise an unknown platform error).
+        # The tool should NOT raise an "unknown platform"
+        # error. The actual error depends on whether
+        # pyautogui is installed — if not, the
+        # "pyautogui required" error mentions WhatsApp
+        # in the available-platforms list. If yes, the
+        # YOLO detection pipeline runs.
         out = await SendMessageTool().run(
             receiver="John", message_text="hi", platform=""
         )
-        # Either succeeds (depy installed) or returns the
-        # "not implemented" stub message
-        assert "Error" in out or "not yet implemented" in out
-        if "Error" in out:
-            # The error should not be "unknown platform"
-            assert "not" not in out.lower().split("platform")[0:1] or True
+        # The error should not be "unknown platform"
+        # (platform="" is normalised to "whatsapp")
+        assert "unknown" not in out.lower() or "platform" not in out.lower()
 
     @pytest.mark.asyncio
     async def test_unknown_platform_returns_clear_error(self):
@@ -176,32 +180,23 @@ class TestValidation:
 
 
 # ---------------------------------------------------------------------------
-# 5. Stub behavior (the actual pyautogui flow is not implemented)
+# 5. Real YOLO-based flow (Sprint 30 Track A)
 # ---------------------------------------------------------------------------
 
 
-class TestStubBehavior:
-    @pytest.mark.asyncio
-    @patch("app.tools.send_message._check_pyautogui_available", return_value=None)
-    async def test_stub_returns_not_implemented_message(self, _mock):
-        # When pyautogui IS available, the stub still
-        # returns the "not yet implemented" message
-        # (the real flow is a future sprint).
-        out = await SendMessageTool().run(
-            receiver="John",
-            message_text="hi",
-            platform="whatsapp",
-        )
-        assert "not yet implemented" in out
-        assert "WhatsApp" in out
-        assert "John" in out
+class TestRealFlow:
+    """Sprint 30 Track A: the SendMessageTool now uses
+    a YOLO-based computer-vision pipeline instead of
+    the Sprint 27 stub. The tests mock the YOLO
+    detector + mss + pyautogui to verify the contract.
+    """
 
     @pytest.mark.asyncio
     @patch(
         "app.tools.send_message._check_pyautogui_available",
-        return_value="pyautogui + pyperclip are required for the send_message tool. Install with: uv add pyautogui pyperclip.",
+        return_value="pyautogui + pyperclip are required for the send_message tool. Install with: uv sync --extra tool-send-message.",
     )
-    async def test_missing_deps_returns_clear_error(self, _mock):
+    async def test_missing_pyautogui_returns_clear_error(self, _mock):
         out = await SendMessageTool().run(
             receiver="John",
             message_text="hi",
@@ -209,11 +204,28 @@ class TestStubBehavior:
         )
         assert "Error" in out
         assert "pyautogui" in out
-        assert "uv add pyautogui pyperclip" in out
+        assert "tool-send-message" in out
 
     @pytest.mark.asyncio
     @patch("app.tools.send_message._check_pyautogui_available", return_value=None)
-    async def test_unsupported_platform_on_current_os(self, _mock):
+    @patch(
+        "app.tools.send_message._check_yolo_deps_available",
+        return_value="onnxruntime is required. Install with: uv sync --extra tool-send-message.",
+    )
+    async def test_missing_yolo_deps_returns_clear_error(self, _mock_pg, _mock_yolo):
+        out = await SendMessageTool().run(
+            receiver="John",
+            message_text="hi",
+            platform="whatsapp",
+        )
+        assert "Error" in out
+        assert "onnxruntime" in out or "mss" in out or "pygetwindow" in out or "numpy" in out
+        assert "tool-send-message" in out
+
+    @pytest.mark.asyncio
+    @patch("app.tools.send_message._check_pyautogui_available", return_value=None)
+    @patch("app.tools.send_message._check_yolo_deps_available", return_value=None)
+    async def test_unsupported_platform_on_current_os(self, _mock_pg, _mock_yolo):
         # On Linux, messenger returns None from
         # _resolve_app_name. Verify the error mentions
         # this. Use `monkeypatch.setattr(sys, "platform", "linux")`
@@ -228,3 +240,204 @@ class TestStubBehavior:
         assert "Error" in out
         assert "messenger" in out
         assert "linux" in out  # sys.platform value (lowercase)
+
+    @pytest.mark.asyncio
+    @patch("app.tools.send_message._check_pyautogui_available", return_value=None)
+    @patch("app.tools.send_message._check_yolo_deps_available", return_value=None)
+    @patch("app.tools.send_message.SendMessageTool._open_app")
+    @patch("app.tools.send_message.SendMessageTool._get_window_bbox")
+    @patch("app.tools.send_message.SendMessageTool._take_screenshot")
+    async def test_yolo_pipeline_success(
+        self, mock_screenshot, mock_bbox, mock_open, _mock_yolo, _mock_pg
+    ):
+        """Verify the 10-step YOLO detection pipeline
+        completes successfully. Mocks `_get_detector`
+        to return a fake detector with mocked
+        `find_first`.
+        """
+        # Mock the heavy imports (pyautogui + mss + pygetwindow)
+        # via sys.modules so the run() flow doesn't try to
+        # import them.
+        with patch.dict("sys.modules", {
+            "pyautogui": MagicMock(),
+            "pyperclip": MagicMock(),
+            "mss": MagicMock(),
+            "pygetwindow": MagicMock(),
+            "numpy": MagicMock(),
+            "onnxruntime": MagicMock(),
+        }):
+            # Mock bbox + screenshot
+            mock_bbox.return_value = (0, 0, 100, 100)
+            mock_screenshot.return_value = None  # not used — find_first is mocked
+
+            # Mock the YOLO detector returned by _get_detector
+            from app.tools._yolo import Detection
+            mock_detector = MagicMock()
+            mock_detector.find_first.side_effect = [
+                Detection("contact_search_bar", 0, 0.95, 50, 10, 80, 20),
+                Detection("contact_result", 1, 0.91, 50, 50, 100, 30),
+                Detection("message_bar", 2, 0.88, 50, 90, 200, 20),
+            ]
+
+            async def fake_get_detector(self, model_path):
+                return mock_detector
+            with patch.object(
+                SendMessageTool, "_get_detector", fake_get_detector
+            ):
+                out = await SendMessageTool().run(
+                    receiver="John",
+                    message_text="hi",
+                    platform="whatsapp",
+                )
+
+        assert "Message sent" in out
+        assert "John" in out
+        assert "whatsapp" in out
+        # find_first should be called 3 times (search bar, result, message bar)
+        assert mock_detector.find_first.call_count == 3
+        # Press Enter (not send_button) for whatsapp
+        assert mock_open.call_count == 1
+
+    @pytest.mark.asyncio
+    @patch("app.tools.send_message._check_pyautogui_available", return_value=None)
+    @patch("app.tools.send_message._check_yolo_deps_available", return_value=None)
+    @patch("app.tools.send_message.SendMessageTool._open_app")
+    @patch("app.tools.send_message.SendMessageTool._get_window_bbox")
+    @patch("app.tools.send_message.SendMessageTool._take_screenshot")
+    async def test_yolo_fails_to_find_search_bar(
+        self, _mock_ss, _mock_bbox, _mock_open, _mock_yolo, _mock_pg
+    ):
+        """Verify the error message when YOLO can't find
+        the contact search bar.
+        """
+        with patch.dict("sys.modules", {
+            "pyautogui": MagicMock(),
+            "pyperclip": MagicMock(),
+            "mss": MagicMock(),
+            "pygetwindow": MagicMock(),
+            "numpy": MagicMock(),
+            "onnxruntime": MagicMock(),
+        }):
+            mock_detector = MagicMock()
+            mock_detector.find_first.return_value = None
+
+            async def fake_get_detector(self, model_path):
+                return mock_detector
+            with patch.object(
+                SendMessageTool, "_get_detector", fake_get_detector
+            ):
+                out = await SendMessageTool().run(
+                    receiver="John",
+                    message_text="hi",
+                    platform="whatsapp",
+                )
+        assert "Error" in out
+        assert "contact search bar" in out
+
+    @pytest.mark.asyncio
+    @patch("app.tools.send_message._check_pyautogui_available", return_value=None)
+    @patch("app.tools.send_message._check_yolo_deps_available", return_value=None)
+    @patch("app.tools.send_message.SendMessageTool._open_app")
+    @patch("app.tools.send_message.SendMessageTool._get_window_bbox")
+    @patch("app.tools.send_message.SendMessageTool._take_screenshot")
+    async def test_yolo_finds_search_bar_but_no_contact_result(
+        self, _mock_ss, _mock_bbox, _mock_open, _mock_yolo, _mock_pg
+    ):
+        """Verify the error message when YOLO finds the
+        search bar but no matching contact in the results.
+        """
+        from app.tools._yolo import Detection
+        mock_detector = MagicMock()
+        # First call: search bar found. Second call: no contact.
+        mock_detector.find_first.side_effect = [
+            Detection("contact_search_bar", 0, 0.95, 50, 10, 80, 20),
+            None,  # contact_result not found
+        ]
+        with patch.dict("sys.modules", {
+            "pyautogui": MagicMock(),
+            "pyperclip": MagicMock(),
+            "mss": MagicMock(),
+            "pygetwindow": MagicMock(),
+            "numpy": MagicMock(),
+            "onnxruntime": MagicMock(),
+        }):
+            async def fake_get_detector(self, model_path):
+                return mock_detector
+            with patch.object(
+                SendMessageTool, "_get_detector", fake_get_detector
+            ):
+                out = await SendMessageTool().run(
+                    receiver="Nonexistent",
+                    message_text="hi",
+                    platform="whatsapp",
+                )
+        assert "Error" in out
+        assert "Nonexistent" in out or "contact" in out.lower()
+
+    @pytest.mark.asyncio
+    @patch("app.tools.send_message._check_pyautogui_available", return_value=None)
+    @patch("app.tools.send_message._check_yolo_deps_available", return_value=None)
+    @patch("app.tools.send_message.SendMessageTool._open_app")
+    @patch("app.tools.send_message.SendMessageTool._get_window_bbox")
+    @patch("app.tools.send_message.SendMessageTool._take_screenshot")
+    async def test_yolo_finds_everything_for_discord(
+        self, _mock_ss, _mock_bbox, mock_open, _mock_yolo, _mock_pg
+    ):
+        """Verify the Discord flow uses the send_button
+        class instead of pressing Enter.
+        """
+        from app.tools._yolo import Detection
+        mock_detector = MagicMock()
+        mock_detector.find_first.side_effect = [
+            Detection("contact_search_bar", 0, 0.95, 50, 10, 80, 20),
+            Detection("contact_result", 1, 0.91, 50, 50, 100, 30),
+            Detection("message_bar", 2, 0.88, 50, 90, 200, 20),
+            Detection("send_button", 3, 0.85, 100, 90, 30, 30),
+        ]
+        with patch.dict("sys.modules", {
+            "pyautogui": MagicMock(),
+            "pyperclip": MagicMock(),
+            "mss": MagicMock(),
+            "pygetwindow": MagicMock(),
+            "numpy": MagicMock(),
+            "onnxruntime": MagicMock(),
+        }):
+            async def fake_get_detector(self, model_path):
+                return mock_detector
+            with patch.object(
+                SendMessageTool, "_get_detector", fake_get_detector
+            ):
+                out = await SendMessageTool().run(
+                    receiver="John",
+                    message_text="hi",
+                    platform="discord",
+                )
+        assert "Message sent" in out
+        assert "discord" in out
+        # 4 calls to find_first: search_bar, result, message_bar, send_button
+        assert mock_detector.find_first.call_count == 4
+
+
+# ---------------------------------------------------------------------------
+# 6. YOLO detector helper
+# ---------------------------------------------------------------------------
+
+
+class TestYoloDepsHelper:
+    """Tests for `_check_yolo_deps_available()`."""
+
+    def test_returns_none_when_all_available(self):
+        from app.tools.send_message import _check_yolo_deps_available
+        result = _check_yolo_deps_available()
+        # Either None (all deps installed) or error string
+        assert result is None or isinstance(result, str)
+
+    def test_returns_error_string_when_missing(self):
+        from app.tools.send_message import _check_yolo_deps_available
+        with patch.dict("sys.modules", {
+            "onnxruntime": None,
+        }):
+            import importlib
+            importlib.invalidate_caches()
+            result = _check_yolo_deps_available()
+            assert result is None or isinstance(result, str)

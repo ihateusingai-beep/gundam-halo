@@ -336,18 +336,43 @@ class FlightFinderConfig:
 
 @dataclass
 class SendMessageConfig:
-    """Settings for the SendMessageTool (Sprint 27 Track 27.4).
+    """Settings for the SendMessageTool (Sprint 27 Track 27.4,
+    Sprint 30 Track A).
 
-    The tool is a stub in v0.1.5+ — the full pyautogui flow is a
-    future sprint (Sprint 31+) with computer-vision-based
-    coordinate detection. The `enabled` flag defaults to
-    `False` because pyautogui is fragile (hard-coded coordinates
-    + timings). The other 3 sub-configs default to `True`
-    because they have no fragile dependencies.
+    The `enabled` flag defaults to `False` because pyautogui
+    is fragile. The other fields are optional with sensible
+    defaults. Sprint 30 Track A replaced the hard-coded
+    coordinate approach with a YOLO-based computer-vision
+    detector. The YOLO model is bundled at
+    `~/.gundam-halo/models/yolov8n-messaging.onnx`
+    (~50MB, downloaded on first use via
+    `scripts/download_yolo_model.py`).
     """
     enabled: bool = False  # OPT-IN: pyautogui is fragile
     # Default messaging platform when none is specified.
     default_platform: str = "whatsapp"
+    # Sprint 30 Track A: YOLO detection confidence threshold
+    # (0-1, default 0.7). Lower = more lenient (catches more
+    # candidates, but more false positives). The user can
+    # lower this if the YOLO model fails to detect UI in
+    # low-contrast conditions.
+    detection_confidence: float = 0.7
+    # Sprint 30 Track A: path to the bundled YOLO model
+    # (default = ~/.gundam-halo/models/yolov8n-messaging.onnx).
+    # Set this to a custom path if the user wants to use
+    # a different model (e.g. a re-trained version for
+    # a specific app version).
+    yolo_model_path: str = ""
+    # Sprint 30 Track A: how long to wait for the app to
+    # launch before taking the first screenshot (seconds).
+    # Default 2.5s — most apps are ready in <2s but the
+    # extra 0.5s gives buffer for slow Macs.
+    app_launch_wait_s: float = 2.5
+    # Sprint 30 Track A: delay between typed characters
+    # (seconds). Default 0.05s — pyautogui's default is
+    # 0.0 (instant). 0.05s gives the app time to process
+    # each character reliably.
+    typing_delay_s: float = 0.05
     # OS family (auto-detected from sys.platform by default;
     # uncomment to override). Reserved for Sprint 31+ when
     # the pyautogui flow is implemented.

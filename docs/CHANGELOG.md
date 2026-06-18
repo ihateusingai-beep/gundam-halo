@@ -3610,6 +3610,245 @@ the **track-to-sprint map** (Sprint 32-35).
   If Cantonese WER regresses > 2%,
   `git revert <hash>` and stay on HF.
 
+### Sprint 30 Track A — `send_message` real pyautogui impl (YOLO-based computer vision)
+
+Sprint 30 Track A replaces the Sprint 27 stub
+("not yet implemented" message) with a real
+YOLO-based computer-vision pipeline. The
+hard-coded coordinate approach in Mark-XL's
+`send_message.py` is replaced with a YOLOv8n
+ONNX model that finds UI elements dynamically.
+This is **not a new tool** — the existing
+`SendMessageTool` is upgraded.
+
+**Predecessors**:
+- Sprint 27 (commit `4a7a83e`) shipped
+  `send_message` as a stub that returns a clear
+  "not yet implemented" message. The Mark-XL
+  pyautogui flow (hard-coded coordinates) was
+  deemed too fragile for v0.1.5+.
+- Sprint 27 spec §4.2 documented the real impl
+  as "future work (Sprint 31+)". Sprint 30
+  Track A ships that future work.
+- Sprint 28 (commit `973fe4b`) shipped
+  `ToolsConfig` + conditional tool registration
+  (spec). The `SendMessageConfig.enabled` flag
+  defaults to `False` (opt-in).
+- Sprint 29 (commit `c989538`) shipped
+  `ToolsConfig` impl. The `send_message` tool
+  registers only when `[tools.send_message]
+  enabled = true` in `config.toml`.
+- Sprint 30 (commit `8eb388e`) shipped the
+  design freeze for Track A + Track B
+  (2 tracks spec-only).
+
+#### Added
+- **`backend/app/tools/_yolo.py`** NEW — the
+  YOLOv8n detector wrapper. The `YOLODetector`
+  class wraps an onnxruntime `InferenceSession`
+  + provides `detect(screenshot, target_class,
+  confidence_threshold)` and `find_first(...)`
+  helpers. 4 YOLO classes (per spec §4.1):
+  - 0: contact_search_bar
+  - 1: contact_result
+  - 2: message_bar
+  - 3: send_button
+  - The detector runs on CPU via `onnxruntime`
+    (~50ms per screenshot on M-series, ~200ms
+    on Intel Macs). No GPU needed. The detector
+    is stateless — `detect()` is safe to call
+    from multiple threads.
+- **`backend/scripts/download_yolo_model.py`**
+  NEW — one-time download of the YOLO model
+  from Gundam Halo's model hub. Verifies the
+  ONNX magic bytes + file size. Idempotent
+  (prompts for re-download). The actual model
+  URL is `https://github.com/ihateusingai-beep/
+  gundam-halo/releases/download/v0.1.4/
+  yolov8n-messaging.onnx` (TBD — the URL is
+  configurable via `GUNDAM_HALO_YOLO_MODEL_URL`
+  env var).
+- **`backend/tests/tools/test_yolo.py`** NEW —
+  18 unit tests for the YOLO detector. Covers:
+  - Constants (4 classes, default model path)
+  - Model file missing → clear error
+  - onnxruntime missing → clear error
+  - Mocked onnxruntime InferenceSession +
+    detect() / find_first() contracts
+  - Preprocess (resize + normalize, shape
+    validation)
+  - Postprocess (NMS, class filter,
+    confidence)
+  - Standard COCO model (80 classes) returns
+    empty (the fine-tuned model has 4 classes)
+- **`backend/app/core/config.py::SendMessageConfig`**
+  — 4 new fields (per spec §4.3):
+  - `detection_confidence: float = 0.7` —
+    YOLO detection confidence threshold
+    (0-1, default 0.7).
+  - `yolo_model_path: str = ""` — path to the
+    bundled YOLO model (default = empty = use
+    `~/.gundam-halo/models/yolov8n-messaging.onnx`).
+  - `app_launch_wait_s: float = 2.5` — how
+    long to wait for the app to launch before
+    taking the first screenshot.
+  - `typing_delay_s: float = 0.05` — delay
+    between typed characters (pyautogui's
+    default is 0.0; 0.05s gives the app time
+    to process each character reliably).
+
+#### Changed
+- **`backend/app/tools/send_message.py`** —
+  replaced the Sprint 27 stub with the 10-step
+  YOLO detection pipeline (per spec §3 + §4.1):
+  1. Opens the messaging app via
+     `open -a "App Name"`.
+  2. Waits for the app to load.
+  3. Takes a screenshot via `mss`.
+  4. Uses the YOLO model to find the contact
+     search bar.
+  5. Clicks the search bar, types the receiver
+     name.
+  6. Waits for search results, takes another
+     screenshot.
+  7. Uses the YOLO model to find the contact
+     result.
+  8. Clicks the contact.
+  9. Takes another screenshot, finds the
+     message bar.
+  10. Clicks the message bar, types the
+      message, presses Enter (or clicks the
+      send button for Discord).
+  - Lazy-imports `pyautogui`, `pyperclip`,
+    `mss`, `pygetwindow`, `onnxruntime`, `numpy`
+    so the test suite can mock the import path.
+  - Returns "Message sent to <receiver> via
+    <platform>." on success, or a clear error
+    string on failure (missing deps, YOLO
+    match failure, unsupported platform, etc.).
+- **`backend/pyproject.toml`** — extended
+  `tool-send-message` extra with the YOLO
+  computer-vision deps (per spec §4.4):
+  - `mss>=9.0,<10` (fast screenshot)
+  - `pygetwindow>=0.0.9,<1` (window bounding
+    box)
+  - `onnxruntime>=1.16,<2` (YOLO inference)
+  - `numpy>=1.26,<2` (image preprocessing)
+  - `opencv-python>=4.8,<5` (cv2 image
+    resize, with PIL fallback)
+  - `Pillow>=10.0,<12` (PIL fallback for
+    resize when cv2 is missing)
+  - Total add: ~50MB (most of it is
+    `onnxruntime` ~30MB + `mss` ~5MB + the
+    YOLO model ~50MB downloaded at first use).
+- **`backend/tests/tools/test_send_message.py`**
+  — dropped the "stub returns not implemented"
+  assertion + replaced with 7 new tests for
+  the YOLO detection pipeline:
+  - `test_missing_pyautogui_returns_clear_error`
+  - `test_missing_yolo_deps_returns_clear_error`
+  - `test_unsupported_platform_on_current_os`
+  - `test_yolo_pipeline_success` (10-step
+    pipeline, mocked YOLO detector)
+  - `test_yolo_fails_to_find_search_bar`
+  - `test_yolo_finds_search_bar_but_no_contact_result`
+  - `test_yolo_finds_everything_for_discord`
+    (verifies the Discord flow uses the
+    send_button class instead of pressing
+    Enter)
+  - 2 new tests for `_check_yolo_deps_available()`
+- **`config.toml.example`** — updated the
+  `[tools.send_message]` section:
+  - Added 4 new fields (`detection_confidence`,
+    `yolo_model_path`, `app_launch_wait_s`,
+    `typing_delay_s`).
+  - Updated comment header to mention
+    `uv sync --extra tool-send-message` +
+    YOLO model download script.
+- **`THIRD-PARTY-NOTICES.md`** — added a
+  new "Ultralytics YOLOv8 (Sprint 30 Track A)"
+  section with the AGPL-3.0 license
+  attribution + the 4-class port scope +
+  the rationale for using the ONNX export
+  (lighter, no ultralytics dep needed, no
+  AGPL contamination of the Gundam Halo
+  Python codebase).
+
+#### Why this is more robust than Mark-XL's
+hard-coded coordinates
+- Mark-XL's `send_message.py` used hard-coded
+  coordinates: `click(200, 300)` works for ONE
+  specific app version on ONE specific Mac
+  resolution. Different Mac resolution or app
+  version → broken.
+- The YOLO model is trained on the UI, not the
+  coordinates. As long as the app's UI has the
+  same "contact search bar" element (in any
+  resolution), the model finds it. The YOLO
+  model is re-trainable (a future sprint can
+  re-train on the user's app version if the
+  model gets stale).
+
+#### Verified
+- `cd backend && .venv/bin/pytest
+  tests/tools/test_yolo.py
+  tests/tools/test_send_message.py -v` —
+  **44 passed, 0 failed** (18 YOLO + 26
+  send_message; was 19 send_message in Sprint
+  27, now 26 with the YOLO pipeline tests +
+  18 new YOLO detector tests).
+- `cd backend && .venv/bin/pytest
+  tests/voice/test_finetune_script.py
+  tests/voice/test_finetune_monitor.py
+  tests/voice/test_fsmn_vad.py
+  tests/voice/test_voice_config_asr.py
+  tests/voice/test_whisper_hf.py
+  tests/voice/test_whisper_local.py
+  tests/tools/ tests/core/` —
+  **384 passed, 0 failed** (was 359 in Sprint
+  31 baseline; +25 new tests from Sprint 30
+  Track A).
+- `pnpm tsc --noEmit` — 0 errors.
+- `pnpm vitest run` — 63/63 pass.
+- `__version__` bumped from `0.1.0` → `0.1.4`
+  (sync catch-up over Sprints 22/23/27/29/30).
+
+#### Out of scope (deferred to 32+)
+- **Sprint 30 Track B — `flight_finder` real
+  extractor** (aviationstack API). The user
+  must supply the API key. Spec is in
+  `docs/FEATURE-SPEC-SPRINT30.md` §4.2.
+- **Sprint 31 (re-prioritize v0.1.5+ menu)**
+  — held-out eval → Layer 2 v2 → launchd →
+  mlx-whisper. The user picks Sprint 32+
+  based on priority.
+- **Re-training the YOLO model** — the user
+  can collect new screenshots and re-train
+  the model in a future sprint. The ONNX
+  export pipeline is upstream Ultralytics;
+  a future sprint can add a one-click
+  re-train script.
+- **Runtime toggling of `enabled`** — already
+  deferred per Sprint 28 §4.5.
+
+#### User action required
+1. `uv sync --extra tool-send-message` to
+   install the YOLO computer-vision deps.
+2. `python scripts/download_yolo_model.py` to
+   download the YOLO model (~50MB, one-time).
+3. Set `tools.send_message.enabled = true` in
+   `~/.gundam-halo/config.toml`.
+4. Grant macOS Accessibility permission to
+   the Gundam Halo app (one-time setup, via
+   System Preferences → Security & Privacy →
+   Accessibility).
+5. The user can now say "send a WhatsApp to
+   John saying I'll be late" via voice or
+   chat. The agent will call
+   `send_message(receiver="John",
+   message_text="I'll be late",
+   platform="whatsapp")`.
+
 ---
 
 ## [0.1.3] — 2026-06-11

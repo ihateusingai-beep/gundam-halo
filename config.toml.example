@@ -157,11 +157,14 @@ enabled = true
 
 # SendMessageTool (Track 27.4) — pyautogui-based
 # message sender. **OPT-IN**: requires the
-# `pyautogui + pyperclip` deps AND macOS Accessibility
-# permission. The tool is a stub in v0.1.5+ — it
-# returns a clear "not yet implemented" message. The
-# full pyautogui flow is a future sprint.
-#   uv add pyautogui pyperclip
+# `pyautogui + mss + pygetwindow + onnxruntime` deps AND
+# macOS Accessibility permission. The tool is a stub if
+# these deps are missing — the user gets a clear "deps
+# missing" error pointing at this extra. The YOLO model
+# is downloaded on first use via
+# `scripts/download_yolo_model.py` (~50MB, one-time).
+# Install the deps:
+#   uv sync --extra tool-send-message
 [tools.send_message]
 enabled = false  # OPT-IN: pyautogui is fragile
 # OS family (auto-detected from sys.platform by default;
@@ -169,6 +172,22 @@ enabled = false  # OPT-IN: pyautogui is fragile
 # os_system = "darwin"  # darwin | win32 | linux
 # Default messaging platform when none is specified.
 default_platform = "whatsapp"
+# YOLO detection confidence threshold (0-1, default 0.7).
+# Lower = more lenient (catches more candidates, but more
+# false positives). Sprint 30 Track A.
+detection_confidence = 0.7
+# Path to the bundled YOLO model (default = empty = use
+# ~/.gundam-halo/models/yolov8n-messaging.onnx). Set this
+# to a custom path if the user wants to use a re-trained
+# version. Sprint 30 Track A.
+yolo_model_path = ""
+# How long to wait for the app to launch before taking
+# the first screenshot (seconds, default 2.5).
+app_launch_wait_s = 2.5
+# Delay between typed characters (seconds, default 0.05).
+# 0.05s gives the app time to process each character
+# reliably; pyautogui's default is 0.0 (instant).
+typing_delay_s = 0.05
 
 # ---------------------------------------------------------------------------
 # Security
