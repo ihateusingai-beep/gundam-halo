@@ -6,6 +6,9 @@
 //! [`../../../docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md) §5.5.1
 //! for design rationale.
 
+mod commands; // Sprint 33 / Track 31-B — Personalised Fine-tune IPC commands.
+mod recording; // Sprint 33 — recording pipeline stub (real impl deferred).
+
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -401,6 +404,17 @@ pub fn run() {
                 app.manage(AnimationStop(stop_flag));
             }
 
+            // ---- Sprint 33 (Track 31-B) Personalised Fine-tune state ----
+            // Register the in-memory `RecordingState` so the IPC
+            // commands can `app.state::<recording::RecordingState>()`
+            // when the real recording pipeline lands. Today the
+            // state is default-constructed (all `None`); the
+            // follow-up sprint will fill in the capture thread +
+            // Whisper subprocess PID + manifest path + log tail.
+            // See `frontend/src-tauri/src/recording.rs` for the
+            // state shape + docs/FEATURE-SPEC-SPRINT26.md §4.1.
+            app.manage(recording::RecordingState::default());
+
             // If launched with --minimized (e.g. autostart on login), keep
             // the window hidden so the agent lives in the tray.
             if launched_minimized() {
@@ -426,7 +440,24 @@ pub fn run() {
             open_settings,
             set_animation_speed,
             get_animation_speed,
-            restart_backend
+            restart_backend,
+            // Sprint 33 (Track 31-B) — Personalised Fine-tune
+            // IPC commands. The 5 commands are stubs in this
+            // sprint — the recording + training pipeline is
+            // deferred per scope realism (~+770 LoC across 6
+            // files including 2 NEW Rust files is too heavy
+            // for a single sprint on top of the UI work).
+            // Each command returns `phase: "stub"` from
+            // `recording::stub_response` so the frontend can
+            // show a clear "coming soon" toast — see
+            // `frontend/src-tauri/src/{commands,recording}.rs`
+            // for the contracts + docs/FEATURE-SPEC-SPRINT26.md
+            // §4.1 for the full design.
+            commands::start_record,
+            commands::stop_record,
+            commands::start_train,
+            commands::get_train_progress,
+            commands::activate_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

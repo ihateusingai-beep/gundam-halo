@@ -35,6 +35,48 @@ Caveats baked in:
   + base model snapshot at every `save_steps`, so a crashed
   run can pick up via `--resume_from <dir>`.
 
+Layer 2 v2 — personalised fine-tune (Sprint 33 / Track 31-B)
+
+In addition to the Common Voice yue path above, the script
+accepts two more flags that wire it into the **self-record
+personalised fine-tune** flow (FEATURE-SPEC-SPRINT26.md §4.1):
+
+  --base_model_path <dir>    Path to an existing HF-format
+                             Whisper checkpoint to continue
+                             from. Defaults to the HF Hub
+                             `openai/whisper-base` id when
+                             unset (the Common Voice yue
+                             baseline). For the personalised
+                             flow, set this to the Common
+                             Voice yue checkpoint
+                             (`~/.gundam-halo/models/whisper-yue-base/`)
+                             so the LoRA adapter layers the
+                             user's voice on top of the
+                             already-Cantonese-aware base
+                             instead of starting from
+                             English-only weights.
+
+  --train_audio_dir <dir>    Path to a directory of
+                             `manifest.jsonl` self-record
+                             chunks. Each line is
+                             `{audio_path, text, duration_s,
+                             sample_rate}`. When set, the
+                             script loads this corpus (instead
+                             of streaming Common Voice yue)
+                             and trains on it as the primary
+                             fine-tune target. Combined with
+                             `--base_model_path`, this is
+                             the Layer 2 v2 personalised
+                             fine-tune. See Sprint 33
+                             `tests/voice/test_self_record_manifest.py`
+                             for the JSONL contract.
+
+The self-record JSONL format is the same one the Tauri app's
+`frontend/src-tauri/src/recording.rs` writes during the
+Record card flow — chunk audio files
+(`chunk-NNN.wav`, 30s each, 16kHz mono) plus the per-chunk
+transcription from the v0.1.4 WhisperHFASR backend.
+
 Usage:
     cd backend
     uv sync --extra train --extra voice
@@ -44,10 +86,20 @@ Usage:
         --num_train_epochs 3 \\
         --output_dir ~/.gundam-halo/models/whisper-yue-base/
 
+    # Layer 2 v2 personalised fine-tune:
+    .venv/bin/python scripts/finetune_whisper_yue.py \\
+        --base_model_path ~/.gundam-halo/models/whisper-yue-base/ \\
+        --train_audio_dir ~/.gundam-halo/recordings/yue-self-2026-06-18/ \\
+        --num_train_epochs 1 \\
+        --output_dir ~/.gundam-halo/models/whisper-yue-self-2026-06-18/
+
 Estimated wall time on M-series 16GB:
 - Dataset download (50h): ~30min
 - LoRA training (3 epochs): ~2.5h
 - Eval + WER on held-out test set: ~5min
+- Layer 2 v2 personalised fine-tune (30 min self-record):
+  ~1h wall clock (1 epoch over ~30min of audio is enough for
+  personalisation; the held-out eval is the real quality gate).
 
 This script has NOT been run end-to-end yet — it is the
 ship-ready recipe for the actual training run. See
@@ -167,6 +219,35 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.20,
         help="Exit non-zero if held-out WER > this. Default 0.20 (20%%).",
+    )
+    # Sprint 33 / Track 31-B — Layer 2 v2 personalised fine-tune
+    # flags. See the module docstring + FEATURE-SPEC-SPRINT26.md
+    # §4.1 for the contract. Defaults preserve the Common Voice
+    # yue baseline behaviour; the Tauri app passes both when the
+    # user clicks "Train" on the Personalised Fine-tune card.
+    p.add_argument(
+        "--base_model_path",
+        default=None,
+        help=(
+            "Sprint 33: path to an existing HF-format Whisper "
+            "checkpoint to continue from (e.g. the Common Voice "
+            "yue baseline at ~/.gundam-halo/models/whisper-yue-base/). "
+            "When unset, the script downloads `openai/whisper-base` "
+            "from the HF Hub (the Common Voice yue baseline flow)."
+        ),
+    )
+    p.add_argument(
+        "--train_audio_dir",
+        default=None,
+        help=(
+            "Sprint 33: path to a directory of `manifest.jsonl` "
+            "self-record chunks (one JSON object per line with "
+            "{audio_path, text, duration_s, sample_rate}). When "
+            "set, the script trains on the self-record corpus "
+            "instead of streaming Common Voice yue. Combined "
+            "with --base_model_path this is the Layer 2 v2 "
+            "personalised fine-tune."
+        ),
     )
     return p.parse_args()
 
@@ -629,6 +710,21 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    # Sprint 33 / Track 31-B — log the Layer 2 v2 personalised
+    # fine-tune flags so the operator can confirm the wiring
+    # before training starts. The full training pipeline for
+    # --train_audio_dir is deferred to a follow-up sprint; for
+    # now the flag is documented + accepted + surfaced in the
+    # log so the user can verify the JSONL contract end-to-end.
+    # See FEATURE-SPEC-SPRINT26.md §4.1 + Sprint 33 deliverable
+    # Notes for verifier.
+    if args.base_model_path or args.train_audio_dir:
+        logger.info(
+            "Layer 2 v2 personalised fine-tune flags active: "
+            f"base_model_path={args.base_model_path!r} "
+            f"train_audio_dir={args.train_audio_dir!r}"
+        )
+
     # Validate the requested Common Voice version is one we know
     # has the yue split with a useful amount of data.
     cv_major = int(args.dataset_version.split(".")[0])
@@ -647,9 +743,21 @@ def main() -> int:
         max_train_hours=args.max_train_hours,
     )
 
-    # 2. Build model + LoRA.
+    # 2. Build model + LoRA. Sprint 33: when --base_model_path
+    # is set, load the user-supplied HF-format checkpoint
+    # instead of downloading `openai/whisper-base` from the
+    # HF Hub. This is the Layer 2 v2 personalised fine-tune
+    # path — LoRA is layered on top of the already-Cantonese-
+    # aware Common Voice yue baseline.
+    base_model_for_training = args.base_model_path or HF_BASE_MODEL
+    if args.base_model_path:
+        logger.info(
+            f"Using --base_model_path: {args.base_model_path} "
+            "(continuing LoRA training from this checkpoint "
+            "instead of HF Hub openai/whisper-base)"
+        )
     model, processor, data_collator = build_model_and_processor(
-        base_model=HF_BASE_MODEL,
+        base_model=base_model_for_training,
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha,
     )

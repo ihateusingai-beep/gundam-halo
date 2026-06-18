@@ -323,3 +323,54 @@ def test_finetune_script_default_output_dir_matches_config():
         f"({expected}); if you change one, change the "
         f"other to match."
     )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 33 / Track 31-B — Layer 2 v2 personalised fine-tune
+# flag tests. The existing 9 tests above cover the Common
+# Voice yue baseline (HF Hub openai/whisper-base). The
+# personalised flow (FEATURE-SPEC-SPRINT26.md §4.1) layers
+# LoRA on top of a user-supplied checkpoint via
+# `--base_model_path` and optionally swaps the corpus via
+# `--train_audio_dir`. This test exercises the CLI parser
+# for both new flags (without actually running training,
+# which needs the `train` extra + 16GB+ RAM + ~1h wall clock).
+# ---------------------------------------------------------------------------
+
+
+def test_finetune_script_help_mentions_layer_2_v2_flags():
+    """Sprint 33: `python finetune_whisper_yue.py --help`
+    must mention the Layer 2 v2 personalised fine-tune
+    flags (`--base_model_path` and `--train_audio_dir`).
+    The Tauri app's Record/Train/Swap cards
+    (frontend/src/routes/settings/VoiceTab.tsx) shell out
+    to the script with both flags, so the CLI parser
+    must accept them; if a future refactor drops either
+    flag the help text will silently lose it and the
+    Tauri command will error out at runtime.
+
+    We parse `--help` (not the actual training) so the
+    test runs in <1s with the default venv. The flag is
+    expected to default to None (Common Voice yue baseline
+    is unchanged).
+    """
+    result = subprocess.run(
+        [sys.executable, str(FINETUNE_SCRIPT), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"--help exited with {result.returncode}:\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+    assert "--base_model_path" in result.stdout, (
+        "Sprint 33: finetune_whisper_yue.py must accept "
+        "--base_model_path (Layer 2 v2 personalised "
+        "fine-tune base checkpoint path)."
+    )
+    assert "--train_audio_dir" in result.stdout, (
+        "Sprint 33: finetune_whisper_yue.py must accept "
+        "--train_audio_dir (Layer 2 v2 self-record corpus "
+        "directory containing manifest.jsonl)."
+    )

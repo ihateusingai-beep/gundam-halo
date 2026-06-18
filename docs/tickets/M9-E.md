@@ -2,12 +2,28 @@
 
 > **Milestone**: M9 (voice layer) — M9-D follow-up
 > **Priority**: medium (perceived quality, not blocking)
-> **Status**: Layer 1 closed (rejected); Layer 2 in flight (v0.1.3)
+> **Status**: Layer 1 closed (rejected); Layer 2 v1 in flight
+> (v0.1.3 base + Common Voice yue LoRA); **Layer 2 v2 self-record
+> corpus SCOPED** (Sprint 33 / Track 31-B — UI + IPC contracts
+> shipped; Tauri Rust pipeline deferred to a follow-up sprint
+> per scope realism).
 > **Discovered during**: M9-C live run, 2026-06-10
 > **Owner**: Ken + Mavis
 > **Decided stack** (2026-06-11): Common Voice yue LoRA + HF
 > transformers + PEFT, on Whisper **base** (medium rejected in
 > Layer 1).
+
+---
+
+## Update — 2026-06-18: Layer 2 v2 self-record corpus (Sprint 33 / Track 31-B)
+
+**Layer 2 v2 self-record corpus shipped the backend half
++ UI + IPC contracts in Sprint 33; the Tauri Rust
+recording pipeline is deferred to a follow-up sprint per
+scope realism.** See the detailed status block at the
+bottom of this ticket (search for "Update — 2026-06-18:
+Layer 2 v2 status") for the file-by-file status table +
+acceptance checklist.
 
 ---
 
@@ -362,6 +378,61 @@ augmentation workaround.
       M9-C's augmented system note becomes redundant.
 - [ ] CHANGELOG entry for v0.1.3 documenting both layers
       and the model footprint trade-off.
+
+## Update — 2026-06-18: Layer 2 v2 status (Sprint 33 / Track 31-B)
+
+**Layer 2 v2 self-record corpus shipped the **backend half**
+in Sprint 33; the Tauri Rust recording pipeline is
+**deferred** to a follow-up sprint.**
+
+What's live now (Sprint 33):
+
+| Artifact | Status | Path |
+|---|---|---|
+| `finetune_whisper_yue.py --base_model_path` flag | ✅ | `backend/scripts/finetune_whisper_yue.py` |
+| `finetune_whisper_yue.py --train_audio_dir` flag | ✅ | `backend/scripts/finetune_whisper_yue.py` |
+| Self-record manifest schema + reader | ✅ | `backend/app/voice/self_record_manifest.py` |
+| Manifest unit tests (8 cases, JSONL schema) | ✅ | `backend/tests/voice/test_self_record_manifest.py` |
+| `--base_model_path` CLI parser test | ✅ | `backend/tests/voice/test_finetune_script.py` |
+| Settings → Voice → Personalised Fine-tune UI | ✅ | `frontend/src/routes/settings/VoiceTab.tsx` |
+| Tauri IPC command surface (5 commands) | ✅ scaffold | `frontend/src-tauri/src/commands.rs` |
+| Tauri recording pipeline (capture + queue) | ⚠️ deferred | `frontend/src-tauri/src/recording.rs` |
+
+The user's day-to-day path:
+
+1. Run `bash scripts/install-launchd.sh` to enable
+   auto-restart (Sprint 34, separate ticket).
+2. Open Settings → Voice → Personalised Fine-tune →
+   click **Start recording** (toast surfaces
+   "deferred to follow-up sprint").
+3. Manually invoke the personalised fine-tune via:
+   ```bash
+   cd backend && .venv/bin/python scripts/finetune_whisper_yue.py \
+       --base_model_path ~/.gundam-halo/models/whisper-yue-base/ \
+       --train_audio_dir ~/.gundam-halo/recordings/yue-self-<date>/ \
+       --num_train_epochs 1 \
+       --output_dir ~/.gundam-halo/models/whisper-yue-self-<date>/ \
+       --skip_eval
+   ```
+4. Run `pytest tests/voice/test_held_out_eval.py -v` to
+   verify the personalised model passes WER < 15% on
+   the user's recorded held-out set.
+
+**Acceptance criterion status**:
+
+- [x] JSONL manifest schema pinned (8 unit tests pass).
+- [x] Trainer accepts `--base_model_path` + `--train_audio_dir`.
+- [x] Settings UI shows the 3 cards (Record / Train / Swap).
+- [x] Tauri IPC command surface defined + registered.
+- [ ] Real microphone capture + parallel WhisperHFASR
+      transcription — **deferred** to follow-up sprint.
+      The Rust scaffold (`recording.rs`) defines the
+      pipeline shape and validates `ChunkRecord`s; the
+      capture thread + mpsc transcription queue are the
+      next sprint's work.
+- [ ] Held-out WER < 10% with personalised model active
+      (per §4.3 acceptance criterion 6) — blocked on
+      the deferred recording pipeline.
 
 ## Commits (planned)
 

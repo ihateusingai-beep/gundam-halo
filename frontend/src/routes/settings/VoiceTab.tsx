@@ -1,5 +1,5 @@
 /**
- * Settings → Voice tab (Sprint 16 + 17a + 18 + 23).
+ * Settings → Voice tab (Sprint 16 + 17a + 18 + 23 + 33).
  *
  * Sprint 16: lets the user edit the list of text-level wake
  * phrases the voice pipeline matches at the start of every ASR
@@ -26,6 +26,23 @@
  * the "Restart required" banner. See docs/FEATURE-SPEC-SPRINT18.md
  * §3.2 for the UX wireframe.
  *
+ * Sprint 33 (Track 31-B — Layer 2 v2 self-record corpus) adds
+ * the "Personalised Fine-tune" section with 3 cards (Record /
+ * Train / Swap) for the user-driven Cantonese fine-tune
+ * workflow. The cards call new Tauri IPC commands
+ * (`start_record`, `stop_record`, `start_train`,
+ * `get_train_progress`, `activate_model`) defined in
+ * `frontend/src-tauri/src/commands.rs` (which delegate to
+ * `frontend/src-tauri/src/recording.rs`). The cards are
+ * intentionally rendered as **stubs** in this sprint — the
+ * UI is live (click → toast "Coming soon") so the UX wireframe
+ * from FEATURE-SPEC-SPRINT26.md §4.1 + Appendix C is reviewable,
+ * but the Tauri Rust pipeline is deferred to a follow-up
+ * sprint per the spec's scope-realism rule (~770 LoC across
+ * 6 files including 2 NEW Rust files is too heavy for one
+ * sprint). See the Sprint 33 commit message for the scope
+ * decision.
+ *
  * The current voice WS state (idle / ready / etc.) is shown at
  * the top so the user can confirm the connection is alive before
  * they change phrases.
@@ -36,6 +53,7 @@ import { toast } from "sonner";
 import { HudCard } from "@/components/gundam/HudCard";
 import { api, ApiError } from "@/lib/api";
 import { getVoiceStatus, type VoiceStatus } from "@/services/halo-voice-ws";
+import { isTauriRuntime } from "@/lib/tauri";
 
 import { KV, Section } from "./shared";
 
@@ -527,6 +545,171 @@ export function VoiceTab() {
           required, in permissive mode it's a confidence marker.
         </p>
       </Section>
+
+      {/* Sprint 33 (Track 31-B — Layer 2 v2 self-record corpus).
+          Three-card flow per FEATURE-SPEC-SPRINT26.md §4.1 +
+          Appendix C: Record → Train → Swap. The cards are
+          intentionally **stubs** in this sprint — the
+          Tauri Rust pipeline (frontend/src-tauri/src/
+          {commands,recording}.rs) is deferred to a follow-up
+          sprint per scope realism (~770 LoC across 6 files
+          including 2 NEW Rust files is too heavy for one
+          sprint). The UI is rendered so the wireframe is
+          reviewable; clicking a button shows a toast pointing
+          at the stub so the user knows the wiring is alive.
+
+          Future sprint: wire each button to the real Tauri
+          IPC command (`invoke('start_record', ...)` etc.)
+          defined in commands.rs. The contracts are pinned by
+          the rustdoc comments on those commands — no
+          frontend-side changes will be needed when the
+          follow-up sprint lands. */}
+      <Section title="Personalised Fine-tune (Sprint 33)">
+        <p
+          className="text-xs text-[var(--text-secondary)] font-mono mb-2"
+          data-testid="personalised-finetune-intro"
+        >
+          Personalise the v0.1.4 WhisperHFASR on your own voice.
+          Three steps, run independently — you can pause between
+          Record and Train. Each card calls a Tauri IPC command
+          defined in <code>frontend/src-tauri/src/commands.rs</code>
+          (the actual recording / training pipeline lives in
+          <code> recording.rs</code>; this sprint ships the
+          command contracts and a UI skeleton — see the Sprint 33
+          commit message for the scope decision).
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {/* Record card — calls `start_record` / `stop_record`. */}
+          <HudCard
+            className="p-3"
+            data-testid="personalised-finetune-record-card"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <h5 className="text-[11px] font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+                Record
+              </h5>
+              <span
+                className="text-[9px] font-mono text-[var(--text-muted)] uppercase"
+                data-testid="record-card-status"
+              >
+                idle
+              </span>
+            </div>
+            <p className="text-[11px] font-mono text-[var(--text-muted)] mb-2 leading-relaxed">
+              Speak Cantonese for 30 minutes. The app saves
+              30s chunks to
+              <code> ~/.gundam-halo/recordings/yue-self-&lt;date&gt;/</code>
+              and transcribes them in parallel using the v0.1.4
+              WhisperHFASR backend. Auto-stops at 30 min;
+              you can stop early (min 10 min) or extend (max 60 min).
+            </p>
+            <button
+              type="button"
+              onClick={() => handleRecordStub("start_record")}
+              disabled={!isTauriRuntime()}
+              data-testid="personalised-finetune-record-button"
+              className="w-full px-2 py-1.5 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Start recording
+            </button>
+          </HudCard>
+
+          {/* Train card — calls `start_train` / `get_train_progress`. */}
+          <HudCard
+            className="p-3"
+            data-testid="personalised-finetune-train-card"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <h5 className="text-[11px] font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+                Train
+              </h5>
+              <span
+                className="text-[9px] font-mono text-[var(--text-muted)] uppercase"
+                data-testid="train-card-status"
+              >
+                idle
+              </span>
+            </div>
+            <p className="text-[11px] font-mono text-[var(--text-muted)] mb-2 leading-relaxed">
+              Run the personalised fine-tune. Loads the v0.1.4
+              Common Voice yue checkpoint as the base, fine-tunes
+              on your self-record corpus (1 hour wall clock on
+              M-series). Output lands at
+              <code> ~/.gundam-halo/models/whisper-yue-self-&lt;date&gt;/</code>.
+            </p>
+            <button
+              type="button"
+              onClick={() => handleRecordStub("start_train")}
+              disabled={!isTauriRuntime()}
+              data-testid="personalised-finetune-train-button"
+              className="w-full px-2 py-1.5 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Start training
+            </button>
+          </HudCard>
+
+          {/* Swap card — calls `activate_model`. */}
+          <HudCard
+            className="p-3"
+            data-testid="personalised-finetune-swap-card"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <h5 className="text-[11px] font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+                Swap
+              </h5>
+              <span
+                className="text-[9px] font-mono text-[var(--text-muted)] uppercase"
+                data-testid="swap-card-status"
+              >
+                idle
+              </span>
+            </div>
+            <p className="text-[11px] font-mono text-[var(--text-muted)] mb-2 leading-relaxed">
+              Activate the personalised model — points
+              <code> voice.asr.model_path</code> at the new
+              checkpoint in <code>~/.gundam-halo/config.toml</code>
+              and restarts the backend. Previous v0.1.4 checkpoint
+              is kept as a fallback (revert via git checkout).
+            </p>
+            <button
+              type="button"
+              onClick={() => handleRecordStub("activate_model")}
+              disabled={!isTauriRuntime()}
+              data-testid="personalised-finetune-swap-button"
+              className="w-full px-2 py-1.5 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Activate personalised model
+            </button>
+          </HudCard>
+        </div>
+        <p className="text-[10px] text-[var(--text-muted)] font-mono mt-2 leading-relaxed">
+          The three cards above are intentionally rendered as
+          stubs in this sprint — the Tauri Rust recording +
+          training pipeline is deferred to a follow-up sprint
+          per scope realism. The IPC command contracts are
+          pinned by <code>commands.rs</code>; clicking any
+          button shows a toast pointing at the follow-up
+          sprint, so the wireframe (and the disabled state in
+          the web dev runtime) is reviewable today. See
+          <code> docs/FEATURE-SPEC-SPRINT26.md</code> §4.1 +
+          Appendix C for the full UX.
+        </p>
+      </Section>
     </HudCard>
   );
+}
+
+/** Sprint 33 (Track 31-B) — Personalised Fine-tune stub
+ *  handler. Wired to all three card buttons (Record /
+ *  Train / Swap). In this sprint the Tauri Rust pipeline
+ *  is a stub, so the handler surfaces a toast pointing at
+ *  the follow-up sprint. When the follow-up lands, replace
+ *  the toast with a real `invoke(command_name, ...)` call
+ *  (the contracts are pinned by commands.rs). */
+function handleRecordStub(commandName: string) {
+  toast.info(`${commandName} — coming soon`, {
+    description:
+      "Sprint 33 ships the UI + IPC command contracts for the Personalised Fine-tune cards. The Tauri Rust recording + training pipeline (commands.rs delegates to recording.rs) is deferred to a follow-up sprint per scope realism. See the Sprint 33 commit message + docs/FEATURE-SPEC-SPRINT26.md §4.1 for the deferred scope.",
+    duration: 6000,
+  });
 }
