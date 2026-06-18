@@ -12,6 +12,13 @@ pipeline; loads a fine-tuned HF-format checkpoint via
 import so that whisper_local / yuesub users don't need to
 install the voice-hf extras (transformers, torch, accelerate,
 soundfile). See `docs/FEATURE-SPEC-SPRINT22.md` §4.1 "Track 1".
+Sprint 35 (v0.1.5, Track 31-D): `whisper_hf` + `device = "mlx"`
+forwards to `inference_backend = "mlx"`, which uses
+`mlx-whisper` (a separate darwin-only package) for ~2×
+inference speedup on Apple Silicon. The mlx path is opt-in
+(`uv sync --extra voice-hf-mlx`); the HF pipeline remains
+the default. See `docs/FEATURE-SPEC-SPRINT26.md` §4.4 +
+`docs/FEATURE-SPEC-SPRINT31.md` §Appendix B.
 """
 
 from __future__ import annotations
@@ -93,17 +100,32 @@ def create_asr(
                 'model_path = "~/.gundam-halo/models/whisper-yue-base/"'
             )
 
+        # Sprint 35 (Track 31-D): forward `device = "mlx"`
+        # to `inference_backend = "mlx"`. The factory is
+        # the single chokepoint where config→backend
+        # coupling lives; we keep the user's `device`
+        # config field as the canonical knob and translate
+        # to the backend's internal naming. Existing
+        # `device = "cpu" | "cuda" | "mps" | "auto"`
+        # values keep the default `inference_backend =
+        # "hf"` — no behaviour change.
+        inference_backend = "hf"
+        if config.device.lower() == "mlx":
+            inference_backend = "mlx"
+
         return WhisperHFASR(
             model_path=config.model_path,
             language=config.language,
             device=config.device,
             compute_type=config.compute_type,
+            inference_backend=inference_backend,
         )
 
     raise ValueError(
         f"Unknown ASR backend: {backend!r}. "
         f"Supported: 'whisper_local' (Sprint 16), 'yuesub' (Sprint 17b), "
-        f"'whisper_hf' (Sprint 23 / v0.1.4)."
+        f"'whisper_hf' (Sprint 23 / v0.1.4, optional mlx backend in "
+        f"Sprint 35 / v0.1.5)."
     )
 
 

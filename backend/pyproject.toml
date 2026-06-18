@@ -133,6 +133,38 @@ voice-hf = [
     "soundfile>=0.12,<1",          # audio I/O for HF processor
 ]
 
+# Sprint 35 (v0.1.5, Track 31-D): mlx-whisper inference
+# accelerator — an OPTIONAL add-on to voice-hf. The
+# `device = "mlx"` config value (forwarded by the
+# factory to `inference_backend = "mlx"`) swaps the
+# WhisperHFASR inference path from the HF `pipeline`
+# to `mlx_whisper.transcribe` for ~2× speedup on
+# Apple Silicon (per Sprint 26 §4.4 acceptance:
+# 600ms → 300ms per turn).
+#
+# Total extra size: ~500MB on top of voice-hf
+# (mlx ~400MB, mlx-whisper ~50MB, numpy already
+# in the venv).
+#
+# **DARWIN-ONLY** — mlx does not have Linux/Windows
+# wheels. The user opts in with
+# `uv sync --extra voice --extra voice-hf --extra voice-hf-mlx`
+# on Apple Silicon. On non-Mac platforms the
+# `_import_mlx_whisper` lazy import raises ASRError
+# pointing at this extra (the install would have
+# failed earlier, but we surface a clear error if
+# the user runs the import manually).
+#
+# See `docs/FEATURE-SPEC-SPRINT26.md` §4.4 + §6
+# and `docs/FEATURE-SPEC-SPRINT31.md` §Appendix B
+# for the Cantonese language-hint gap analysis +
+# the `language = "yue"` workaround.
+voice-hf-mlx = [
+    "mlx-whisper>=0.4,<1",        # mlx_whisper.transcribe + Cantonese yue token
+    "mlx>=0.20,<1",                # Apple Silicon ML framework (~400MB)
+    "numpy>=1.26,<2",              # mlx-whisper's <2.x constraint
+]
+
 # Sprint 27: Mark-XL tool imports (see
 # docs/FEATURE-SPEC-SPRINT27.md). Each extra is
 # independent — the user opts in only for the tools

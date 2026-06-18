@@ -568,6 +568,348 @@ def test_factory_lists_whisper_hf_in_unknown_backend_error():
 
 
 # ---------------------------------------------------------------------------
+# 8. mlx-whisper inference backend (Sprint 35 / Track 31-D)
+#
+# These tests cover the opt-in mlx path WITHOUT requiring
+# `mlx` or `mlx-whisper` to be installed in the test env
+# (they're darwin-only + ~450MB). We mock the lazy import
+# at the module boundary (same pattern as
+# `mock_whisper_hf_deps` for the HF deps). The full mlx
+# inference smoke test is manual — the user runs
+# `uv sync --extra voice-hf-mlx` on Apple Silicon +
+# sets `device = "mlx"` in config.toml.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_mlx_whisper(monkeypatch):
+    """Mock `mlx_whisper` so the `_import_mlx_whisper` lazy
+    import returns a stub without actually importing the
+    ~450MB darwin-only dep.
+
+    Mirrors the `mock_whisper_hf_deps` pattern: patch the
+    module-level helper (`whisper_hf._import_mlx_whisper`)
+    rather than mocking the `mlx_whisper` module in
+    `sys.modules`. Patching the helper sidesteps
+    `from X import Y` lookup semantics inside the
+    lazy-import function (see `python-backend-patterns.md`).
+    """
+    from app.voice.asr import whisper_hf
+
+    fake_mlx_whisper = MagicMock()
+    # `mlx_whisper.transcribe` is the function we mock at
+    # the call boundary — return a dict with the same
+    # shape as the real implementation
+    # (`{"text": ..., "segments": ..., "language": ...}`).
+    fake_mlx_whisper.transcribe = MagicMock()
+
+    monkeypatch.setattr(
+        whisper_hf, "_import_mlx_whisper", lambda: fake_mlx_whisper
+    )
+    return fake_mlx_whisper
+
+
+def test_inference_backend_default_is_hf(tmp_model_dir):
+    """Default `inference_backend` is "hf" (no behaviour
+    change for existing users). The mlx path is strictly
+    opt-in via either the constructor kwarg or the
+    factory's `device = "mlx"` translation."""
+    from app.voice.asr.whisper_hf import (
+        INFERENCE_BACKEND_HF,
+        WhisperHFASR,
+    )
+
+    asr = WhisperHFASR(model_path=tmp_model_dir)
+    assert asr._inference_backend == INFERENCE_BACKEND_HF
+
+
+def test_inference_backend_unknown_raises_value_error(tmp_model_dir):
+    """Unknown `inference_backend` raises ValueError at
+    __init__ time (fail-fast — don't accept typos that
+    would silently fall through to the HF path)."""
+    from app.voice.asr.whisper_hf import WhisperHFASR
+
+    with pytest.raises(ValueError, match="Unknown inference_backend"):
+        WhisperHFASR(
+            model_path=tmp_model_dir,
+            inference_backend="not_a_real_backend",
+        )
+
+
+def test_mlx_language_map_yue_passes_through():
+    """`_mlx_map_language("yue")` returns the `"yue"`
+    short token (the language code mlx-whisper's
+    tokenizer recognizes — NOT the full ISO 639-1
+    name "cantonese" that HF expects).
+
+    This is the Cantonese language-hint workaround
+    (Sprint 26 spec §Appendix B): mlx-whisper's
+    tokenizer dict includes `"yue": "cantonese"`
+    as the last entry, so we pass `"yue"` (the
+    ISO 639-3 / Whisper-style code) directly. The
+    HF pipeline, by contrast, expects the full
+    name `"cantonese"`."""
+    from app.voice.asr.whisper_hf import _mlx_map_language
+
+    assert _mlx_map_language("yue") == "yue"
+    # Other common languages pass through unchanged
+    # (mlx-whisper uses the same short codes for
+    # zh / en / ja / ko as the HF pipeline's source
+    # language config field).
+    assert _mlx_map_language("zh") == "zh"
+    assert _mlx_map_language("en") == "en"
+    assert _mlx_map_language("ja") == "ja"
+    assert _mlx_map_language("ko") == "ko"
+
+
+def test_mlx_language_map_auto_returns_none():
+    """`_mlx_map_language("auto")` returns `None` (we
+    omit `language` from mlx-whisper's `decode_options`
+    so it auto-detects from the first 30s of audio —
+    mlx-whisper's default behaviour).
+
+    Critical: returning `""` (empty string) would
+    raise `ValueError: Unsupported language` inside
+    `get_tokenizer`. None is the "let mlx-whisper
+    detect" signal."""
+    from app.voice.asr.whisper_hf import _mlx_map_language
+
+    assert _mlx_map_language("auto") is None
+    # Empty input also returns None (defensive).
+    assert _mlx_map_language("") is None
+
+
+def test_mlx_language_map_passthrough_unknown():
+    """Unknown language codes pass through unchanged
+    (so mlx-whisper can try its own detection / fail
+    loud with its own error rather than us silently
+    swallowing it)."""
+    from app.voice.asr.whisper_hf import _mlx_map_language
+
+    # "tl" (Tagalog) isn't in our map but is a valid
+    # mlx-whisper LANGUAGES entry — pass through.
+    assert _mlx_map_language("tl") == "tl"
+    # Mixed-case passthrough (lowercased).
+    assert _mlx_map_language("MIXED") == "mixed"
+
+
+@pytest.mark.asyncio
+async def test_whisper_hf_transcribe_routes_to_mlx_when_backend_mlx(
+    mock_mlx_whisper, tmp_model_dir
+):
+    """`inference_backend = "mlx"` routes `transcribe()`
+    to `_invoke_pipeline_mlx` (NOT the HF pipeline).
+
+    Asserts:
+    - `mlx_whisper.transcribe` is called exactly once
+    - `path_or_hf_repo` is the model_path
+    - `language = "yue"` is in the call kwargs (the
+      Cantonese hint workaround — mlx-whisper's
+      tokenizer uses the short ISO 639-3 code, not
+      the full ISO 639-1 name "cantonese" that HF
+      expects)
+    - `task = "transcribe"` is set
+    - The returned text is whitespace-stripped
+    - The HF pipeline was NOT constructed (we don't
+      even call `warmup()` on the mlx path)."""
+    from app.voice.asr.whisper_hf import (
+        INFERENCE_BACKEND_MLX,
+        WhisperHFASR,
+    )
+
+    mock_mlx_whisper.transcribe.return_value = {
+        "text": " 你好 ",
+        "segments": [],
+        "language": "yue",
+    }
+
+    asr = WhisperHFASR(
+        model_path=tmp_model_dir,
+        language="yue",
+        inference_backend=INFERENCE_BACKEND_MLX,
+    )
+
+    # The mlx path does NOT call `warmup()` (mlx-whisper
+    # is stateless — it loads the model on first
+    # transcribe call, cached after that). The HF
+    # pipeline must still be None.
+    audio = (np.zeros(16_000, dtype=np.int16)).tobytes()
+    out = await asr.transcribe(audio, sample_rate=16_000)
+
+    assert out == "你好"  # whitespace-stripped
+    assert asr._pipeline is None  # HF pipeline never built
+
+    # mlx_whisper.transcribe called with the right args.
+    mock_mlx_whisper.transcribe.assert_called_once()
+    call = mock_mlx_whisper.transcribe.call_args
+
+    # First positional arg: the float32 waveform.
+    waveform_arg = call.args[0]
+    assert waveform_arg.dtype == np.float32
+
+    # path_or_hf_repo: the model_path (user is
+    # responsible for MLX-converted weights).
+    assert call.kwargs["path_or_hf_repo"] == tmp_model_dir
+
+    # mlx-whisper accepts `language` + `task` as
+    # top-level kwargs (per its real API signature
+    # — see `mlx_whisper.transcribe` in
+    # `mlx-examples/whisper/mlx_whisper/transcribe.py`).
+    # We pass `language = "yue"` (the short token
+    # code, not the full ISO 639-1 name "cantonese").
+    assert call.kwargs["language"] == "yue"
+    assert call.kwargs["task"] == "transcribe"
+
+    # Cantonese prompt fallback is set (no-op when
+    # the tokenizer accepts "yue", but explicit is
+    # better than implicit — see module docstring).
+    assert call.kwargs["initial_prompt"] is not None
+
+
+@pytest.mark.asyncio
+async def test_whisper_hf_transcribe_mlx_omits_language_for_auto(
+    mock_mlx_whisper, tmp_model_dir
+):
+    """`language = "auto"` on the mlx path → mlx-whisper's
+    call kwargs do NOT include a `language` key
+    (we let it auto-detect from the first 30s).
+
+    Critical: passing `language = ""` (empty string)
+    would raise `ValueError: Unsupported language` in
+    mlx-whisper's `get_tokenizer`. The factory +
+    `_mlx_map_language` cooperate to omit the key
+    entirely for `auto`."""
+    from app.voice.asr.whisper_hf import (
+        INFERENCE_BACKEND_MLX,
+        WhisperHFASR,
+    )
+
+    mock_mlx_whisper.transcribe.return_value = {"text": "auto-detected"}
+
+    asr = WhisperHFASR(
+        model_path=tmp_model_dir,
+        language="auto",
+        inference_backend=INFERENCE_BACKEND_MLX,
+    )
+    audio = (np.zeros(100, dtype=np.int16)).tobytes()
+    out = await asr.transcribe(audio, sample_rate=16_000)
+
+    assert out == "auto-detected"
+    call = mock_mlx_whisper.transcribe.call_args
+    # "auto" → no `language` key in call kwargs.
+    assert "language" not in call.kwargs
+    # `task = "transcribe"` is still always set.
+    assert call.kwargs["task"] == "transcribe"
+
+
+@pytest.mark.asyncio
+async def test_whisper_hf_transcribe_mlx_wraps_errors_in_asrerror(
+    mock_mlx_whisper, tmp_model_dir
+):
+    """mlx-whisper errors (e.g. model_path missing,
+    unsupported language token) are wrapped in
+    `ASRError` with the `inference_backend` field
+    in the message so the user can tell which
+    backend failed.
+
+    The voice pipeline's error handler logs the
+    ASRError message; having `inference_backend='mlx'`
+    in the message makes the failure mode obvious
+    without needing a stack trace. The original
+    exception is preserved as `__cause__` so the
+    user can still see the underlying error."""
+    from app.voice.asr.whisper_hf import (
+        INFERENCE_BACKEND_MLX,
+        WhisperHFASR,
+    )
+
+    mock_mlx_whisper.transcribe.side_effect = FileNotFoundError(
+        "model not found"
+    )
+
+    asr = WhisperHFASR(
+        model_path=tmp_model_dir,
+        inference_backend=INFERENCE_BACKEND_MLX,
+    )
+    audio = (np.zeros(100, dtype=np.int16)).tobytes()
+    with pytest.raises(ASRError) as exc_info:
+        await asr.transcribe(audio, sample_rate=16_000)
+    # Error message identifies which backend failed.
+    assert "inference_backend='mlx'" in str(exc_info.value)
+    # Original FileNotFoundError is preserved as __cause__
+    # (we re-raise from `transcribe()`'s `except Exception
+    # as e` block via `from e`).
+    assert isinstance(exc_info.value.__cause__, FileNotFoundError)
+
+
+def test_factory_forwards_device_mlx_to_inference_backend_mlx(
+    monkeypatch, tmp_model_dir
+):
+    """Factory maps `device = "mlx"` to
+    `inference_backend = "mlx"` (the user's
+    single-knob config field stays `device`;
+    the factory does the translation to the
+    backend's internal naming).
+
+    Existing `device = "cpu" | "cuda" | "mps" | "auto"`
+    values keep `inference_backend = "hf"` — no
+    behaviour change for the default install."""
+    from app.core import config as config_mod
+    from app.voice.asr.asr_factory import create_asr
+    from app.voice.asr.whisper_hf import (
+        INFERENCE_BACKEND_HF,
+        INFERENCE_BACKEND_MLX,
+        WhisperHFASR,
+    )
+
+    cfg = config_mod.get_config()
+
+    # Case 1: device = "mlx" → inference_backend = "mlx"
+    cfg.voice.asr.backend = "whisper_hf"
+    cfg.voice.asr.model_path = tmp_model_dir
+    cfg.voice.asr.language = "yue"
+    cfg.voice.asr.device = "mlx"
+    try:
+        asr = create_asr(cfg.voice.asr)
+        assert isinstance(asr, WhisperHFASR)
+        assert asr._inference_backend == INFERENCE_BACKEND_MLX
+    finally:
+        cfg.voice.asr.backend = "whisper_local"
+        cfg.voice.asr.model_path = ""
+        cfg.voice.asr.device = "auto"
+
+    # Case 2: device = "cpu" → inference_backend = "hf"
+    cfg.voice.asr.backend = "whisper_hf"
+    cfg.voice.asr.model_path = tmp_model_dir
+    cfg.voice.asr.language = "yue"
+    cfg.voice.asr.device = "cpu"
+    try:
+        asr = create_asr(cfg.voice.asr)
+        assert isinstance(asr, WhisperHFASR)
+        assert asr._inference_backend == INFERENCE_BACKEND_HF
+    finally:
+        cfg.voice.asr.backend = "whisper_local"
+        cfg.voice.asr.model_path = ""
+        cfg.voice.asr.device = "auto"
+
+    # Case 3: device = "MLX" (uppercase) → still maps
+    # to inference_backend = "mlx" (case-insensitive
+    # matching).
+    cfg.voice.asr.backend = "whisper_hf"
+    cfg.voice.asr.model_path = tmp_model_dir
+    cfg.voice.asr.language = "yue"
+    cfg.voice.asr.device = "MLX"
+    try:
+        asr = create_asr(cfg.voice.asr)
+        assert isinstance(asr, WhisperHFASR)
+        assert asr._inference_backend == INFERENCE_BACKEND_MLX
+    finally:
+        cfg.voice.asr.backend = "whisper_local"
+        cfg.voice.asr.model_path = ""
+        cfg.voice.asr.device = "auto"
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
