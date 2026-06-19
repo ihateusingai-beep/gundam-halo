@@ -22,6 +22,7 @@ from typing import Any, Dict
 import httpx
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ DEFAULT_TIMEOUT_S = 15.0
 USER_AGENT = "GundamHalo/0.1 (+https://github.com/ihateusingai-beep/gundam-halo)"
 
 
+@register_tool("web_fetch")
 class WebFetchTool(BaseTool):
     """Fetch a URL and return its body (truncated to MAX_BYTES)."""
 

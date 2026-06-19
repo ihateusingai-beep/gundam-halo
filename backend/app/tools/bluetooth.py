@@ -22,6 +22,7 @@ import subprocess
 from typing import Any, Dict
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ def _blueutil_run(args: list[str], timeout: int = 10) -> str:
     return r.stdout.strip() or "OK"
 
 
+@register_tool("bluetooth")
 class BluetoothTool(BaseTool):
     name = "bluetooth"
     description = (

@@ -37,6 +37,7 @@ from typing import Optional
 import numpy as np
 
 from app.voice.vad.vad_interface import VADEvent, VADInterface
+from app.core.registry import register_vad
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 _NO_FRAME_LEVEL = 0.0
 
 
+@register_vad("fsmn")
 class FsmnVAD(VADInterface):
     """Per-frame audio level source backed by fsmn-vad-online.
 

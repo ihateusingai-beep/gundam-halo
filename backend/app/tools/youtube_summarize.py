@@ -35,6 +35,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,7 @@ class YouTubeSummarizeError(RuntimeError):
     private, network failure, etc.)."""
 
 
+@register_tool("youtube_summarize")
 class YouTubeSummarizeTool(BaseTool):
     """Fetch + summarize a YouTube video's transcript.
 

@@ -12,11 +12,13 @@ import logging
 from typing import Any, Dict
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 from app.mac.spotlight import spotlight_search
 
 logger = logging.getLogger(__name__)
 
 
+@register_tool("spotlight")
 class SpotlightTool(BaseTool):
     name = "spotlight"
     description = (

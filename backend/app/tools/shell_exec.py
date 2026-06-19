@@ -10,10 +10,12 @@ from typing import Any, Dict
 
 from app.mac.shell import run_shell
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
 
+@register_tool("shell_exec")
 class ShellExecTool(BaseTool):
     name = "shell_exec"
     description = (

@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from app.voice.vad.vad_interface import VADEvent, VADInterface
+from app.core.registry import register_vad
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class SileroVADLoadError(RuntimeError):
     """Raised when the Silero VAD model cannot be loaded."""
 
 
+@register_vad("silero")
 class SileroVAD(VADInterface):
     """Silero VAD v5 — runs locally on CPU.
 

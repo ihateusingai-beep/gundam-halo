@@ -68,6 +68,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import numpy as np
 
 from app.voice.asr.asr_interface import ASRError, ASRInterface
+from app.core.registry import register_asr
 
 logger = logging.getLogger(__name__)
 
@@ -353,6 +354,7 @@ _CANTONESE_PROMPT_FALLBACK = (
 )
 
 
+@register_asr("whisper_hf")
 class WhisperHFASR(ASRInterface):
     """Whisper ASR via the Hugging Face `transformers` pipeline
     (default) or `mlx-whisper` (Sprint 35 / Track 31-D, opt-in).

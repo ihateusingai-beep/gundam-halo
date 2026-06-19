@@ -28,6 +28,7 @@ import subprocess
 from typing import Any, Dict, Optional
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ def _get_dnd_status() -> str:
     return f"Do Not Disturb: unknown (defaults read returned: {val!r})"
 
 
+@register_tool("system_settings")
 class SystemSettingsTool(BaseTool):
     name = "system_settings"
     description = (

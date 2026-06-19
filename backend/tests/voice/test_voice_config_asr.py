@@ -70,7 +70,16 @@ def voice_enabled_app(monkeypatch):
     original = cfg.voice.enabled
     cfg.voice.enabled = True
     voice_ws.set_responder(None)
-    ToolRegistry.clear()
+    # NOTE: do NOT clear ToolRegistry here. Sprint 32 P0-1 eagerly
+    # imports 22 tools at app.tools.__init__.py import time so the
+    # registry is populated with the full default tool set. Clearing
+    # it would wipe the 22 eager-imported tools and break downstream
+    # tests that rely on `default_tools()` returning the full set
+    # (e.g. tests/tools/test_builder.py). The `create_vad` /
+    # `create_asr` / `create_tts` / `create_live2d` monkeypatches
+    # above are sufficient for this test's voice-config contract
+    # verification — we don't need a clean ToolRegistry to test
+    # PUT /voice/config.
     try:
         app = create_app()
         yield app, fake_vad, fake_asr
@@ -78,7 +87,6 @@ def voice_enabled_app(monkeypatch):
         cfg.voice.enabled = original
         voice_ws.set_agent_callback(None)
         voice_ws.set_responder(None)
-        ToolRegistry.clear()
 
 
 @pytest.fixture

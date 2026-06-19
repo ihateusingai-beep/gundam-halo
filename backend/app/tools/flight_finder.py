@@ -49,6 +49,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +451,7 @@ class FlightFinderError(RuntimeError):
     """
 
 
+@register_tool("flight_finder")
 class FlightFinderTool(BaseTool):
     """Find flights between two airports.
 

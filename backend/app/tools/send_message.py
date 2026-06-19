@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 from app.tools._yolo import (
     DEFAULT_YOLO_MODEL_PATH,
     YOLODetector,
@@ -172,6 +173,7 @@ def _resolve_app_name(platform_name: str, os_system: str) -> Optional[str]:
     return PLATFORM_APP_NAMES.get(platform_name, {}).get(os_system)
 
 
+@register_tool("send_message")
 class SendMessageTool(BaseTool):
     """Send a message to a contact on a messaging platform
     using a YOLO-based computer-vision pipeline.

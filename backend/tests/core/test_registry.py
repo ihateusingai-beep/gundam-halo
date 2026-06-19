@@ -2,22 +2,44 @@
 import pytest
 
 from app.core.registry import (
-    AgentRegistry,
     ChannelRegistry,
     EngineRegistry,
     ModelRegistry,
-    ToolRegistry,
 )
 
 
 @pytest.fixture(autouse=True)
-def _clear_registries():
-    """Clear all registries before each test to avoid leakage."""
-    for reg in [AgentRegistry, ChannelRegistry, EngineRegistry, ModelRegistry, ToolRegistry]:
-        reg.clear()
+def _clear_model_registry():
+    """Clear ModelRegistry before + after each test.
+
+    `test_registry.py` only writes to `ModelRegistry`
+    (the only registry it actually populates with test
+    fixtures like `_Dummy` via `@ModelRegistry.register`).
+    The other 7 registries — ToolRegistry / AgentRegistry /
+    ChannelRegistry / EngineRegistry / AsrRegistry /
+    TtsRegistry / VadRegistry — are populated by
+    `app.<sub>.__init__.py` eager imports during Sprint 32
+    P0-1. Clearing them here would wipe those eager-imported
+    entries and break downstream tests (e.g. test_smoke's
+    `agent_type: "simple"` lookup in AgentRegistry, or
+    `default_tools()` lookup in ToolRegistry).
+
+    Note: `test_isolation_between_registries` reads from
+    `EngineRegistry` without writing to it — so we don't
+    need to clear EngineRegistry either.
+
+    Before-clear: ensures each `test_register_and_get`
+    variant starts with a clean `ModelRegistry` (no leakage
+    from the previous test in this file).
+    After-clear: removes the `_Dummy` classes registered
+    by this file's tests so the module-level state doesn't
+    accumulate test fixtures across reruns (mitigates
+    `test_register_and_get` → `test_create_instantiates`
+    pollution if a future test runs them out of order).
+    """
+    ModelRegistry.clear()
     yield
-    for reg in [AgentRegistry, ChannelRegistry, EngineRegistry, ModelRegistry, ToolRegistry]:
-        reg.clear()
+    ModelRegistry.clear()
 
 
 def test_register_and_get():
@@ -67,3 +89,50 @@ def test_keys_and_contains():
     assert set(ModelRegistry.keys()) == {"a", "b"}
     assert ModelRegistry.contains("a")
     assert not ModelRegistry.contains("z")
+
+
+# ---------------------------------------------------------------------------
+# Sprint 32 P0-1: thin decorator wrappers (register_tool /
+# register_engine / register_agent / register_asr / register_tts /
+# register_vad)
+# ---------------------------------------------------------------------------
+
+
+def test_register_tool_decorator_registers_and_sets_name():
+    from app.core.registry import ToolRegistry, register_tool
+
+    @register_tool("test_tool_decorator_class")
+    class _DummyTool:
+        name = "test_tool_decorator_class"
+
+    assert ToolRegistry.get("test_tool_decorator_class") is _DummyTool
+
+
+def test_register_tool_mismatched_name_raises():
+    from app.core.registry import register_tool
+
+    with pytest.raises(ValueError, match="does not match the registry key"):
+
+        @register_tool("expected-name")
+        class _Mismatched:
+            name = "different-name"
+
+
+def test_register_engine_decorator_registers():
+    from app.core.registry import EngineRegistry, register_engine
+
+    @register_engine("test_engine_decorator")
+    class _DummyEngine:
+        pass
+
+    assert EngineRegistry.get("test_engine_decorator") is _DummyEngine
+
+
+def test_register_agent_decorator_registers():
+    from app.core.registry import AgentRegistry, register_agent
+
+    @register_agent("test_agent_decorator")
+    class _DummyAgent:
+        pass
+
+    assert AgentRegistry.get("test_agent_decorator") is _DummyAgent

@@ -18,6 +18,7 @@ from typing import Any, Dict
 import httpx
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ def _summarize_weather(payload: dict) -> str:
         return f"(could not parse wttr.in payload: {e})"
 
 
+@register_tool("weather")
 class WeatherTool(BaseTool):
     """Get current weather for a location. No API key needed."""
 

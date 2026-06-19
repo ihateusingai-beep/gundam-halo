@@ -57,6 +57,7 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Sequence, Union
 import numpy as np
 
 from app.voice.asr.asr_interface import ASRError, ASRInterface
+from app.core.registry import register_asr
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +202,7 @@ if TYPE_CHECKING:
     from app.voice.corrector.corrector import Corrector  # noqa: F401
 
 
+@register_asr("yuesub")
 class YuesubASR(ASRInterface):
     """Cantonese ASR via the yuesub-api SenseVoiceSmall + Fsmn_vad stack.
 

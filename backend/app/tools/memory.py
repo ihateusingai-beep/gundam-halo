@@ -29,6 +29,7 @@ from app.memory.user_memory import (
     user_key_for,
 )
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ def _format_entry(entry: MemoryEntry) -> str:
 # ---------------------------------------------------------------------------
 
 
+@register_tool("memory_read")
 class MemoryReadTool(BaseTool):
     """Read one or all keys from a user's memory."""
 
@@ -129,6 +131,7 @@ class MemoryReadTool(BaseTool):
 # ---------------------------------------------------------------------------
 
 
+@register_tool("memory_write")
 class MemoryWriteTool(BaseTool):
     """Write (or delete) a value in the user's memory."""
 

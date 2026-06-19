@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ def _default_path() -> Path:
     return DEFAULT_DIR / f"screenshot_{ts}.png"
 
 
+@register_tool("screenshot")
 class ScreenshotTool(BaseTool):
     name = "screenshot"
     description = (

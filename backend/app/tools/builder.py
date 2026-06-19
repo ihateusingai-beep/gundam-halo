@@ -16,39 +16,20 @@ All 4 tools are always registered. The user can
 disable them per-tool by editing the
 `[tools.<name>].enabled` config section in
 `~/.gundam-halo/config.toml` (see `config.toml.example`).
-The conditional registration pattern based on
-`cfg.tools.<name>.enabled` is documented in the
-spec §4.4 but is not yet wired in v0.1.5+ (a
-follow-up sprint can add it without changing the
-agent loop).
+
+Sprint 32 P0-1 refactor: replaces the 22 hardcoded imports
++ 22 instance creations with a single `ToolRegistry.items()`
+iteration. Each tool class opts in via the
+`@register_tool("name")` class decorator (see
+`app/core/registry.py`); `app/tools/__init__.py` eager-imports
+every tool module so the decorators fire at import time.
 
 Tool count: 21 (M11 + Sprint 16) → 25 (Sprint 27).
 """
-
 from __future__ import annotations
 
+from app.core.registry import ToolRegistry
 from app.tools._stubs import BaseTool
-from app.tools.a11y import A11yTool
-from app.tools.apple_script import AppleScriptTool
-from app.tools.bluetooth import BluetoothTool
-from app.tools.brightness import BrightnessTool
-from app.tools.clipboard import ClipboardTool
-from app.tools.file_read import FileReadTool
-from app.tools.file_write import FileWriteTool
-from app.tools.flight_finder import FlightFinderTool
-from app.tools.mavis_delegate import MavisDelegateTool
-from app.tools.memory import MemoryReadTool, MemoryWriteTool
-from app.tools.notify import NotifyTool
-from app.tools.open_app import OpenAppTool
-from app.tools.screenshot import ScreenshotTool
-from app.tools.send_message import SendMessageTool
-from app.tools.shell_exec import ShellExecTool
-from app.tools.spotlight import SpotlightTool
-from app.tools.system_settings import SystemSettingsTool
-from app.tools.weather import WeatherTool
-from app.tools.web_fetch import WebFetchTool
-from app.tools.web_search import WebSearchTool
-from app.tools.youtube_summarize import YouTubeSummarizeTool
 
 
 def default_tools() -> list[BaseTool]:
@@ -57,9 +38,15 @@ def default_tools() -> list[BaseTool]:
     Sprint 28/29: conditionally register the 4
     Mark-XL tools (web_search, youtube_summarize,
     flight_finder, send_message) based on
-    `cfg.tools.<name>.enabled`. A disabled tool
-    is **invisible** to the LLM — the agent's tool
+    `cfg.tools.<name>.enabled`. A disabled tool is
+    **invisible** to the LLM — the agent's tool
     spec list does not include it.
+
+    Sprint 32 P0-1: `default_tools()` now iterates
+    `ToolRegistry.items()` (22 entries) instead of
+    hardcoding 22 imports + 22 instance creations.
+    The conditional logic reduces to a single
+    `_is_enabled(name, cfg)` check per tool.
 
     The `get_config()` import is **lazy** (inside
     the function body, not at module level) to
@@ -88,52 +75,45 @@ def default_tools() -> list[BaseTool]:
 
     cfg = get_config()
     tools: list[BaseTool] = [
-        FileReadTool(),
-        FileWriteTool(),
-        ShellExecTool(),
-        OpenAppTool(),
-        MavisDelegateTool(),
-        # M7-Phase-1: web tools
-        WebFetchTool(),
-        WeatherTool(),
-        # M7-Phase-2: per-user memory
-        MemoryReadTool(),
-        MemoryWriteTool(),
-        # M11: Mac-control surface — completes the README claim set
-        # (AppleScript / Clipboard / Notifications / Spotlight / A11y)
-        AppleScriptTool(),
-        ClipboardTool(),
-        NotifyTool(),
-        SpotlightTool(),
-        A11yTool(),
-        # Sprint 16: Unicorn voice control. Four new Mac-control
-        # tools that round out the v1 use-case catalog. All opt-in
-        # via the same audit log as the M11 set.
-        BrightnessTool(),       # display brightness
-        SystemSettingsTool(),   # DND / Focus + general prefs
-        ScreenshotTool(),        # screencapture wrapper
-        BluetoothTool(),         # BT list + connect (blueutil)
+        tool_cls()
+        for name, tool_cls in sorted(ToolRegistry.items(), key=lambda x: x[0])
+        if _is_enabled(name, cfg)
     ]
-
-    # Sprint 28/29: conditional Mark-XL tool registration
-    # (per `docs/FEATURE-SPEC-SPRINT28.md`). The 4 tools
-    # are added only if their `enabled` flag is True in
-    # `~/.gundam-halo/config.toml`'s [tools.*] section.
-    # A disabled tool is invisible to the LLM (the agent
-    # loop never sees it). The user can disable a tool
-    # by setting `enabled = false` and restarting the
-    # backend.
-    if cfg.tools.web_search.enabled:
-        tools.append(WebSearchTool())
-    if cfg.tools.youtube_summarize.enabled:
-        tools.append(YouTubeSummarizeTool())
-    if cfg.tools.flight_finder.enabled:
-        tools.append(FlightFinderTool())
-    if cfg.tools.send_message.enabled:
-        tools.append(SendMessageTool())
-
     return tools
 
 
-__all__ = ["default_tools"]
+def _is_enabled(name: str, cfg) -> bool:
+    """Check whether a registered tool should be enabled.
 
+    The 4 Mark-XL tools (web_search / youtube_summarize /
+    flight_finder / send_message) have a
+    `[tools.<name>].enabled` config field in
+    `~/.gundam-halo/config.toml`. The legacy 18
+    tools (file_read, file_write, shell_exec, etc.)
+    do NOT have a config field — they're always
+    enabled.
+
+    `MemoryReadTool` / `MemoryWriteTool` are registered
+    as `memory_read` / `memory_write` (Sprint 32 P0-1)
+    and do not have config fields either — always
+    enabled (the legacy 18 behavior).
+
+    Returns:
+        True if the tool should be included in the
+        agent's tool list, False if it's gated off
+        by a `cfg.tools.<name>.enabled = false`.
+    """
+    tools_cfg = getattr(cfg, "tools", None)
+    if tools_cfg is None:
+        # No ToolsConfig at all — everything is enabled.
+        return True
+    sub = getattr(tools_cfg, name, None)
+    if sub is None:
+        # No sub-config for this tool (legacy 18 + memory_*) —
+        # always enabled.
+        return True
+    # Mark-XL 4 tools have an explicit `enabled` flag.
+    return getattr(sub, "enabled", True)
+
+
+__all__ = ["default_tools"]

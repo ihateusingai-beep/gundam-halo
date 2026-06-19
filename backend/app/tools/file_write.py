@@ -12,10 +12,12 @@ from typing import Any, Dict
 from app.mac.file_ops import write_file
 from app.mac.policy import check_path_write
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
 
+@register_tool("file_write")
 class FileWriteTool(BaseTool):
     name = "file_write"
     description = (

@@ -12,6 +12,7 @@ from typing import AsyncIterator, List, Optional
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
+from app.core.registry import register_engine
 from app.core.types import Message, ToolCall
 from app.engines._stubs import InferenceEngine
 
@@ -57,6 +58,7 @@ def _parse_assistant_message(response: ChatCompletion) -> Message:
     )
 
 
+@register_engine("minimax")
 class MiniMaxEngine(InferenceEngine):
     """MiniMax LLM engine via OpenAI-compatible API."""
 

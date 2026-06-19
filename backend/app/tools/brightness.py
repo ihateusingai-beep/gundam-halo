@@ -26,6 +26,7 @@ import logging
 from typing import Any, Dict
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ end tell
 """.strip()
 
 
+@register_tool("brightness")
 class BrightnessTool(BaseTool):
     name = "brightness"
     description = (

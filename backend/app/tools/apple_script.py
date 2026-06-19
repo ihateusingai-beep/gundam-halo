@@ -18,11 +18,13 @@ import logging
 from typing import Any, Dict
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 from app.mac.apple_script import run_applescript
 
 logger = logging.getLogger(__name__)
 
 
+@register_tool("apple_script")
 class AppleScriptTool(BaseTool):
     name = "apple_script"
     description = (

@@ -19,15 +19,23 @@ inference speedup on Apple Silicon. The mlx path is opt-in
 (`uv sync --extra voice-hf-mlx`); the HF pipeline remains
 the default. See `docs/FEATURE-SPEC-SPRINT26.md` §4.4 +
 `docs/FEATURE-SPEC-SPRINT31.md` §Appendix B.
+
+Sprint 32 P0-1 refactor: the 3 if-elif backend branches are
+replaced with a single `EngineRegistry.get(backend)` lookup
+plus a per-backend kwargs adapter dict. Each ASR class opts in
+via `@register_engine("name")` (see `app/core/registry.py`).
+New ASR backends now only need to add an `@register_engine`
+decorator and a kwargs adapter — no factory edit.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any, Callable, Dict
 
 from app.core.config import VoiceASRConfig
+from app.core.registry import AsrRegistry
 from app.voice.asr.asr_interface import ASRInterface
-from app.voice.asr.whisper_local import WhisperLocalASR
 
 logger = logging.getLogger(__name__)
 
@@ -56,77 +64,96 @@ def create_asr(
     backend = config.backend.lower()
     logger.info(f"Creating ASR engine: backend={backend}")
 
-    if backend == "whisper_local":
-        return WhisperLocalASR(
-            model_size=config.model_size,
-            model_path=config.model_path,
-            language=config.language,
-            device=config.device,
-            compute_type=config.compute_type,
+    # Sprint 32 P0-1: registry-based dispatch. Each backend
+    # has a kwargs adapter that translates the shared
+    # `VoiceASRConfig` to the backend-specific constructor
+    # signature. The Sprint 35 mlx forwarding logic (device
+    # = "mlx" → inference_backend = "mlx") lives in the
+    # whisper_hf adapter.
+    if not AsrRegistry.contains(backend):
+        available = sorted(n for n, _ in AsrRegistry.items())
+        raise ValueError(
+            f"Unknown ASR backend: {backend!r}. "
+            f"Available: {available}. "
+            f"Supported: 'whisper_local' (Sprint 16), "
+            f"'yuesub' (Sprint 17b), 'whisper_hf' (Sprint 23 / v0.1.4, "
+            f"optional mlx backend in Sprint 35 / v0.1.5)."
         )
 
-    if backend == "yuesub":
-        # Lazy import: the yuesub ASR module pulls in funasr_onnx +
-        # torchaudio + transformers, all of which are in the
-        # voice-yuesub extra. whisper_local users don't need them.
-        from app.voice.asr.yuesub import YuesubASR
+    return _ASR_KWARGS_ADAPTERS[backend](config)
 
-        corrector = _build_corrector(config.corrector)
 
-        return YuesubASR(
-            language=config.language,
-            device=config.device,
-            corrector=corrector,
-        )
+def _build_whisper_local(config: VoiceASRConfig) -> ASRInterface:
+    from app.voice.asr.whisper_local import WhisperLocalASR
 
-    if backend == "whisper_hf":
-        # Sprint 23 (v0.1.4): HF transformers pipeline for
-        # fine-tuned Cantonese models. The voice-hf extra
-        # declares `transformers` + `torch` + `accelerate`
-        # + `soundfile` (~850MB total). whisper_local /
-        # yuesub users don't pay for these.
-        from app.voice.asr.whisper_hf import WhisperHFASR
-
-        # model_path is REQUIRED for whisper_hf — the
-        # WhisperHFASR class itself raises ASRError on
-        # empty model_path, but we fail earlier here with
-        # a clearer ValueError so the user sees a startup
-        # error rather than a warmup error.
-        if not config.model_path:
-            raise ValueError(
-                "voice.asr.model_path is required when "
-                "backend='whisper_hf'. Set it in config.toml "
-                "to the fine-tuned checkpoint directory, e.g.\n"
-                'model_path = "~/.gundam-halo/models/whisper-yue-base/"'
-            )
-
-        # Sprint 35 (Track 31-D): forward `device = "mlx"`
-        # to `inference_backend = "mlx"`. The factory is
-        # the single chokepoint where config→backend
-        # coupling lives; we keep the user's `device`
-        # config field as the canonical knob and translate
-        # to the backend's internal naming. Existing
-        # `device = "cpu" | "cuda" | "mps" | "auto"`
-        # values keep the default `inference_backend =
-        # "hf"` — no behaviour change.
-        inference_backend = "hf"
-        if config.device.lower() == "mlx":
-            inference_backend = "mlx"
-
-        return WhisperHFASR(
-            model_path=config.model_path,
-            language=config.language,
-            device=config.device,
-            compute_type=config.compute_type,
-            inference_backend=inference_backend,
-        )
-
-    raise ValueError(
-        f"Unknown ASR backend: {backend!r}. "
-        f"Supported: 'whisper_local' (Sprint 16), 'yuesub' (Sprint 17b), "
-        f"'whisper_hf' (Sprint 23 / v0.1.4, optional mlx backend in "
-        f"Sprint 35 / v0.1.5)."
+    return WhisperLocalASR(
+        model_size=config.model_size,
+        model_path=config.model_path,
+        language=config.language,
+        device=config.device,
+        compute_type=config.compute_type,
     )
+
+
+def _build_yuesub(config: VoiceASRConfig) -> ASRInterface:
+    from app.voice.asr.yuesub import YuesubASR
+
+    corrector = _build_corrector(config.corrector)
+
+    return YuesubASR(
+        language=config.language,
+        device=config.device,
+        corrector=corrector,
+    )
+
+
+def _build_whisper_hf(config: VoiceASRConfig) -> ASRInterface:
+    from app.voice.asr.whisper_hf import WhisperHFASR
+
+    # model_path is REQUIRED for whisper_hf — the
+    # WhisperHFASR class itself raises ASRError on
+    # empty model_path, but we fail earlier here with
+    # a clearer ValueError so the user sees a startup
+    # error rather than a warmup error.
+    if not config.model_path:
+        raise ValueError(
+            "voice.asr.model_path is required when "
+            "backend='whisper_hf'. Set it in config.toml "
+            "to the fine-tuned checkpoint directory, e.g.\n"
+            'model_path = "~/.gundam-halo/models/whisper-yue-base/"'
+        )
+
+    # Sprint 35 (Track 31-D): forward `device = "mlx"`
+    # to `inference_backend = "mlx"`. The factory is
+    # the single chokepoint where config→backend
+    # coupling lives; we keep the user's `device`
+    # config field as the canonical knob and translate
+    # to the backend's internal naming. Existing
+    # `device = "cpu" | "cuda" | "mps" | "auto"`
+    # values keep the default `inference_backend =
+    # "hf"` — no behaviour change.
+    inference_backend = "hf"
+    if config.device.lower() == "mlx":
+        inference_backend = "mlx"
+
+    return WhisperHFASR(
+        model_path=config.model_path,
+        language=config.language,
+        device=config.device,
+        compute_type=config.compute_type,
+        inference_backend=inference_backend,
+    )
+
+
+# Sprint 32 P0-1: registry dispatch table. Each entry maps
+# the backend key to a kwargs adapter (VoiceASRConfig → ASR instance).
+# The 3 adapters preserve the exact constructor signatures of
+# the original 3 if-elif branches.
+_ASR_KWARGS_ADAPTERS: Dict[str, Callable[[VoiceASRConfig], ASRInterface]] = {
+    "whisper_local": _build_whisper_local,
+    "yuesub": _build_yuesub,
+    "whisper_hf": _build_whisper_hf,
+}
 
 
 def _build_corrector(corrector_name: str):

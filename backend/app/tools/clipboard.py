@@ -15,11 +15,13 @@ import logging
 from typing import Any, Dict
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 from app.mac.clipboard import read_clipboard, write_clipboard
 
 logger = logging.getLogger(__name__)
 
 
+@register_tool("clipboard")
 class ClipboardTool(BaseTool):
     name = "clipboard"
     description = (

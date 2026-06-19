@@ -17,6 +17,7 @@ import logging
 from typing import Any, Dict
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 from app.mac.a11y import (
     a11y_app_processes,
     a11y_focused_app,
@@ -27,6 +28,7 @@ from app.mac.a11y import (
 logger = logging.getLogger(__name__)
 
 
+@register_tool("a11y")
 class A11yTool(BaseTool):
     name = "a11y"
     description = (

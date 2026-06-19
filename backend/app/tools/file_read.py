@@ -8,10 +8,12 @@ from typing import Any, Dict
 from app.mac.file_ops import read_file
 from app.mac.policy import check_path_read
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
 
+@register_tool("file_read")
 class FileReadTool(BaseTool):
     name = "file_read"
     description = (

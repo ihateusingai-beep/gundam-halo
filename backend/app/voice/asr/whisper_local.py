@@ -35,6 +35,7 @@ import tempfile
 import wave
 
 from app.voice.asr.asr_interface import ASRError, ASRInterface
+from app.core.registry import register_asr
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_WHISPER_CACHE = os.path.expanduser("~/.cache/whisper")
 
 
+@register_asr("whisper_local")
 class WhisperLocalASR(ASRInterface):
     """Local Whisper ASR via the `openai-whisper` package."""
 

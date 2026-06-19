@@ -43,6 +43,7 @@ from urllib.parse import unquote
 import httpx
 
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ class WebSearchError(RuntimeError):
     """Raised on DDG errors (timeout, non-200, parse failure)."""
 
 
+@register_tool("web_search")
 class WebSearchTool(BaseTool):
     """Search the web via DuckDuckGo's HTML endpoint.
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
+from app.core.registry import register_tts
 from app.voice.tts.tts_interface import TTSInterface, TTSResult
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class EdgeTTSError(RuntimeError):
     """Raised when Edge TTS synthesis fails (network, voice not found)."""
 
 
+@register_tts("edge")
 class EdgeTTS(TTSInterface):
     """Microsoft Edge TTS via the `edge-tts` Python package."""
 

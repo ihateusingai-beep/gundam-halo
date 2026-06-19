@@ -22,10 +22,12 @@ from typing import Any, Dict
 
 from app.bridge.mavis import MavisBridge
 from app.tools._stubs import BaseTool
+from app.core.registry import register_tool
 
 logger = logging.getLogger(__name__)
 
 
+@register_tool("mavis_delegate")
 class MavisDelegateTool(BaseTool):
     name = "mavis_delegate"
     description = (
