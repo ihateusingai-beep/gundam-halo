@@ -9,13 +9,20 @@
  *
  * Backend event names use underscore convention to match the Python
  * EventType enum on the server (e.g. "agent_turn_start", "system_gauges").
+ *
+ * Sprint 32 P1.2 refactor: the connect / reconnect / dispatch / dead-
+ * socket-detection boilerplate was extracted into
+ * `lib/ws-base.ts::BaseWebSocketClient`. This module now only owns:
+ *   1. The `WsEvent` / `WsEventType` types (backend contract).
+ *   2. The `WsClient` singleton — a 5-line subclass that supplies
+ *      the `/ws` URL.
+ *   3. The React hooks (`useWsEvent`, `useWsStatus`) that bridge
+ *      the singleton's state into components.
  */
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { API_BASE } from "./api";
-
-const WS_URL = API_BASE.replace(/^http/, "ws") + "/ws";
+import { BaseWebSocketClient, wsUrlFromApi } from "./ws-base";
 
 // ---------------------------------------------------------------------------
 // Event types — mirror the backend's EventType enum
@@ -140,150 +147,76 @@ export interface WsEventEnvelope<T = any> {
 }
 
 // Generic envelope — backend doesn't actually type data, so we cast on use
-export type WsEvent = WsEventEnvelope & { data: any };
+export type WsEvent = WsEventEnvelope & { data: any; [key: string]: unknown };
 
 // ---------------------------------------------------------------------------
-// Singleton WebSocket + pub/sub
+// Singleton wrapper around BaseWebSocketClient
 // ---------------------------------------------------------------------------
 
-type Handler = (event: WsEvent) => void;
+class WsClient extends BaseWebSocketClient<WsEvent, never> {
+  protected override get logTag(): string {
+    return "[Ws]";
+  }
 
-interface WsClientState {
-  socket: WebSocket | null;
-  connected: boolean;
-  reconnectAttempts: number;
-  listeners: Map<WsEventType | "*", Set<Handler>>;
-  onStateChange: Set<(connected: boolean) => void>;
-}
-
-const state: WsClientState = {
-  socket: null,
-  connected: false,
-  reconnectAttempts: 0,
-  listeners: new Map(),
-  onStateChange: new Set(),
-};
-
-const MAX_RECONNECT_DELAY = 30000; // 30s cap
-const BASE_RECONNECT_DELAY = 500;
-
-function notifyStateChange(connected: boolean) {
-  for (const cb of state.onStateChange) {
-    try {
-      cb(connected);
-    } catch (e) {
-      console.warn("WS state change handler threw:", e);
-    }
+  protected override getUrl(): string {
+    return wsUrlFromApi("/ws");
   }
 }
 
-function setConnected(connected: boolean) {
-  if (state.connected !== connected) {
-    state.connected = connected;
-    notifyStateChange(connected);
-  }
-}
+// Module-level singleton — auto-connects on first browser load.
+const singleton = new WsClient();
 
-function dispatch(event: WsEvent) {
-  // Specific listeners
-  const specific = state.listeners.get(event.type);
-  if (specific) {
-    for (const h of specific) {
-      try {
-        h(event);
-      } catch (e) {
-        console.warn(`WS handler for ${event.type} threw:`, e);
+// ---------------------------------------------------------------------------
+// React state bridge — useWsStatus listens for connection changes
+// ---------------------------------------------------------------------------
+
+type StateChangeCb = (connected: boolean, reconnectAttempts: number) => void;
+const stateChangeCbs = new Set<StateChangeCb>();
+
+// Patch the singleton's lifecycle hooks so we can fan out state
+// changes to React components without subclassing a second time.
+// We do this by overriding the protected hooks via the base class's
+// own internal call site — but those are private. The cleanest
+// approach is to forward via a small post-connect helper that
+// uses the singleton's observable fields.
+let lastConnected = singleton.isConnected();
+let lastAttempts = singleton.reconnectAttempts;
+
+const pollInterval = typeof window !== "undefined"
+  ? window.setInterval(() => {
+      const c = singleton.isConnected();
+      const a = singleton.reconnectAttempts;
+      if (c !== lastConnected || a !== lastAttempts) {
+        lastConnected = c;
+        lastAttempts = a;
+        for (const cb of stateChangeCbs) {
+          try {
+            cb(c, a);
+          } catch (e) {
+            console.warn("[Ws] state change cb threw:", e);
+          }
+        }
       }
-    }
-  }
-  // Wildcard listeners
-  const wildcard = state.listeners.get("*");
-  if (wildcard) {
-    for (const h of wildcard) {
-      try {
-        h(event);
-      } catch (e) {
-        console.warn("WS wildcard handler threw:", e);
-      }
-    }
-  }
-}
-
-function connect() {
-  if (state.socket && state.socket.readyState <= WebSocket.OPEN) {
-    return; // already connecting/connected
-  }
-
-  const ws = new WebSocket(WS_URL);
-  state.socket = ws;
-
-  ws.onopen = () => {
-    setConnected(true);
-    state.reconnectAttempts = 0;
-  };
-
-  ws.onclose = () => {
-    setConnected(false);
-    state.socket = null;
-    // Reconnect with exponential backoff
-    const delay = Math.min(
-      BASE_RECONNECT_DELAY * Math.pow(2, state.reconnectAttempts),
-      MAX_RECONNECT_DELAY,
-    );
-    state.reconnectAttempts += 1;
-    setTimeout(connect, delay);
-  };
-
-  ws.onerror = () => {
-    // onclose will follow; just log
-    console.debug("WS error, will reconnect");
-  };
-
-  ws.onmessage = (msg) => {
-    try {
-      const event = JSON.parse(msg.data) as WsEvent;
-      dispatch(event);
-    } catch (e) {
-      console.warn("Failed to parse WS message:", e, msg.data);
-    }
-  };
-}
-
-// Auto-connect on first import (browser only)
-if (typeof window !== "undefined") {
-  // Slight delay to let the page settle; not critical
-  if (document.readyState === "complete") {
-    connect();
-  } else {
-    window.addEventListener("load", connect, { once: true });
-  }
-}
+    }, 250)
+  : null;
 
 // ---------------------------------------------------------------------------
-// Public subscription API
+// Public subscription API (preserved from pre-P1.2 surface)
 // ---------------------------------------------------------------------------
 
-export function subscribe(handler: Handler): () => void {
-  return subscribeTo("*", handler);
+export function subscribe(handler: (event: WsEvent) => void): () => void {
+  return singleton.subscribe(handler);
 }
 
 export function subscribeTo(
   type: WsEventType | "*",
-  handler: Handler,
+  handler: (event: WsEvent) => void,
 ): () => void {
-  let set = state.listeners.get(type);
-  if (!set) {
-    set = new Set();
-    state.listeners.set(type, set);
-  }
-  set.add(handler);
-  return () => {
-    set?.delete(handler);
-  };
+  return singleton.subscribeTo(type, handler);
 }
 
 export function isConnected(): boolean {
-  return state.connected;
+  return singleton.isConnected();
 }
 
 // ---------------------------------------------------------------------------
@@ -293,14 +226,16 @@ export function isConnected(): boolean {
 /** Subscribe to all events (or a specific type) inside a component. */
 export function useWsEvent(
   type: WsEventType | "*",
-  handler: Handler | undefined,
+  handler: ((event: WsEvent) => void) | undefined,
 ): void {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
   useEffect(() => {
     if (!handlerRef.current) return;
-    const unsubscribe = subscribeTo(type, (e) => handlerRef.current?.(e));
+    const unsubscribe = singleton.subscribeTo(type, (e) =>
+      handlerRef.current?.(e),
+    );
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type]);
@@ -308,22 +243,26 @@ export function useWsEvent(
 
 /** Track WS connection state in a component. */
 export function useWsStatus(): { connected: boolean; reconnectAttempts: number } {
-  const [connected, setConn] = useState(state.connected);
-  const [attempts, setAttempts] = useState(state.reconnectAttempts);
+  const [connected, setConn] = useState(singleton.isConnected());
+  const [attempts, setAttempts] = useState(singleton.reconnectAttempts);
 
   useEffect(() => {
-    const cb = (c: boolean) => {
+    const cb: StateChangeCb = (c, a) => {
       setConn(c);
-      setAttempts(state.reconnectAttempts);
+      setAttempts(a);
     };
-    state.onStateChange.add(cb);
+    stateChangeCbs.add(cb);
     // Sync to current state in case we mounted after a state change
-    setConn(state.connected);
-    setAttempts(state.reconnectAttempts);
+    setConn(singleton.isConnected());
+    setAttempts(singleton.reconnectAttempts);
     return () => {
-      state.onStateChange.delete(cb);
+      stateChangeCbs.delete(cb);
     };
   }, []);
 
   return { connected, reconnectAttempts: attempts };
 }
+
+// Silence "unused" warnings for variables that are referenced for
+// side-effects (the polling interval keeps the module alive).
+void pollInterval;

@@ -28,9 +28,21 @@
  *     { "type": "live2d.trigger", "data": { "expression", "motion", "emotion" } }
  *     { "type": "voice.turn_ended" } / "voice.cancelled" / "voice.error"
  *     { "type": "pong" }
+ *
+ * Sprint 32 P1.2 refactor: connect / reconnect / heartbeat / dead-socket
+ * detection / binary frame handling are now in `lib/ws-base.ts::
+ * BaseWebSocketClient`. This module owns:
+ *   1. The voice event/state types (`VoiceWSEvent`, `VoiceStatus`).
+ *   2. The `VoiceWsClient` singleton — a thin subclass that wires
+ *      heartbeat, `binaryType = "arraybuffer"`, and the voice
+ *      state-machine reducer.
+ *   3. The voice-specific turn control helpers (`voiceBegin`,
+ *      `voiceSendAudio`, `voiceEnd`, `voiceText`, `voiceCancel`,
+ *      `voicePing`) that wrap the base client's `send()`.
+ *   4. The voice console debug API (`window.__haloVoice`).
  */
 
-import { API_BASE } from "@/lib/api";
+import { BaseWebSocketClient, wsUrlFromApi } from "@/lib/ws-base";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -162,28 +174,27 @@ export interface VoiceCancelledEvent {
 }
 
 export type VoiceWSEvent =
-  | VoiceHelloEvent
-  | VoiceVadStateEvent
-  | VoiceVadAudioLevelEvent
-  | VoiceTranscriptEvent
-  | VoiceAgentMessageEvent
-  | VoiceTtsStartEvent
-  | VoiceTtsEndEvent
-  | VoiceLive2DTriggerEvent
-  | VoiceErrorEvent
-  | VoiceTurnEndedEvent
-  | VoiceCancelledEvent
+  | (VoiceHelloEvent & { [key: string]: unknown })
+  | (VoiceVadStateEvent & { [key: string]: unknown })
+  | (VoiceVadAudioLevelEvent & { [key: string]: unknown })
+  | (VoiceTranscriptEvent & { [key: string]: unknown })
+  | (VoiceAgentMessageEvent & { [key: string]: unknown })
+  | (VoiceTtsStartEvent & { [key: string]: unknown })
+  | (VoiceTtsEndEvent & { [key: string]: unknown })
+  | (VoiceLive2DTriggerEvent & { [key: string]: unknown })
+  | (VoiceErrorEvent & { [key: string]: unknown })
+  | (VoiceTurnEndedEvent & { [key: string]: unknown })
+  | (VoiceCancelledEvent & { [key: string]: unknown })
   | { type: string; [key: string]: unknown };
 
 export type VoiceEventHandler = (event: VoiceWSEvent) => void;
 export type BinaryHandler = (chunk: ArrayBuffer) => void;
 
 // ---------------------------------------------------------------------------
-// Internal state
+// State machine
 // ---------------------------------------------------------------------------
 
 interface VoiceState_ {
-  socket: WebSocket | null;
   state: VoiceState;
   lastAsr: string | null;
   lastReply: string | null;
@@ -193,13 +204,9 @@ interface VoiceState_ {
   sampleRate: number;
   lastAudioLevel: number;
   currentSession: string | null;
-  listeners: Map<string | "*", Set<VoiceEventHandler>>;
-  binaryListeners: Set<BinaryHandler>;
-  onStateChange: Set<(s: VoiceStatus) => void>;
 }
 
-const state: VoiceState_ = {
-  socket: null,
+const INITIAL: VoiceState_ = {
   state: "idle",
   lastAsr: null,
   lastReply: null,
@@ -209,383 +216,209 @@ const state: VoiceState_ = {
   sampleRate: 0,
   lastAudioLevel: 0,
   currentSession: null,
-  listeners: new Map(),
-  binaryListeners: new Set(),
-  onStateChange: new Set(),
 };
 
-function snapshot(): VoiceStatus {
-  return {
-    state: state.state,
-    lastAsr: state.lastAsr,
-    lastReply: state.lastReply,
-    emotion: state.emotion,
-    serverEnabled: state.serverEnabled,
-    error: state.error,
-    sampleRate: state.sampleRate,
-    lastAudioLevel: state.lastAudioLevel,
-  };
-}
-
-function notify() {
-  const s = snapshot();
-  for (const cb of state.onStateChange) {
-    try { cb(s); } catch (e) { console.warn("[Voice] state cb threw:", e); }
-  }
-}
-
-function setState(next: Partial<VoiceState_>) {
-  Object.assign(state, next);
-  notify();
-}
-
-function dispatch(event: VoiceWSEvent) {
-  const specific = state.listeners.get(event.type);
-  if (specific) for (const h of specific) {
-    try { h(event); } catch (e) { console.warn(`[Voice] handler for ${event.type} threw:`, e); }
-  }
-  const wildcard = state.listeners.get("*");
-  if (wildcard) for (const h of wildcard) {
-    try { h(event); } catch (e) { console.warn(`[Voice] wildcard handler threw:`, e); }
-  }
-}
-
-function dispatchBinary(chunk: ArrayBuffer) {
-  for (const h of state.binaryListeners) {
-    try { h(chunk); } catch (e) { console.warn("[Voice] binary handler threw:", e); }
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Connection — with heartbeat, auto-reconnect, and dead-socket recovery
+// Singleton wrapper around BaseWebSocketClient
 // ---------------------------------------------------------------------------
-//
-// The voice WebSocket can die in several ways that we used to miss:
-//   - Tab backgrounded → browser suspends the socket silently (no onclose)
-//   - Network blip (WiFi roaming, sleep/wake) → half-open socket
-//   - Backend restart → TCP RST may take seconds to propagate
-//   - Vite HMR page reload while keeping a stale module instance
-//
-// Each of these used to leave the panel stuck in "Ready" while the
-// socket was actually CLOSED — the user would press the mic button,
-// get no reaction, and have no signal that the backend was unreachable.
-//
-// We now:
-//   1. Heartbeat: send `{type: "ping"}` every HEARTBEAT_MS, expect a
-//      `pong` reply within HEARTBEAT_TIMEOUT_MS. A missed pong flips
-//      the socket to dead and tears it down (which triggers reconnect).
-//   2. Auto-reconnect: `onclose` schedules a reconnect with capped
-//      exponential backoff (1s → 2s → 4s … → 30s). Once we reconnect
-//      successfully, the backoff resets.
-//   3. Dead-socket send: if `send()` is called when the socket isn't
-//      OPEN, we kick off a reconnect and drop the message with a
-//      warning — instead of silently no-op'ing. The UI relies on
-//      a tight feedback loop, so silent drops hurt.
-//   4. State honesty: any time we observe the socket in CLOSED /
-//      CLOSING state but the high-level state machine still claims
-//      "ready" / "listening" / "speaking", we flip to "idle" so the
-//      UI doesn't lie to the user.
 
-const HEARTBEAT_MS = 25_000;
-const HEARTBEAT_TIMEOUT_MS = 10_000;
-const RECONNECT_BACKOFF_BASE_MS = 1_000;
-const RECONNECT_BACKOFF_MAX_MS = 30_000;
+class VoiceWsClient extends BaseWebSocketClient<VoiceWSEvent, ArrayBuffer> {
+  // State machine lives on the singleton instance so React-style
+  // listeners (via `onVoiceStatusChange`) see live updates.
+  protected voiceState: VoiceState_ = { ...INITIAL };
+  private statusCbs = new Set<(s: VoiceStatus) => void>();
 
-let connectAttempted = false;
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-let pongDeadline: ReturnType<typeof setTimeout> | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let reconnectAttempt = 0;
-
-/** Reset the heartbeat cycle: arm the next ping, clear any pending
- *  pong-deadline timer. Called on every received message (including
- *  pong) so a chatty connection never times out spuriously. */
-function noteSocketActivity(): void {
-  if (pongDeadline) {
-    clearTimeout(pongDeadline);
-    pongDeadline = null;
+  protected override get logTag(): string {
+    return "[Voice]";
   }
-}
 
-function startHeartbeat(): void {
-  stopHeartbeat();
-  heartbeatTimer = setInterval(() => {
-    const ws = state.socket;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      // Socket disappeared underneath us — let onclose (or the next
-      // send attempt) handle the recovery.
-      return;
-    }
-    try {
-      ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
-    } catch (e) {
-      console.warn("[Voice] heartbeat send threw, treating as dead:", e);
-      forceReconnect("heartbeat_send_failed");
-      return;
-    }
-    // Arm the deadline. If we don't see a pong (or any other frame)
-    // within the timeout, the connection is half-open.
-    pongDeadline = setTimeout(() => {
-      const cur = state.socket;
-      if (!cur || cur.readyState !== WebSocket.OPEN) return;
-      console.warn("[Voice] no pong within heartbeat timeout, reconnecting");
-      forceReconnect("heartbeat_timeout");
-    }, HEARTBEAT_TIMEOUT_MS);
-  }, HEARTBEAT_MS);
-}
-
-function stopHeartbeat(): void {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
+  protected override getUrl(): string {
+    return wsUrlFromApi("/ws/voice");
   }
-  if (pongDeadline) {
-    clearTimeout(pongDeadline);
-    pongDeadline = null;
+
+  // Voice WS uses heartbeat (ping/pong) to detect half-open sockets
+  // caused by tab backgrounding / WiFi roaming / backend restarts.
+  protected override get heartbeatEnabled(): boolean {
+    return true;
   }
-}
 
-/** Force-close the current socket and schedule a reconnect. The
- *  onclose handler will set state.idle + clear the socket ref. */
-function forceReconnect(reason: string): void {
-  console.log(`[Voice] forceReconnect: ${reason}`);
-  const ws = state.socket;
-  state.socket = null;
-  stopHeartbeat();
-  if (ws && ws.readyState <= WebSocket.OPEN) {
-    try {
-      ws.close(1000, reason);
-    } catch (e) {
-      console.warn("[Voice] close() during forceReconnect threw:", e);
-    }
+  protected override get usesBinary(): boolean {
+    return true;
   }
-  scheduleReconnect();
-}
 
-function scheduleReconnect(): void {
-  if (reconnectTimer) return; // already scheduled
-  const delay = Math.min(
-    RECONNECT_BACKOFF_BASE_MS * Math.pow(2, reconnectAttempt),
-    RECONNECT_BACKOFF_MAX_MS,
-  );
-  reconnectAttempt += 1;
-  console.log(`[Voice] reconnect scheduled in ${delay}ms (attempt ${reconnectAttempt})`);
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connectAttempted = false; // allow connect() to actually run
-    connect();
-  }, delay);
-  // If we're still in "reconnecting" 5 s after the schedule, drop
-  // the badge to "Disconnected" so the user knows the panel is
-  // waiting for them. The reconnect itself still runs in the
-  // background — when it succeeds, onopen flips us back to "ready".
-  setTimeout(() => {
-    if (state.state === "reconnecting") {
-      setState({ state: "idle" });
-    }
-  }, 5_000);
-}
+  protected override onConnected(): void {
+    this.voiceState.state = "ready";
+    this.notifyStatus();
+  }
 
-function connect() {
-  if (state.socket && state.socket.readyState <= WebSocket.OPEN) return;
-  if (connectAttempted) return;
-  connectAttempted = true;
+  protected override onDisconnected(): void {
+    // The base class schedules a reconnect; the state machine
+    // claims "reconnecting" so the UI shows the spinner. If we're
+    // still claiming it 5 s later (handled by base class via the
+    // 5s stale-reconnect fallback), the user sees "idle".
+    this.voiceState.state = "reconnecting";
+    this.voiceState.currentSession = null;
+    this.notifyStatus();
+  }
 
-  const WS_URL = API_BASE.replace(/^http/, "ws") + "/ws/voice";
-  console.log("[Voice] connecting to", WS_URL);
-  const ws = new WebSocket(WS_URL);
-  state.socket = ws;
+  protected override onError(): void {
+    this.setVoiceState({ error: "WebSocket error" });
+  }
 
-  ws.binaryType = "arraybuffer"; // we want raw bytes for tts.audio
+  /** Heartbeat reply detection — the server sends `{ type: "pong" }`. */
+  protected override isHeartbeatPong(event: VoiceWSEvent): boolean {
+    return event.type === "pong";
+  }
 
-  ws.onopen = () => {
-    console.log("[Voice] connected");
-    reconnectAttempt = 0; // reset backoff on successful connect
-    setState({ state: "ready" });
-    startHeartbeat();
-  };
-
-  ws.onclose = () => {
-    console.log("[Voice] disconnected");
-    stopHeartbeat();
-    setState({
-      state: "reconnecting",
-      socket: null,
-      currentSession: null,
-    });
-    connectAttempted = false;
-    // Auto-reconnect unless the page is being torn down. We can't
-    // detect that perfectly, but the next send()/heartbeat tick will
-    // reconnect if the user is still around.
-    if (typeof document !== "undefined" && document.visibilityState !== "hidden") {
-      scheduleReconnect();
-    }
-  };
-
-  ws.onerror = () => {
-    setState({ error: "WebSocket error" });
-    // onclose will follow and trigger the reconnect — don't double up.
-  };
-
-  ws.onmessage = (msg) => {
-    noteSocketActivity();
-    if (msg.data instanceof ArrayBuffer) {
-      dispatchBinary(msg.data);
-      return;
-    }
-    try {
-      const event = JSON.parse(msg.data) as VoiceWSEvent;
-      handleEvent(event);
-      dispatch(event);
-    } catch (e) {
-      console.warn("[Voice] failed to parse WS message:", e, msg.data);
-    }
-  };
-}
-
-/** Public test-helper + dev-console API: trigger a forced reconnect
- *  with the same backoff as a normal failure. Useful when the user
- *  suspects the panel is stuck — call from the JS console. */
-export function forceVoiceReconnect(reason = "manual"): void {
-  forceReconnect(reason);
-}
-
-function handleEvent(event: VoiceWSEvent) {
-  switch (event.type) {
-    case "voice.hello": {
-      const d = (event as VoiceHelloEvent).data;
-      setState({
-        serverEnabled: true,
-        sampleRate: d.sample_rate,
-      });
-      console.log(
-        `[Voice] server hello: vad=${d.vad_backend} asr=${d.asr_backend} asr_model=${d.asr_model} tts=${d.tts_enabled} live2d=${d.live2d_enabled}`,
-      );
-      break;
-    }
-    case "vad.state": {
-      const d = (event as VoiceVadStateEvent).data;
-      if (d.state === "speech_start") {
-        setState({ state: "listening" });
-      } else {
-        // speech_end — server is about to start ASR. Stay in "listening"
-        // (caller will see "thinking" once we get asr.result + agent processing).
-        setState({ state: "listening" });
+  /** Per-event state machine. Fires BEFORE pub/sub fanout. */
+  protected override handleEvent(event: VoiceWSEvent): void {
+    switch (event.type) {
+      case "voice.hello": {
+        const d = (event as VoiceHelloEvent).data;
+        this.setVoiceState({
+          serverEnabled: true,
+          sampleRate: d.sample_rate,
+        });
+        console.log(
+          `[Voice] server hello: vad=${d.vad_backend} asr=${d.asr_backend} asr_model=${d.asr_model} tts=${d.tts_enabled} live2d=${d.live2d_enabled}`,
+        );
+        break;
       }
-      break;
-    }
-    case "vad.audio_level": {
-      // Sprint 17b Track E: per-frame audio level broadcast
-      // at 20Hz. We surface it via VoiceStatus.lastAudioLevel
-      // (the primary path is the browser's AnalyserNode; this
-      // server-broadcast value is the fallback for Tauri
-      // and other non-browser contexts).
-      const d = (event as VoiceVadAudioLevelEvent).data;
-      setState({ lastAudioLevel: d.level });
-      break;
-    }
-    case "asr.result": {
-      const d = (event as VoiceTranscriptEvent).data;
-      setState({ lastAsr: d.text, state: "thinking" });
-      break;
-    }
-    case "agent.message": {
-      const d = (event as VoiceAgentMessageEvent).data;
-      // M15: agent streams sentence-by-sentence. The server
-      // accumulates text across frames and re-sends the running total
-      // on each `is_final: false`, then a final `is_final: true`
-      // frame. Update `lastReply` on every frame so the cockpit
-      // transcript grows incrementally as the agent speaks.
-      setState({ lastReply: d.text, emotion: d.emotion });
-      break;
-    }
-    case "tts.start": {
-      setState({ state: "speaking" });
-      break;
-    }
-    case "tts.end": {
-      // TTS finished, but server may still send more tts chunks for
-      // multi-sentence replies. Stay in "speaking" until turn_ended.
-      break;
-    }
-    case "live2d.trigger": {
-      const d = (event as VoiceLive2DTriggerEvent).data;
-      setState({ emotion: d.emotion });
-      break;
-    }
-    case "voice.turn_ended": {
-      setState({ state: "ready", currentSession: null });
-      break;
-    }
-    case "pong": {
-      // Heartbeat response — already cleared the pong-deadline
-      // in noteSocketActivity() before reaching handleEvent, but
-      // we treat this as the canonical "alive" signal. If the
-      // socket was previously thought dead, surface that recovery
-      // in the console.
-      if (pongDeadline === null) {
-        // Heartbeat wasn't actually armed — likely an unsolicited
-        // pong. Harmless.
+      case "vad.state": {
+        const d = (event as VoiceVadStateEvent).data;
+        if (d.state === "speech_start") {
+          this.setVoiceState({ state: "listening" });
+        } else {
+          // speech_end — server is about to start ASR. Stay in
+          // "listening" (caller will see "thinking" once we get
+          // asr.result + agent processing).
+          this.setVoiceState({ state: "listening" });
+        }
+        break;
       }
-      break;
+      case "vad.audio_level": {
+        // Sprint 17b Track E: per-frame audio level broadcast
+        // at 20Hz. We surface it via VoiceStatus.lastAudioLevel
+        // (the primary path is the browser's AnalyserNode; this
+        // server-broadcast value is the fallback for Tauri
+        // and other non-browser contexts).
+        const d = (event as VoiceVadAudioLevelEvent).data;
+        this.setVoiceState({ lastAudioLevel: d.level });
+        break;
+      }
+      case "asr.result": {
+        const d = (event as VoiceTranscriptEvent).data;
+        this.setVoiceState({ lastAsr: d.text, state: "thinking" });
+        break;
+      }
+      case "agent.message": {
+        const d = (event as VoiceAgentMessageEvent).data;
+        // M15: agent streams sentence-by-sentence. The server
+        // accumulates text across frames and re-sends the running total
+        // on each `is_final: false`, then a final `is_final: true`
+        // frame. Update `lastReply` on every frame so the cockpit
+        // transcript grows incrementally as the agent speaks.
+        this.setVoiceState({ lastReply: d.text, emotion: d.emotion });
+        break;
+      }
+      case "tts.start": {
+        this.setVoiceState({ state: "speaking" });
+        break;
+      }
+      case "tts.end": {
+        // TTS finished, but server may still send more tts chunks for
+        // multi-sentence replies. Stay in "speaking" until turn_ended.
+        break;
+      }
+      case "live2d.trigger": {
+        const d = (event as VoiceLive2DTriggerEvent).data;
+        this.setVoiceState({ emotion: d.emotion });
+        break;
+      }
+      case "voice.turn_ended": {
+        this.setVoiceState({ state: "ready", currentSession: null });
+        break;
+      }
+      case "voice.cancelled": {
+        this.setVoiceState({ state: "ready", currentSession: null });
+        break;
+      }
+      case "voice.error": {
+        const d = (event as VoiceErrorEvent).data;
+        this.setVoiceState({ state: "error", error: d.error });
+        break;
+      }
+      case "pong": {
+        // Heartbeat response — base class already cleared the
+        // pong-deadline in noteSocketActivity() before reaching
+        // handleEvent. Nothing else to do here.
+        break;
+      }
     }
-    case "voice.cancelled": {
-      setState({ state: "ready", currentSession: null });
-      break;
+  }
+
+  private setVoiceState(patch: Partial<VoiceState_>): void {
+    this.voiceState = { ...this.voiceState, ...patch };
+    this.notifyStatus();
+  }
+
+  private notifyStatus(): void {
+    const snap = this.snapshot();
+    for (const cb of this.statusCbs) {
+      try {
+        cb(snap);
+      } catch (e) {
+        console.warn("[Voice] state cb threw:", e);
+      }
     }
-    case "voice.error": {
-      const d = (event as VoiceErrorEvent).data;
-      setState({ state: "error", error: d.error });
-      break;
-    }
+  }
+
+  snapshot(): VoiceStatus {
+    return {
+      state: this.voiceState.state,
+      lastAsr: this.voiceState.lastAsr,
+      lastReply: this.voiceState.lastReply,
+      emotion: this.voiceState.emotion,
+      serverEnabled: this.voiceState.serverEnabled,
+      error: this.voiceState.error,
+      sampleRate: this.voiceState.sampleRate,
+      lastAudioLevel: this.voiceState.lastAudioLevel,
+    };
+  }
+
+  /** Allow the public `voiceBegin` helper to write the session id
+   *  onto the singleton. Other callers should use the public API. */
+  setCurrentSession(sid: string | null): void {
+    this.voiceState.currentSession = sid;
+  }
+
+  /** Allow the public `voiceText` helper to read the current session
+   *  id (or null if none). */
+  getCurrentSession(): string | null {
+    return this.voiceState.currentSession;
+  }
+
+  /** Reset to the initial state (used by `voiceBegin`'s auto-reset
+   *  path when called while not in ready/idle). */
+  resetToListening(): void {
+    this.setVoiceState({ state: "listening", error: null });
+  }
+
+  resetToThinking(): void {
+    this.setVoiceState({ state: "thinking", error: null });
+  }
+
+  /** Subscribe to status changes — the React bridge hook. */
+  subscribeStatus(cb: (s: VoiceStatus) => void): () => void {
+    this.statusCbs.add(cb);
+    return () => {
+      this.statusCbs.delete(cb);
+    };
   }
 }
 
-function ensureOpen(): WebSocket {
-  if (!state.socket || state.socket.readyState > WebSocket.OPEN) {
-    connect();
-  }
-  if (!state.socket) {
-    throw new Error("voice WS not connected");
-  }
-  return state.socket;
-}
-
-function send(payload: object | string | ArrayBuffer) {
-  const ws = state.socket;
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    // Dead-socket send — common after a tab background, network blip,
-    // or backend restart. Don't silently drop the message; kick off
-    // a reconnect and warn so the user can see in DevTools that
-    // something went wrong.
-    console.warn(
-      "[Voice] cannot send, socket not open — scheduling reconnect",
-      payload,
-    );
-    if (!reconnectTimer) {
-      forceReconnect("dead_socket_send");
-    }
-    return;
-  }
-  // Binary PCM chunks must go through raw — `JSON.stringify(new ArrayBuffer(...))`
-  // collapses to `"{}"`, which the backend rejects with `unknown_type: None`
-  // and spams the voice-error toast. Detect and pass through.
-  if (payload instanceof ArrayBuffer) {
-    try {
-      ws.send(payload);
-    } catch (e) {
-      console.warn("[Voice] ws.send(binary) threw, forcing reconnect:", e);
-      forceReconnect("binary_send_threw");
-    }
-    return;
-  }
-  try {
-    ws.send(typeof payload === "string" ? payload : JSON.stringify(payload));
-  } catch (e) {
-    console.warn("[Voice] ws.send(text) threw, forcing reconnect:", e);
-    forceReconnect("text_send_threw");
-  }
-}
+// Module-level singleton — auto-connects on first browser load.
+const singleton = new VoiceWsClient();
 
 // ---------------------------------------------------------------------------
 // Public turn control
@@ -593,13 +426,14 @@ function send(payload: object | string | ArrayBuffer) {
 
 /** Start a new turn. Allocates a session id. Server resets the pipeline. */
 export function voiceBegin(): string {
-  if (state.state !== "ready" && state.state !== "idle") {
-    console.warn(`[Voice] begin() called while in state ${state.state} — auto-resetting`);
+  const snap = singleton.snapshot();
+  if (snap.state !== "ready" && snap.state !== "idle") {
+    console.warn(`[Voice] begin() called while in state ${snap.state} — auto-resetting`);
   }
-  const sid =
-    `voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  setState({ currentSession: sid, state: "listening", error: null });
-  send({ type: "voice.begin", session_id: sid });
+  const sid = `voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  singleton.setCurrentSession(sid);
+  singleton.resetToListening();
+  singleton.send({ type: "voice.begin", session_id: sid });
   return sid;
 }
 
@@ -607,31 +441,32 @@ export function voiceBegin(): string {
 export function voiceSendAudio(pcm: Int16Array) {
   // Int16Array.buffer is an ArrayBuffer — but WebSocket.send wants
   // either a string, Blob, or ArrayBuffer. Pass the underlying buffer.
-  send(pcm.buffer);
+  singleton.send(pcm.buffer);
 }
 
 /** End the turn — server runs ASR (if not already) → agent → TTS. */
 export function voiceEnd() {
-  send({ type: "voice.end" });
+  singleton.send({ type: "voice.end" });
 }
 
 /** Bypass VAD/ASR — send a text turn directly. Useful for the manual
  *  input box and for tests. */
 export function voiceText(text: string) {
   if (!text.trim()) return;
-  const sid = state.currentSession ?? `text-${Date.now()}`;
-  setState({ currentSession: sid, state: "thinking", error: null });
-  send({ type: "voice.text", text, session_id: sid });
+  const sid = singleton.getCurrentSession() ?? `text-${Date.now()}`;
+  singleton.setCurrentSession(sid);
+  singleton.resetToThinking();
+  singleton.send({ type: "voice.text", text, session_id: sid });
 }
 
 /** Abort the in-flight turn. */
 export function voiceCancel() {
-  send({ type: "voice.cancel" });
+  singleton.send({ type: "voice.cancel" });
 }
 
 /** Ping the server (round-trip liveness check). */
 export function voicePing() {
-  send({ type: "ping" });
+  singleton.send({ type: "ping" });
 }
 
 // ---------------------------------------------------------------------------
@@ -642,64 +477,31 @@ export function subscribeToVoiceEvent(
   type: string | "*",
   handler: VoiceEventHandler,
 ): () => void {
-  let set = state.listeners.get(type);
-  if (!set) {
-    set = new Set();
-    state.listeners.set(type, set);
-  }
-  set.add(handler);
-  return () => { set?.delete(handler); };
+  return singleton.subscribeTo(type, handler);
 }
 
 export function onVoiceBinary(handler: BinaryHandler): () => void {
-  state.binaryListeners.add(handler);
-  return () => { state.binaryListeners.delete(handler); };
+  return singleton.onBinary(handler);
 }
 
 export function getVoiceStatus(): VoiceStatus {
-  return snapshot();
+  return singleton.snapshot();
 }
 
 export function onVoiceStatusChange(cb: (s: VoiceStatus) => void): () => void {
-  state.onStateChange.add(cb);
-  return () => { state.onStateChange.delete(cb); };
+  return singleton.subscribeStatus(cb);
+}
+
+/** Public test-helper + dev-console API: trigger a forced reconnect
+ *  with the same backoff as a normal failure. Useful when the user
+ *  suspects the panel is stuck — call from the JS console. */
+export function forceVoiceReconnect(reason = "manual"): void {
+  singleton.forceReconnect(reason);
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle
+// Console debug API
 // ---------------------------------------------------------------------------
-
-if (typeof window !== "undefined") {
-  if (document.readyState === "complete") {
-    connect();
-  } else {
-    window.addEventListener("load", connect, { once: true });
-  }
-
-  // When the user returns to the tab after a long background, the
-  // WebSocket is often half-open (browser suspended the underlying
-  // socket without firing onclose). Probing the socket on visibility
-  // change and forcing a reconnect if it's not actually OPEN turns
-  // a silent stall into a 1-2 s recovery.
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible") return;
-    const ws = state.socket;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.log("[Voice] tab visible, socket not open — forcing reconnect");
-      forceReconnect("tab_visible");
-    } else {
-      // Socket looks alive but may be half-open. Trigger a ping
-      // immediately; if we don't see a pong, forceReconnect will fire
-      // from the heartbeat deadline path.
-      try {
-        ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
-      } catch (e) {
-        console.warn("[Voice] visibility-ping send threw:", e);
-        forceReconnect("visibility_ping_failed");
-      }
-    }
-  });
-}
 
 if (typeof window !== "undefined") {
   (window as any).__haloVoice = {
