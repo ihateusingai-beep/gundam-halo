@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from app.api import voice_ws
+from app.api import voice_ws, ws_protocol
 from app.core import config as _config_module
 from app.core.registry import ToolRegistry
 from app.voice.halo_responder import HaloResponder
@@ -36,8 +36,8 @@ def voice_m2_app(monkeypatch):
     from app.voice.vad import vad_factory
     monkeypatch.setattr(vad_factory, "create_vad", lambda config=None: fake_vad)
     monkeypatch.setattr(asr_factory, "create_asr", lambda config=None: fake_asr)
-    monkeypatch.setattr(voice_ws, "create_vad", lambda config=None: fake_vad)
-    monkeypatch.setattr(voice_ws, "create_asr", lambda config=None: fake_asr)
+    monkeypatch.setattr(ws_protocol, "create_vad", lambda config=None: fake_vad)
+    monkeypatch.setattr(ws_protocol, "create_asr", lambda config=None: fake_asr)
 
     # Build a HaloResponder with the fakes and inject it
     responder = HaloResponder(tts=fake_tts, live2d=fake_live2d)

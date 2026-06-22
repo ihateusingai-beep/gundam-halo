@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from app.api import voice_ws
+from app.api import voice_ws, ws_protocol
 from app.core import config as _config_module
 from app.core.registry import ToolRegistry
 from fastapi.testclient import TestClient
@@ -51,10 +51,10 @@ def voice_enabled_app(monkeypatch):
     monkeypatch.setattr(live2d_factory, "create_live2d", lambda config=None: None)
     # voice_ws imports these via `from app.voice.asr.asr_factory import create_asr`
     # so the bound name lives on voice_ws itself:
-    monkeypatch.setattr(voice_ws, "create_vad", lambda config=None: fake_vad)
-    monkeypatch.setattr(voice_ws, "create_asr", lambda config=None: fake_asr)
-    monkeypatch.setattr(voice_ws, "create_tts", lambda config=None: None)
-    monkeypatch.setattr(voice_ws, "create_live2d", lambda config=None: None)
+    monkeypatch.setattr(ws_protocol, "create_vad", lambda config=None: fake_vad)
+    monkeypatch.setattr(ws_protocol, "create_asr", lambda config=None: fake_asr)
+    monkeypatch.setattr(ws_protocol, "create_tts", lambda config=None: None)
+    monkeypatch.setattr(ws_protocol, "create_live2d", lambda config=None: None)
 
     cfg = _config_module.get_config()
     original = cfg.voice.enabled

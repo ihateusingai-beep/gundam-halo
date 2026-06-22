@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from app.api import voice_ws
+from app.api import restart_handler, voice_ws, ws_protocol
 from app.core import config as _config_module
 from app.core.registry import ToolRegistry
 from fastapi.testclient import TestClient
@@ -59,12 +59,15 @@ def voice_enabled_app(monkeypatch):
     monkeypatch.setattr(asr_factory, "create_asr", lambda config=None: fake_asr)
     monkeypatch.setattr(tts_factory, "create_tts", lambda config=None: None)
     monkeypatch.setattr(live2d_factory, "create_live2d", lambda config=None: None)
-    # voice_ws imports these by name — patch the bound name on the
-    # voice_ws module too so the in-process create_app uses fakes.
-    monkeypatch.setattr(voice_ws, "create_vad", lambda config=None: fake_vad)
-    monkeypatch.setattr(voice_ws, "create_asr", lambda config=None: fake_asr)
-    monkeypatch.setattr(voice_ws, "create_tts", lambda config=None: None)
-    monkeypatch.setattr(voice_ws, "create_live2d", lambda config=None: None)
+    # ws_protocol imports these by name — patch the bound name on
+    # the ws_protocol module too so the in-process create_app
+    # uses fakes. (Sprint 32 P1.1 split voice_ws into ws_protocol +
+    # voice_config_api + voice_pipeline_handler + restart_handler;
+    # the imports now live in ws_protocol.)
+    monkeypatch.setattr(ws_protocol, "create_vad", lambda config=None: fake_vad)
+    monkeypatch.setattr(ws_protocol, "create_asr", lambda config=None: fake_asr)
+    monkeypatch.setattr(ws_protocol, "create_tts", lambda config=None: None)
+    monkeypatch.setattr(ws_protocol, "create_live2d", lambda config=None: None)
 
     cfg = _config_module.get_config()
     original = cfg.voice.enabled
@@ -124,7 +127,7 @@ def _set_asr(backend: str, corrector: str) -> None:
     cfg = _config_module.get_config()
     cfg.voice.asr.backend = backend
     cfg.voice.asr.corrector = corrector
-    voice_ws._voice_restart_required = False
+    restart_handler._voice_restart_required = False
 
 
 def _reset_home_to_tmp(monkeypatch, tmp_path: Path) -> Path:
@@ -195,10 +198,10 @@ def test_put_voice_config_asr_backend_change_flips_restart(voice_client, monkeyp
         assert data["restart_required"] is True
         # The flag should also be readable via the helper so the
         # next GET /voice/config returns it.
-        assert voice_ws._voice_restart_required_flag() is True
+        assert restart_handler._voice_restart_required_flag() is True
     finally:
         _set_asr(backend="whisper_local", corrector="bert")
-        voice_ws._voice_restart_required = False
+        restart_handler._voice_restart_required = False
 
 
 def test_put_voice_config_asr_corrector_change_flips_restart(voice_client, monkeypatch, tmp_path):
@@ -220,7 +223,7 @@ def test_put_voice_config_asr_corrector_change_flips_restart(voice_client, monke
         assert data["restart_required"] is True
     finally:
         _set_asr(backend="whisper_local", corrector="bert")
-        voice_ws._voice_restart_required = False
+        restart_handler._voice_restart_required = False
 
 
 def test_put_voice_config_same_asr_value_does_not_flip_restart(voice_client, monkeypatch, tmp_path):
@@ -243,7 +246,7 @@ def test_put_voice_config_same_asr_value_does_not_flip_restart(voice_client, mon
         assert data["restart_required"] is False
     finally:
         _set_asr(backend="whisper_local", corrector="bert")
-        voice_ws._voice_restart_required = False
+        restart_handler._voice_restart_required = False
 
 
 def test_put_voice_config_invalid_asr_backend_returns_400(voice_client, monkeypatch, tmp_path):
@@ -330,7 +333,7 @@ def test_get_voice_config_reflects_restart_required_flag(voice_client, monkeypat
         assert data["asr_backend"] == "yuesub"
     finally:
         _set_asr(backend="whisper_local", corrector="bert")
-        voice_ws._voice_restart_required = False
+        restart_handler._voice_restart_required = False
 
 
 def test_put_voice_config_clears_stale_restart_flag(voice_client, monkeypatch, tmp_path):
@@ -343,8 +346,8 @@ def test_put_voice_config_clears_stale_restart_flag(voice_client, monkeypatch, t
     _reset_home_to_tmp(monkeypatch, tmp_path)
     try:
         # 1) Set the flag via an asr change
-        voice_ws._voice_restart_required = True
-        assert voice_ws._voice_restart_required_flag() is True
+        restart_handler._voice_restart_required = True
+        assert restart_handler._voice_restart_required_flag() is True
 
         # 2) PUT with no asr fields, same wake_phrases + strict
         resp = voice_client.put("/voice/config", json={
@@ -353,12 +356,12 @@ def test_put_voice_config_clears_stale_restart_flag(voice_client, monkeypatch, t
         })
         assert resp.status_code == 200
         # The flag should now be cleared (no asr change in this PUT)
-        assert voice_ws._voice_restart_required_flag() is False
+        assert restart_handler._voice_restart_required_flag() is False
         data = resp.json()
         assert data["restart_required"] is False
     finally:
         _set_asr(backend="whisper_local", corrector="bert")
-        voice_ws._voice_restart_required = False
+        restart_handler._voice_restart_required = False
 
 
 def test_put_voice_config_persists_asr_to_toml(voice_client, monkeypatch, tmp_path):
@@ -404,7 +407,7 @@ def test_put_voice_config_persists_asr_to_toml(voice_client, monkeypatch, tmp_pa
         assert 'strict_wake_phrase = true' in text
     finally:
         _set_asr(backend="whisper_local", corrector="bert")
-        voice_ws._voice_restart_required = False
+        restart_handler._voice_restart_required = False
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +447,7 @@ def test_put_asr_change_returns_restart_scheduled_true(voice_client, monkeypatch
         assert restart_mod.is_restart_scheduled() is True
     finally:
         _set_asr(backend="whisper_local", corrector="bert")
-        voice_ws._voice_restart_required = False
+        restart_handler._voice_restart_required = False
         restart_mod._set_restart_scheduled(False, reason="test_cleanup")
 
 
@@ -476,7 +479,7 @@ def test_put_wake_phrases_only_returns_restart_scheduled_false(voice_client, mon
         assert restart_mod.is_restart_scheduled() is False
     finally:
         _set_asr(backend="whisper_local", corrector="bert")
-        voice_ws._voice_restart_required = False
+        restart_handler._voice_restart_required = False
         restart_mod._set_restart_scheduled(False, reason="test_cleanup")
 
 

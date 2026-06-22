@@ -1,0 +1,343 @@
+"""Voice REST endpoints — `/voice/status`, `/voice/config`.
+
+Sprint 32 P1.1: extracted from `api/voice_ws.py`. The REST
+endpoints (`voice_status`, `get_voice_config`, `put_voice_config`)
+live here so the WS route file (`ws_protocol.py`) stays focused
+on the WebSocket control loop.
+
+The endpoints all register against the shared `router` object
+imported from `ws_protocol.py`. FastAPI allows multiple modules
+to add routes to the same `APIRouter` instance — FastAPI's
+`include_router` walks the route table at app startup, so the
+order of registration doesn't matter.
+
+The PUT handler (`put_voice_config`) also persists changes to
+`~/.gundam-halo/config.toml` via `app.core.toml_doc` (the
+Sprint 32 P0-2 single-source-of-truth helper). The previous
+inline regex path was fragile (multiline values, escaped
+strings); `toml_doc` round-trips the document while preserving
+comments and structure.
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+from fastapi import HTTPException
+
+from app.api.restart_handler import (
+    get_restart_required,
+    schedule_restart_if_needed,
+    set_restart_required,
+)
+from app.api.ws_protocol import router
+from app.core.config import get_config
+from app.core.toml_doc import read_doc, update_section_key, write_doc
+
+logger = logging.getLogger(__name__)
+
+
+@router.get("/voice/status")
+async def voice_status() -> dict[str, Any]:
+    """Voice layer status — useful for the cockpit dashboard."""
+    cfg = get_config().voice
+    return {
+        "enabled": cfg.enabled,
+        "vad": {"backend": cfg.vad.backend, "model_path": cfg.vad.model_path},
+        "asr": {
+            "backend": cfg.asr.backend,
+            "model_size": cfg.asr.model_size,
+            "device": cfg.asr.device,
+        },
+        "tts": {"backend": cfg.tts.backend, "voice": cfg.tts.voice},
+        "live2d": {"enabled": cfg.live2d.enabled, "theme": cfg.live2d.theme},
+        "sample_rate": cfg.sample_rate,
+        "frame_duration_ms": cfg.frame_duration_ms,
+        # Sprint 16: wake phrases shipped to the dashboard so the
+        # Settings → Voice tab can display + edit them.
+        "wake_phrases": cfg.wake_phrases,
+    }
+
+
+@router.get("/voice/config")
+async def get_voice_config() -> dict[str, Any]:
+    """Sprint 16 + 17a + 17b: get the voice config.
+
+    Fields:
+      - wake_phrases        (Sprint 16, string[])
+      - strict_wake_phrase  (Sprint 17a, bool)
+      - asr_backend         (Sprint 17b, str) — current ASR
+                            engine name. Read-only; changing it
+                            requires a backend restart.
+      - asr_corrector       (Sprint 17b, str) — current corrector.
+      - restart_required    (Sprint 17b, bool) — true if a
+                            recent PUT required a backend
+                            restart to take effect (e.g. the
+                            ASR backend changed). The
+                            dashboard shows a "restart
+                            required" banner when this is set.
+
+    Kept separate from `/voice/status` so the dashboard can fetch
+    the full config in one round-trip without paying for the VAD /
+    ASR / TTS / Live2D fields it doesn't need to edit.
+    """
+    cfg = get_config().voice
+    return {
+        "wake_phrases": list(cfg.wake_phrases),
+        "strict_wake_phrase": cfg.strict_wake_phrase,
+        "asr_backend": cfg.asr.backend,
+        "asr_corrector": cfg.asr.corrector,
+        # Sprint 19c: always-on mic toggle. Runtime-tunable;
+        # the dashboard reads it to decide which UI to show
+        # (push-to-talk button vs ⏸ / ▶ toggle).
+        "always_on_mic": cfg.always_on_mic,
+        # Sprint 18: read the in-process flag set by
+        # `put_voice_config` when the user just changed the
+        # asr_backend or asr_corrector. The flag is cleared
+        # by any subsequent PUT that doesn't change either
+        # field (see put_voice_config).
+        "restart_required": get_restart_required(),
+    }
+
+
+@router.put("/voice/config")
+async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
+    """Sprint 16 + 17a + 18: update the voice config in-memory + persist
+    to config.toml.
+
+    Required payload fields (the dashboard always sends the current
+    form state, so we don't accept implicit "use the current value"):
+      - `wake_phrases: list[str]` — non-empty list of non-empty strings.
+      - `strict_wake_phrase: bool` — if true, voice turns are
+        discarded unless the ASR transcript starts with a
+        configured wake phrase.
+
+    Optional payload fields (Sprint 18):
+      - `asr_backend: "whisper_local" | "yuesub"` — the ASR engine
+        to load on the next voice WS connect. Omit to leave the
+        current value untouched. Changing this sets
+        `restart_required: true` in the response.
+      - `asr_corrector: "bert" | "opencc" | "none"` — which text
+        corrector to apply (yuesub backend only). Omit to leave
+        the current value untouched. Changing this sets
+        `restart_required: true` in the response.
+
+    Persistence:
+      - Edit `~/.gundam-halo/config.toml` [voice] section to add
+        the new keys (we don't blow away the user's other [voice]
+        settings — we only touch the keys we own).
+      - The in-process config is updated immediately so the next
+        voice turn picks up the change without a server restart.
+      - For asr_backend / asr_corrector the in-process change does
+        NOT affect the already-built pipeline (the voice pipeline
+        is constructed at WS connect time; the new value will be
+        picked up the next time the user reconnects, but we
+        surface `restart_required: true` so the dashboard can
+        prompt the user explicitly).
+    """
+    # ---- wake_phrases validation (unchanged from Sprint 16) ----
+    new_phrases = payload.get("wake_phrases")
+    if not isinstance(new_phrases, list) or not all(
+        isinstance(p, str) and p.strip() for p in new_phrases
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="`wake_phrases` must be a non-empty list of non-empty strings",
+        )
+    # Normalize: strip whitespace, drop empties, dedupe (preserving order)
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for p in new_phrases:
+        s = p.strip()
+        if s and s not in seen:
+            seen.add(s)
+            normalized.append(s)
+    if not normalized:
+        raise HTTPException(
+            status_code=400,
+            detail="`wake_phrases` must contain at least one non-empty string",
+        )
+
+    # ---- Sprint 17a: strict_wake_phrase validation ----
+    # The field is required in the payload. We don't accept
+    # implicit "use the current value" — the dashboard is the
+    # source of truth for the user's intent and should always
+    # send the form's current state.
+    if "strict_wake_phrase" not in payload:
+        raise HTTPException(
+            status_code=400,
+            detail="`strict_wake_phrase` is required (send the current toggle state)",
+        )
+    new_strict = payload["strict_wake_phrase"]
+    if not isinstance(new_strict, bool):
+        raise HTTPException(
+            status_code=400,
+            detail="`strict_wake_phrase` must be a boolean",
+        )
+
+    # ---- Sprint 19c: optional always_on_mic ----
+    # Runtime-tunable (no restart). If absent, the current
+    # value is left untouched. If present, must be a bool.
+    new_always_on_mic: bool | None = None
+    if "always_on_mic" in payload:
+        raw = payload["always_on_mic"]
+        if not isinstance(raw, bool):
+            raise HTTPException(
+                status_code=400,
+                detail="`always_on_mic` must be a boolean",
+            )
+        new_always_on_mic = raw
+
+    # ---- Sprint 18: optional asr_backend / asr_corrector validation ----
+    # Both are optional. If absent, the current value is left
+    # untouched and `restart_required` is not flipped for that
+    # field. If present, the value must be one of the known
+    # engines / correctors; otherwise we return 400.
+    new_asr_backend: str | None = None
+    if "asr_backend" in payload:
+        raw = payload["asr_backend"]
+        if not isinstance(raw, str):
+            raise HTTPException(
+                status_code=400,
+                detail="`asr_backend` must be a string",
+            )
+        if raw not in ("whisper_local", "yuesub", "whisper_hf"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"`asr_backend` must be one of: whisper_local, yuesub, "
+                    f"whisper_hf (got {raw!r})"
+                ),
+            )
+        new_asr_backend = raw
+
+    new_asr_corrector: str | None = None
+    if "asr_corrector" in payload:
+        raw = payload["asr_corrector"]
+        if not isinstance(raw, str):
+            raise HTTPException(
+                status_code=400,
+                detail="`asr_corrector` must be a string",
+            )
+        if raw not in ("bert", "opencc", "none"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"`asr_corrector` must be one of: bert, opencc, none "
+                    f"(got {raw!r})"
+                ),
+            )
+        new_asr_corrector = raw
+
+    # Update in-memory config (so the next turn picks it up).
+    cfg = get_config()
+    cfg.voice.wake_phrases = normalized
+    cfg.voice.strict_wake_phrase = new_strict
+    # Sprint 19c: always_on_mic is runtime-tunable; apply
+    # in-memory immediately so the next /voice/config GET
+    # reflects the new value.
+    if new_always_on_mic is not None:
+        cfg.voice.always_on_mic = new_always_on_mic
+
+    # Sprint 18: diff vs current for restart_required. If the
+    # user actually changed asr_backend or asr_corrector (i.e.
+    # sent a value AND that value differs from the in-memory
+    # value), the dashboard should prompt the user to restart
+    # the backend. wake_phrases and strict_wake_phrase are
+    # runtime-tunable and don't require a restart.
+    prev_asr_backend = cfg.voice.asr.backend
+    prev_asr_corrector = cfg.voice.asr.corrector
+
+    if new_asr_backend is not None:
+        cfg.voice.asr.backend = new_asr_backend
+    if new_asr_corrector is not None:
+        cfg.voice.asr.corrector = new_asr_corrector
+
+    restart_required = (
+        (new_asr_backend is not None and new_asr_backend != prev_asr_backend)
+        or (new_asr_corrector is not None and new_asr_corrector != prev_asr_corrector)
+    )
+
+    # Sprint 19b: auto-restart on ASR / corrector change. We
+    # schedule a self-restart in 5 seconds so the new pipeline
+    # (FsmnVAD + YuesubASR + corrector) loads on the new
+    # process. The PUT response returns immediately; the
+    # 5s grace gives in-flight voice turns time to finish.
+    # Persist the in-process flag for the GET endpoint. If
+    # the user just changed either asr field, set the flag.
+    # If they sent a PUT that *didn't* touch either asr field,
+    # clear it (the previous banner is now stale — they
+    # already restarted or decided to keep the old value).
+    # Note: this is process-local; the flag clears on backend
+    # restart, which is the right semantic (the restart picks
+    # up the new value).
+    set_restart_required(restart_required)
+
+    restart_scheduled = schedule_restart_if_needed(
+        restart_required=restart_required,
+        reason="asr_config_change",
+    )
+
+    # Invalidate the cache so future get_config() reloads from disk.
+    from app.core import config as config_mod
+
+    config_mod._config = None
+
+    # Persist to config.toml. We use `tomlkit` via `app.core.toml_doc`
+    # to read + mutate the doc in-place, then atomically write it
+    # back. The previous regex path was fragile (didn't handle
+    # multiline values or escaped strings); tomlkit round-trips
+    # the document while preserving comments and structure.
+    #
+    # Each `update_section_key` call auto-creates the target
+    # section + any intermediate dotted-path tables (e.g. writing
+    # to "voice.asr" auto-creates `[voice]` if missing). This
+    # replaces the old regex + "append at end of file" fallback.
+    config_path = Path(cfg.home) / "config.toml"
+    try:
+        doc = read_doc(config_path)
+        update_section_key(doc, "voice", "wake_phrases", normalized)
+        update_section_key(doc, "voice", "strict_wake_phrase", new_strict)
+        if new_always_on_mic is not None:
+            update_section_key(
+                doc, "voice", "always_on_mic", new_always_on_mic
+            )
+        if new_asr_backend is not None:
+            update_section_key(
+                doc, "voice.asr", "backend", new_asr_backend
+            )
+        if new_asr_corrector is not None:
+            update_section_key(
+                doc, "voice.asr", "corrector", new_asr_corrector
+            )
+        write_doc(config_path, doc)
+    except Exception as e:
+        logger.error(f"failed to persist voice config: {e}")
+        # We've already updated the in-memory config; surface the
+        # write error so the dashboard can show a warning.
+        return {
+            "wake_phrases": normalized,
+            "strict_wake_phrase": new_strict,
+            "asr_backend": cfg.voice.asr.backend,
+            "asr_corrector": cfg.voice.asr.corrector,
+            "always_on_mic": cfg.voice.always_on_mic,
+            "restart_required": restart_required,
+            "restart_scheduled": restart_scheduled,
+            "persisted": False,
+            "error": str(e),
+        }
+
+    return {
+        "wake_phrases": normalized,
+        "strict_wake_phrase": new_strict,
+        "asr_backend": cfg.voice.asr.backend,
+        "asr_corrector": cfg.voice.asr.corrector,
+        "always_on_mic": cfg.voice.always_on_mic,
+        "restart_required": restart_required,
+        "restart_scheduled": restart_scheduled,
+        "persisted": True,
+    }
+
+
+__all__ = ["voice_status", "get_voice_config", "put_voice_config"]

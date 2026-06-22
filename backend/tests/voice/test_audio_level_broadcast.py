@@ -32,7 +32,7 @@ def audio_level_app(monkeypatch):
     exposes a `last_audio_level` we can drive from outside."""
     from unittest.mock import AsyncMock
 
-    from app.api import voice_ws
+    from app.api import voice_ws, ws_protocol
     from app.core import config as config_mod
     from app.core.registry import ToolRegistry
 
@@ -60,10 +60,10 @@ def audio_level_app(monkeypatch):
     monkeypatch.setattr(asr_factory, "create_asr", lambda config=None: fake_asr)
     monkeypatch.setattr(tts_factory, "create_tts", lambda config=None: None)
     monkeypatch.setattr(live2d_factory, "create_live2d", lambda config=None: None)
-    monkeypatch.setattr(voice_ws, "create_vad", lambda config=None: fake_vad)
-    monkeypatch.setattr(voice_ws, "create_asr", lambda config=None: fake_asr)
-    monkeypatch.setattr(voice_ws, "create_tts", lambda config=None: None)
-    monkeypatch.setattr(voice_ws, "create_live2d", lambda config=None: None)
+    monkeypatch.setattr(ws_protocol, "create_vad", lambda config=None: fake_vad)
+    monkeypatch.setattr(ws_protocol, "create_asr", lambda config=None: fake_asr)
+    monkeypatch.setattr(ws_protocol, "create_tts", lambda config=None: None)
+    monkeypatch.setattr(ws_protocol, "create_live2d", lambda config=None: None)
 
     cfg = _config_module_safe().voice
     original_enabled = cfg.enabled
@@ -122,7 +122,7 @@ def test_voice_ws_broadcasts_vad_audio_level_per_frame(audio_level_app):
         is_speech=True, probability=0.42, timestamp_ms=0
     )
 
-    with patch("app.api.voice_ws.FsmnVAD", return_value=fake_level_vad):
+    with patch("app.api.ws_protocol.FsmnVAD", return_value=fake_level_vad):
         with client.websocket_connect("/ws/voice") as ws:
             ws.receive_json()  # hello
 
