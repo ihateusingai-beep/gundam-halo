@@ -1,6 +1,6 @@
 [package]
 name = "gundam-halo"
-version = "0.1.0"
+version = "0.1.6"
 description = "Gundam Halo — personal AI agent on Mac"
 authors = ["Ken Cheng"]
 edition = "2021"
@@ -24,6 +24,39 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 include_dir = "0.7"
+
+# Sprint 33b — Personalised Fine-tune recording pipeline (Layer 2 v2).
+# See docs/FEATURE-SPEC-SPRINT26.md §4.1 + frontend/src-tauri/src/
+# recording.rs for the design.
+#
+# - `cpal` opens the default mic (CoreAudio on macOS via the
+#    bundled `coreaudio-rs` dep — cpal 0.15 enables the
+#    platform-native backend by default; no feature flag
+#    needed). We skip `asio` / `jack` features by NOT
+#    enabling them — saves ~5 MB of compiled code. wasm-bindgen
+#    is feature-gated off because we don't run in browser.
+# - `hound` writes the 30s captured frames to `chunk-NNN.wav`
+#    on disk. Pure Rust, no FFI, no native deps.
+# - `tokio` provides the async runtime used to coordinate the
+#    capture thread + the WhisperHFASR subprocess + the training
+#    subprocess. We only need `rt-multi-thread` + `macros` +
+#    `process` + `io-util` + `sync` — no full `full` feature.
+# - `chrono` for the `yue-self-<date>` session dir name.
+# - `toml_edit` for in-place config.toml patches on
+#    `activate_model` (replaces the inline regex path that
+#    the Sprint 33 stub flagged as fragile).
+cpal = { version = "0.15", default-features = false }
+hound = "3.5"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+toml_edit = "0.22"
+
+[dev-dependencies]
+# Sprint 33b: MockRuntime for IPC command contract tests. Tauri's
+# test feature pulls in the mock backend so we can drive the
+# commands in-process without spinning up a real webview.
+tauri = { version = "2", features = ["test"] }
+tempfile = "3"
 
 [profile.release]
 panic = "abort"

@@ -74,6 +74,42 @@ def default_tools() -> list[BaseTool]:
     from app.core.config import get_config
 
     cfg = get_config()
+    # Sprint 36 Tier 2 — preload the SKILL.md cache so each
+    # tool's `to_spec()` can look up its enriched description
+    # in O(1). Idempotent; safe to call repeatedly (the
+    # cache is keyed on home path + mtime). When no SKILL.md
+    # exists for any tool, this is a no-op (the cache stays
+    # empty, and `to_spec()` falls back to the class-level
+    # description exactly as before).
+    try:
+        from app.core.skill_metadata import (
+            ensure_skill_seeded,
+            preload_cache,
+        )
+
+        preload_cache(cfg.home)
+        # Sprint 36 Tier 2 first-run: seed any missing
+        # SKILL.md files from the bundled starter set. Like
+        # the workspace seeding in `agent_context.py`, this
+        # only ever copies files that don't exist yet —
+        # user edits are never overwritten.
+        ensure_skill_seeded(
+            cfg.home, list(name for name, _ in ToolRegistry.items())
+        )
+        # Re-load after seeding so the freshly-copied
+        # starter files are visible to the cache.
+        preload_cache(cfg.home)
+    except Exception as e:  # noqa: BLE001
+        # Skill seeding is best-effort. The runtime still
+        # works with class-level descriptions if the SKILL.md
+        # system fails (e.g. permission denied on
+        # `~/.gundam-halo/skills/`).
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "skill seeding / preload failed: %s", e
+        )
+
     tools: list[BaseTool] = [
         tool_cls()
         for name, tool_cls in sorted(ToolRegistry.items(), key=lambda x: x[0])

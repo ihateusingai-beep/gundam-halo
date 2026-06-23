@@ -4639,10 +4639,154 @@ pipeline.
    (~300ms vs. ~600ms on HF
    pipeline).
 5. If Cantonese WER regresses
-   > 2% (compared to the
-   Sprint 32 held-out baseline),
-   `git revert <hash>` and stay
-   on HF.
+    > 2% (compared to the
+    Sprint 32 held-out baseline),
+    `git revert <hash>` and stay
+    on HF.
+
+### Sprint 36 — Workspace markdown pattern + SKILL.md metadata (Tier 1 + Tier 2 from OpenClaw fork study)
+
+Sprint 36 closes the "OpenClaw fork → gundam-halo" study
+(see `docs/FEATURE-SPEC-SPRINT36.md` for the full design).
+Two of the three recommended tiers land here; Tier 3 (a
+formal `app/plugins/` registry with `openclaw.plugin.json`
+manifest loader) is deferred because Sprint 32 P0-1's
+`ToolRegistry` / `AsrRegistry` / `TtsRegistry` / `VadRegistry`
+already cover 90% of the same surface — adding a parallel
+plugin layer would be double indirection without value.
+
+The pattern is borrowed directly from OpenClaw's
+`~/.openclaw/workspace/*.md` (8 file pattern: AGENTS.md /
+SOUL.md / USER.md / IDENTITY.md / TOOLS.md / HEARTBEAT.md /
+BOOTSTRAP.md / MEMORY.md) and its
+`extensions/<plugin>/skills/<skill>/SKILL.md` frontmatter
+contract. Gundam Halo's surface is single-user / Mac-only /
+Tauri + dashboard (per user profile), so the contract is
+trimmed to 7 starter markdown files (no multi-channel
+gateway, no plugin marketplace) and 22 SKILL.md files
+(one per registered tool).
+
+#### Tier 1 — Workspace markdown loader
+- **backend**: `app/core/agent_context.py` NEW (242 LoC) —
+  loads `~/.gundam-halo/workspace/*.md` (AGENTS.md, SOUL.md,
+  USER.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md) into the
+  agent system prompt via `format_for_prompt()`. BOOTSTRAP.md
+  is a one-shot first-run wizard and is excluded from the
+  prompt. Module-level cache keyed on home path + max-mtime
+  across docs (user edits are picked up on the next turn
+  without restart). Auto-seeds starter files from
+  `app/data/workspace/` on first run (never overwrites
+  user edits, mirrors OpenClaw's seeding pattern).
+- **backend**: `app/data/workspace/` NEW — 7 starter markdown
+  files: AGENTS.md (behaviour contract), SOUL.md (Unicorn's
+  personality), USER.md (Ken — name/timezone/projects),
+  IDENTITY.md (Unicorn — name/creature/vibe/emoji/avatar),
+  TOOLS.md (local environment notes), HEARTBEAT.md
+  (periodic-checklist placeholder, empty by default),
+  BOOTSTRAP.md (first-run wizard).
+- **backend**: `app/agents/system_prompt.py` — wired the
+  workspace loader into `build_system_prompt()`. The
+  workspace markdown is now always appended (regardless
+  of whether `AgentContext` has a `user_display_name`),
+  because the workspace is agent-wide context, not
+  per-turn context. Stable order: workspace → identity →
+  memory recall. Updated 2 existing tests in
+  `tests/memory/test_user_memory.py` (the contract
+  changed; previously `build_system_prompt("base",
+  context=ctx)` returned `"base"` when no user was set;
+  now it returns `"base\n\n---\n\n## AGENTS.md\n..."`).
+- **backend**: `tests/core/test_agent_context.py` NEW
+  (12 tests) — verifies load order, format function,
+  bootstrap exclusion, max_chars truncation, no-overwrite
+  semantics, cache + freshness check, reset_cache helper.
+
+#### Tier 2 — SKILL.md metadata loader + tool spec enrichment
+- **backend**: `app/core/skill_metadata.py` NEW (304 LoC) —
+  parses SKILL.md frontmatter (`name`, `description`,
+  `user-invocable`) manually (no PyYAML dependency — the
+  schema is too simple to justify one). Body is everything
+  after the closing `---`. Same first-run seed pattern as
+  Tier 1. Module-level cache keyed on home path + max-mtime.
+- **backend**: `app/data/skills/<tool_name>/SKILL.md` NEW
+  (22 files) — one per registered tool (a11y, apple_script,
+  bluetooth, brightness, clipboard, file_read, file_write,
+  flight_finder, mavis_delegate, memory_read, memory_write,
+  notify, open_app, screenshot, send_message, shell_exec,
+  spotlight, system_settings, weather, web_fetch, web_search,
+  youtube_summarize). Each SKILL.md has YAML frontmatter +
+  body with operating loop / examples / red lines specific
+  to that tool.
+- **backend**: `app/tools/_stubs.py` — `BaseTool.to_spec()`
+  now consults the skill cache and replaces the
+  function-description with the enriched version
+  (frontmatter description + body) when a SKILL.md exists
+  for the tool. Falls back to the class-level description
+  unchanged when no SKILL.md exists (additive only, no
+  behavior change for tools without one). file_read's
+  description went from 154 chars (class-level) to 2149
+  chars (class-level + frontmatter + body) at runtime —
+  ~14x richer tool-selection context for the LLM.
+- **backend**: `app/tools/builder.py` — `default_tools()`
+  now also calls `preload_cache(cfg.home)` +
+  `ensure_skill_seeded(...)` so the cache is warm before
+  any agent instantiates a BaseTool. Best-effort: errors
+  are logged at debug level and the runtime still works
+  with class-level descriptions.
+- **backend**: `tests/core/test_skill_metadata.py` NEW
+  (18 tests) — verifies frontmatter parsing, malformed
+  frontmatter resilience, `enriched_description`
+  composition, cache + freshness, `_get_skill_for_spec`
+  fallback path.
+
+#### Tier 3 — DEFERRED (rationale in spec)
+A formal `app/plugins/` registry with
+`openclaw.plugin.json`-style manifest loader was the
+third OpenClaw-fork recommendation. **Not shipped** —
+Sprint 32 P0-1's `ToolRegistry` / `AsrRegistry` /
+`TtsRegistry` / `VadRegistry` already cover 90% of the
+same surface (decorator-based registration, auto-discovery
+via `app/tools/__init__.py` eager imports, manifest-style
+metadata in code). Adding a parallel plugin layer would
+be double indirection without value. The Tier 3 spec
+section explains the trade-off; revisit only if we ever
+ship a marketplace / user-installed plugins flow.
+
+#### User-visible changes
+- On first launch (or after `rm -rf
+  ~/.gundam-halo/workspace`), 7 starter markdown files are
+  auto-seeded into `~/.gundam-halo/workspace/`. Edit any
+  of them; changes apply on the next turn.
+- On first launch (or after `rm -rf ~/.gundam-halo/skills`),
+  22 starter SKILL.md files are auto-seeded into
+  `~/.gundam-halo/skills/<tool_name>/SKILL.md`. Same edit-
+  on-next-turn model.
+- `build_system_prompt()` now injects the workspace
+  markdown; system prompt token budget grows by ~2-12k
+  chars per turn (capped at `max_chars=12000` in
+  `agent_context.format_for_prompt`). User can read the
+  prompt in the cockpit's MissionLog → system message to
+  see the injected context.
+- Tool descriptions are 5-15x richer for every tool that
+  has a SKILL.md. The LLM gets explicit operating-loop
+  guidance + examples + red-lines for every tool call.
+
+#### Test summary
+- **12** new `tests/core/test_agent_context.py` tests
+- **18** new `tests/core/test_skill_metadata.py` tests
+- **2** updated `tests/memory/test_user_memory.py` tests
+  (contract change: `build_system_prompt` now always
+  appends workspace markdown)
+- Full backend test suite: **1188 passed, 11 failed**
+  (11 failures are pre-existing `tests/core/` ×
+  `tests/tools/test_builder*` pollution, identical to
+  Sprint 32 P0/P1/P1.1/P1.2/P1.3 baselines — not caused
+  by this sprint).
+
+#### Version bump
+- `app/__init__.py` `__version__` 0.1.5 → 0.1.6 (new feature)
+- `frontend/package.json` version 0.1.0 → 0.1.6
+- `frontend/src-tauri/Cargo.toml` version 0.1.0 → 0.1.6
+- `frontend/src-tauri/tauri.conf.json` version 0.1.0 → 0.1.6
 
 ---
 

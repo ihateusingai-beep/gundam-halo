@@ -352,14 +352,50 @@ class TestMemoryTools:
 
 
 class TestBuildSystemPrompt:
-    def test_no_context_returns_base(self):
-        out = build_system_prompt("base prompt", context=None)
-        assert out == "base prompt"
+    def test_no_context_returns_base(self, tmp_path, monkeypatch):
+        """Sprint 36 Tier 1: build_system_prompt now also
+        injects the workspace markdown (AGENTS.md / SOUL.md /
+        USER.md / etc.) regardless of whether context is
+        provided — the workspace is agent-wide context, not
+        per-turn. Use a fresh tmp home so the assertion is
+        deterministic and doesn't depend on what's in
+        `~/.gundam-halo/workspace/` on the test runner.
+        """
+        monkeypatch.setenv("HALO_HOME", str(tmp_path))
+        from app.core.config import reset_config
+        from app.core.agent_context import reset_cache
 
-    def test_context_without_user_unchanged(self):
+        reset_config()
+        reset_cache()
+        out = build_system_prompt("base prompt", context=None)
+        # The base prompt is preserved (workspace markdown
+        # is appended after, not replacing). On a fresh home
+        # with no user-edited files, the loader auto-seeds
+        # the bundled starter set, so workspace markdown
+        # WILL be appended.
+        assert out.startswith("base prompt")
+        assert "## AGENTS.md" in out
+        assert "## SOUL.md" in out
+
+    def test_context_without_user_unchanged(self, tmp_path, monkeypatch):
+        """Sprint 36 Tier 1: workspace markdown is appended
+        even when the AgentContext has no user_display_name
+        — the workspace is agent-wide context. Use a fresh
+        tmp home so the assertion is deterministic.
+        """
+        monkeypatch.setenv("HALO_HOME", str(tmp_path))
+        from app.core.config import reset_config
+        from app.core.agent_context import reset_cache
+
+        reset_config()
+        reset_cache()
         ctx = AgentContext(project_id="p", session_id="s")
         out = build_system_prompt("base", context=ctx)
-        assert out == "base"
+        # No identity block (no display_name), but workspace
+        # markdown is still appended.
+        assert "Who you're talking to" not in out
+        assert "## AGENTS.md" in out
+        assert "## SOUL.md" in out
 
     def test_adds_identity_block(self):
         ctx = AgentContext(
