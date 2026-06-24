@@ -2,44 +2,80 @@
 import pytest
 
 from app.core.registry import (
+    AgentRegistry,
     ChannelRegistry,
     EngineRegistry,
     ModelRegistry,
+    ToolRegistry,
 )
 
 
 @pytest.fixture(autouse=True)
-def _clear_model_registry():
-    """Clear ModelRegistry before + after each test.
+def _isolate_registry_state():
+    """Clear ModelRegistry + surgically clean test-polluted
+    keys from ToolRegistry / EngineRegistry / AgentRegistry
+    before + after each test.
 
-    `test_registry.py` only writes to `ModelRegistry`
-    (the only registry it actually populates with test
-    fixtures like `_Dummy` via `@ModelRegistry.register`).
-    The other 7 registries — ToolRegistry / AgentRegistry /
-    ChannelRegistry / EngineRegistry / AsrRegistry /
-    TtsRegistry / VadRegistry — are populated by
-    `app.<sub>.__init__.py` eager imports during Sprint 32
-    P0-1. Clearing them here would wipe those eager-imported
-    entries and break downstream tests (e.g. test_smoke's
-    `agent_type: "simple"` lookup in AgentRegistry, or
-    `default_tools()` lookup in ToolRegistry).
+    History:
+      Sprint 32 P0-1 fixture only cleared ModelRegistry.
+      `test_register_tool_decorator_registers_and_sets_name`
+      + `test_register_engine_decorator_registers` +
+      `test_register_agent_decorator_registers` register
+      `_DummyTool` / `_DummyEngine` / `_DummyAgent` classes
+      under well-known test keys (`test_tool_decorator_class`
+      / `test_engine_decorator` / `test_agent_decorator`).
+      Without cleanup, these survive into subsequent test
+      files and pollute `default_tools()` (which iterates
+      `ToolRegistry.items()`) — causing 11 false failures in
+      `tests/tools/test_builder.py` +
+      `tests/tools/test_builder_conditional.py`.
+
+    Why surgical (not blanket `.clear()`):
+      The other 6 registries (Tool / Agent / Channel /
+      Engine / Asr / Tts / Vad) are populated by
+      `app.<sub>.__init__.py` eager imports during Sprint 32
+      P0-1. Blanket-clearing them here would wipe the real
+      eager-imported entries and break downstream tests
+      (`default_tools()` would return []; agent_type
+      lookups in test_smoke would KeyError). Surgical pop
+      of only the test-polluted keys preserves the real
+      entries and removes only what these tests added.
 
     Note: `test_isolation_between_registries` reads from
-    `EngineRegistry` without writing to it — so we don't
-    need to clear EngineRegistry either.
+    EngineRegistry without writing to it — the surgical
+    pop is a no-op for it (key absent).
 
     Before-clear: ensures each `test_register_and_get`
-    variant starts with a clean `ModelRegistry` (no leakage
+    variant starts with a clean ModelRegistry (no leakage
     from the previous test in this file).
     After-clear: removes the `_Dummy` classes registered
     by this file's tests so the module-level state doesn't
-    accumulate test fixtures across reruns (mitigates
-    `test_register_and_get` → `test_create_instantiates`
-    pollution if a future test runs them out of order).
+    accumulate test fixtures across reruns.
     """
+    # Test-polluted keys added by this file's tests. Keep
+    # in sync with the 3 decorator tests below.
+    _TOOL_TEST_KEY = "test_tool_decorator_class"
+    _ENGINE_TEST_KEY = "test_engine_decorator"
+    _AGENT_TEST_KEY = "test_agent_decorator"
+
+    def _surgical_clear() -> None:
+        """Remove only the keys this file's tests registered.
+
+        The `_entries()` dict is shared across all
+        `ToolRegistry` / `EngineRegistry` / `AgentRegistry`
+        subclasses (per-subclass key), so we `pop()` with
+        `None` default to avoid KeyError when a previous
+        test in this file already cleaned up after itself.
+        """
+        ToolRegistry._entries().pop(_TOOL_TEST_KEY, None)
+        EngineRegistry._entries().pop(_ENGINE_TEST_KEY, None)
+        AgentRegistry._entries().pop(_AGENT_TEST_KEY, None)
+
     ModelRegistry.clear()
+    _surgical_clear()
     yield
     ModelRegistry.clear()
+    _surgical_clear()
 
 
 def test_register_and_get():
