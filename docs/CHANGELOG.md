@@ -4788,6 +4788,164 @@ ship a marketplace / user-installed plugins flow.
 - `frontend/src-tauri/Cargo.toml` version 0.1.0 → 0.1.6
 - `frontend/src-tauri/tauri.conf.json` version 0.1.0 → 0.1.6
 
+### Sprint 33b — Tauri Rust recording + training pipeline (Track 31-B Layer 2 v2)
+
+Sprint 33b ships the real Tauri Rust recording + training
+pipeline that Sprint 33 deferred to scope realism. All 5
+IPC commands (`start_record` / `stop_record` /
+`start_train` / `get_train_progress` / `activate_model`)
+now run real work; the cockpit's 3 cards (Record / Train /
+Swap) wire to `invoke()` and bind to live `phase` from the
+Rust response. Closes M9-E Layer 2 v2 acceptance criterion
+"Real microphone capture + parallel WhisperHFASR
+transcription".
+
+#### Added (recording pipeline)
+
+- **frontend/src-tauri**: `recording/` module split into
+  `mod.rs` (state) + `capture.rs` (cpal input stream +
+  WAV writer + JSONL manifest) + `transcribe.rs` (Whisper
+  + LoRA subprocess handles). `recording.rs` (old single
+  file) removed.
+- **frontend/src-tauri/Cargo.toml** — new deps:
+  `cpal = "0.15"` (cross-platform audio I/O),
+  `hound = "3.5"` (WAV writer/reader),
+  `tokio = { version = "1", features = ["rt-multi-thread",
+  "macros", "process", "io-util", "sync", "time"] }`
+  (async runtime + subprocess + sync primitives),
+  `toml_edit = "0.22"` (config patch preserving comments),
+  `chrono = "0.4"` (test timestamps), dev-dep `tempfile`.
+- **`start_capture_loop`** — negotiates a 16 kHz mono int16
+  config with the default input device, spawns a dedicated
+  OS thread that owns the `cpal::Stream` (workaround for
+  cpal 0.15's `PhantomData<*mut ()>` `!Sync` marker), and
+  returns an `Arc<AtomicBool>` stop flag. Stream is dropped
+  within 250 ms of the flag flipping → immediate mic
+  release.
+- **`spawn_rotator`** — Tokio task that polls the shared
+  i16 buffer every 1 s. When the buffer holds ≥480 000
+  samples (30 s @ 16 kHz mono), it increments the chunk
+  counter, writes a `chunk-NNN.wav` via hound, ships the
+  path to the parallel `whisper_hf_helper.py` subprocess
+  via stdin, reads one JSON line from stdout, strips
+  internal fields (`audio_path`, `elapsed_ms`), and appends
+  the row to `manifest.jsonl`. Exits after 3 consecutive
+  idle polls (when `stop_record` flips the flag).
+- **`WhisperHandle`** — long-lived Python subprocess
+  wrapper. `spawn()` falls back to system `python3` if the
+  venv is missing (avoids breaking the Tauri app on
+  dev machines without the full backend installed).
+  `send_and_recv()` writes a path to stdin + reads one
+  JSON line from stdout (300 s timeout). `kill()` is a
+  fire-and-forget for future cleanup paths.
+- **`TrainHandle`** — LoRA fine-tune subprocess wrapper
+  (PID + log path + output dir + started_at timestamp).
+  No `Child` handle stored (we keep the PID + tail the
+  log file from `get_train_progress`); the user can
+  kill via Activity Monitor.
+
+#### Changed (commands.rs — IPC surface)
+
+- `start_record` — no longer returns `phase: "stub"`. Now:
+  resolves `~/workspace/gundam-halo/backend/`, spawns the
+  Whisper helper subprocess, acquires the per-state
+  `chunk_count` Mutex (rejects if non-zero via
+  `TrainingAlreadyRunning`), calls `start_capture_loop`,
+  stores `stop_flag` / `session_dir` / `manifest_path` in
+  `RecordingState`, returns `phase: "running"` with the
+  session dir path.
+- `stop_record` — flips `stop_flag = true`, sleeps 3 s
+  for the rotator to drain, snapshots `chunk_count` and
+  `manifest_path`, resets state, returns
+  `phase: "complete"`.
+- `start_train` — rejects if `train_handle` is non-empty,
+  creates `<session_dir>/train/`, spawns the LoRA
+  fine-tune subprocess via `TrainHandle::spawn(...)`,
+  stores the handle in `RecordingState`, returns
+  `phase: "running"` with the log path.
+- `get_train_progress` — snapshots `TrainHandle`,
+  tails the last 5 non-empty lines of `train.log`,
+  returns `phase: "running"` with PID + started_at + log
+  tail. (No `Child` handle → can't auto-detect exit;
+  user can verify completion by checking the log + the
+  manifest in `~/.gundam-halo/recordings/yue-self-<date>/train/`.)
+- `activate_model` — finds the latest train output dir,
+  verifies a merged checkpoint exists (`config.json` or
+  `pytorch_model.bin` or `model.safetensors`), patches
+  `~/.gundam-halo/config.toml` via `toml_edit`
+  (preserves comments + structure; replaces the Sprint 33
+  stub's fragile inline regex path). Does NOT
+  auto-restart the backend — the user clicks the existing
+  "Restart" dashboard button. Returns `phase: "complete"`.
+
+#### Changed (commands.rs — error type)
+
+- `RecordingError` — Sprint 33's 2-variant stub
+  (`NotImplemented` / `ReservedForFutureSprint`) replaced
+  with 4 real variants:
+  - `MicrophoneUnavailable` — no input device or macOS
+    TCC Microphone permission denied
+  - `ManifestWriteFailed { path }` — disk full or
+    permission denied on the recordings dir or config.toml
+  - `TrainingAlreadyRunning` — `start_record` /
+    `start_train` called while a previous run is alive
+  - `ModelCheckpointMissing { output_dir }` —
+    `activate_model` called but training didn't produce
+    a merged checkpoint
+- Errors serialise with `#[serde(tag = "kind", rename_all
+  = "camelCase")]` so the JS side reads `err.kind` for
+  toast copy.
+
+#### Changed (frontend wire-in — VoiceTab.tsx)
+
+- 3 new card state slots (`recordPhase` / `recordMessage`,
+  `trainPhase` / `trainMessage`, `swapPhase` / `swapMessage`)
+  drive live status badges + toast copy.
+- `runFinetuneCommand(command, slots)` — module-level
+  helper that calls `tryTauriInvoke<FinetuneResponse>(...)`,
+  maps the response `phase` to the matching card state,
+  and surfaces `toast.success` / `toast.error` /
+  `toast.info` accordingly.
+- Section title + intro paragraph updated from "Sprint 33
+  stub" to "Sprint 33b real impl".
+- tsc clean, vitest 63/63 pass.
+
+#### Added (Rust tests)
+
+- 6 new tests in `recording::capture::tests`:
+  - `write_wav_i16_round_trip_preserves_sample_count`
+    (1024-sample round-trip + spec assertion)
+  - `write_wav_i16_handles_empty_buffer` (header-only WAV)
+  - `write_wav_i16_handles_full_chunk_size`
+    (480 000-sample flush, the chunk-boundary case)
+  - `append_manifest_line_creates_and_appends`
+    (auto-create nested parents + JSONL schema)
+  - `stop_flag_atomic_bool_observable_across_threads`
+    (capture-thread polling model)
+  - `recording_state_chunk_count_is_send_sync`
+    (Tauri state `Send + Sync` invariant)
+- `cargo test --lib recording::capture`: **6/6 pass** in
+  0.06 s.
+- `cargo build --lib`: clean in 31.71 s.
+
+#### Test summary (this sprint)
+
+- **6** new Rust unit tests (`recording::capture::tests`)
+- Frontend `vitest`: **63/63 pass** (no regressions)
+- Frontend `tsc --noEmit`: 0 errors
+- Backend `pytest`: full suite unchanged (Sprint 33b is
+  Tauri-side only; backend pytest deltas from Sprint 36
+  baseline hold: 1188 passed, 11 pre-existing failures in
+  `tests/core/` × `tests/tools/test_builder*`)
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.6 → **0.1.7**
+  (new feature: recording pipeline)
+- `frontend/package.json` version 0.1.6 → **0.1.7**
+- `frontend/src-tauri/Cargo.toml` version 0.1.6 → **0.1.7**
+- `frontend/src-tauri/tauri.conf.json` version 0.1.6 → **0.1.7**
+
 ---
 
 ## [0.1.3] — 2026-06-11

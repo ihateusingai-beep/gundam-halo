@@ -53,7 +53,7 @@ import { toast } from "sonner";
 import { HudCard } from "@/components/gundam/HudCard";
 import { api, ApiError } from "@/lib/api";
 import { getVoiceStatus, type VoiceStatus } from "@/services/halo-voice-ws";
-import { isTauriRuntime } from "@/lib/tauri";
+import { isTauriRuntime, tryTauriInvoke } from "@/lib/tauri";
 
 import { KV, Section } from "./shared";
 
@@ -107,6 +107,18 @@ export function VoiceTab() {
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>(
     () => getVoiceStatus(),
   );
+  // Sprint 33b — Personalised Fine-tune cards (Record / Train / Swap)
+  // each track their own phase. The shared `runFinetuneCommand`
+  // (module-level) writes the matching slot via the `CardSetters`
+  // it receives. `idle` while no click has registered, `running`
+  // while the IPC call is in flight, then `complete` / `error`
+  // from the Rust response.
+  const [recordPhase, setRecordPhase] = useState<CardPhase>("idle");
+  const [recordMessage, setRecordMessage] = useState<string>("");
+  const [trainPhase, setTrainPhase] = useState<CardPhase>("idle");
+  const [trainMessage, setTrainMessage] = useState<string>("");
+  const [swapPhase, setSwapPhase] = useState<CardPhase>("idle");
+  const [swapMessage, setSwapMessage] = useState<string>("");
 
   // Mirror the voice service's state into this tab. Cheap — no
   // polling, we just read the singleton on every render via the
@@ -564,7 +576,7 @@ export function VoiceTab() {
           the rustdoc comments on those commands — no
           frontend-side changes will be needed when the
           follow-up sprint lands. */}
-      <Section title="Personalised Fine-tune (Sprint 33)">
+      <Section title="Personalised Fine-tune (Sprint 33b)">
         <p
           className="text-xs text-[var(--text-secondary)] font-mono mb-2"
           data-testid="personalised-finetune-intro"
@@ -573,10 +585,11 @@ export function VoiceTab() {
           Three steps, run independently — you can pause between
           Record and Train. Each card calls a Tauri IPC command
           defined in <code>frontend/src-tauri/src/commands.rs</code>
-          (the actual recording / training pipeline lives in
-          <code> recording.rs</code>; this sprint ships the
-          command contracts and a UI skeleton — see the Sprint 33
-          commit message for the scope decision).
+          (the recording / training pipeline lives in
+          <code> recording/</code>; Sprint 33b ships the real
+          cpal + hound + parallel WhisperHFASR subprocess impl
+          that Sprint 33 stubbed — see the Sprint 33b commit
+          message for the scope decision).
         </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {/* Record card — calls `start_record` / `stop_record`. */}
@@ -592,7 +605,7 @@ export function VoiceTab() {
                 className="text-[9px] font-mono text-[var(--text-muted)] uppercase"
                 data-testid="record-card-status"
               >
-                idle
+                {recordPhase}
               </span>
             </div>
             <p className="text-[11px] font-mono text-[var(--text-muted)] mb-2 leading-relaxed">
@@ -605,13 +618,27 @@ export function VoiceTab() {
             </p>
             <button
               type="button"
-              onClick={() => handleRecordStub("start_record")}
+              onClick={() =>
+                runFinetuneCommand("start_record", {
+                  setPhase: setRecordPhase,
+                  setMessage: setRecordMessage,
+                  label: "Record",
+                })
+              }
               disabled={!isTauriRuntime()}
               data-testid="personalised-finetune-record-button"
               className="w-full px-2 py-1.5 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Start recording
             </button>
+            {recordMessage && (
+              <p
+                className="mt-2 text-[10px] font-mono text-[var(--text-secondary)] leading-relaxed break-words"
+                data-testid="record-card-message"
+              >
+                {recordMessage}
+              </p>
+            )}
           </HudCard>
 
           {/* Train card — calls `start_train` / `get_train_progress`. */}
@@ -627,7 +654,7 @@ export function VoiceTab() {
                 className="text-[9px] font-mono text-[var(--text-muted)] uppercase"
                 data-testid="train-card-status"
               >
-                idle
+                {trainPhase}
               </span>
             </div>
             <p className="text-[11px] font-mono text-[var(--text-muted)] mb-2 leading-relaxed">
@@ -639,13 +666,27 @@ export function VoiceTab() {
             </p>
             <button
               type="button"
-              onClick={() => handleRecordStub("start_train")}
+              onClick={() =>
+                runFinetuneCommand("start_train", {
+                  setPhase: setTrainPhase,
+                  setMessage: setTrainMessage,
+                  label: "Train",
+                })
+              }
               disabled={!isTauriRuntime()}
               data-testid="personalised-finetune-train-button"
               className="w-full px-2 py-1.5 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Start training
             </button>
+            {trainMessage && (
+              <p
+                className="mt-2 text-[10px] font-mono text-[var(--text-secondary)] leading-relaxed break-words"
+                data-testid="train-card-message"
+              >
+                {trainMessage}
+              </p>
+            )}
           </HudCard>
 
           {/* Swap card — calls `activate_model`. */}
@@ -661,7 +702,7 @@ export function VoiceTab() {
                 className="text-[9px] font-mono text-[var(--text-muted)] uppercase"
                 data-testid="swap-card-status"
               >
-                idle
+                {swapPhase}
               </span>
             </div>
             <p className="text-[11px] font-mono text-[var(--text-muted)] mb-2 leading-relaxed">
@@ -673,24 +714,41 @@ export function VoiceTab() {
             </p>
             <button
               type="button"
-              onClick={() => handleRecordStub("activate_model")}
+              onClick={() =>
+                runFinetuneCommand("activate_model", {
+                  setPhase: setSwapPhase,
+                  setMessage: setSwapMessage,
+                  label: "Swap",
+                })
+              }
               disabled={!isTauriRuntime()}
               data-testid="personalised-finetune-swap-button"
               className="w-full px-2 py-1.5 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Activate personalised model
             </button>
+            {swapMessage && (
+              <p
+                className="mt-2 text-[10px] font-mono text-[var(--text-secondary)] leading-relaxed break-words"
+                data-testid="swap-card-message"
+              >
+                {swapMessage}
+              </p>
+            )}
           </HudCard>
         </div>
         <p className="text-[10px] text-[var(--text-muted)] font-mono mt-2 leading-relaxed">
-          The three cards above are intentionally rendered as
-          stubs in this sprint — the Tauri Rust recording +
-          training pipeline is deferred to a follow-up sprint
-          per scope realism. The IPC command contracts are
-          pinned by <code>commands.rs</code>; clicking any
-          button shows a toast pointing at the follow-up
-          sprint, so the wireframe (and the disabled state in
-          the web dev runtime) is reviewable today. See
+          Sprint 33b wires the three cards above to the real Tauri
+          IPC commands in <code>src-tauri/src/commands.rs</code>
+          (<code>start_record</code> / <code>start_train</code> /
+          <code> activate_model</code>). The Rust pipeline opens
+          the mic via cpal, writes 30 s WAV chunks to
+          <code> ~/.gundam-halo/recordings/yue-self-&lt;date&gt;/</code>,
+          transcribes each chunk in a parallel Python
+          <code> whisper_hf_helper</code> subprocess, and patches
+          <code> config.toml</code> via <code>toml_edit</code> on
+          activate. The status badge on each card mirrors the
+          <code> phase</code> field of the IPC response. See
           <code> docs/FEATURE-SPEC-SPRINT26.md</code> §4.1 +
           Appendix C for the full UX.
         </p>
@@ -699,17 +757,72 @@ export function VoiceTab() {
   );
 }
 
-/** Sprint 33 (Track 31-B) — Personalised Fine-tune stub
- *  handler. Wired to all three card buttons (Record /
- *  Train / Swap). In this sprint the Tauri Rust pipeline
- *  is a stub, so the handler surfaces a toast pointing at
- *  the follow-up sprint. When the follow-up lands, replace
- *  the toast with a real `invoke(command_name, ...)` call
- *  (the contracts are pinned by commands.rs). */
-function handleRecordStub(commandName: string) {
-  toast.info(`${commandName} — coming soon`, {
-    description:
-      "Sprint 33 ships the UI + IPC command contracts for the Personalised Fine-tune cards. The Tauri Rust recording + training pipeline (commands.rs delegates to recording.rs) is deferred to a follow-up sprint per scope realism. See the Sprint 33 commit message + docs/FEATURE-SPEC-SPRINT26.md §4.1 for the deferred scope.",
-    duration: 6000,
-  });
+/**
+ * Sprint 33b — Personalised Fine-tune command dispatcher.
+ * Maps each Tauri IPC command (`start_record` / `start_train` /
+ * `activate_model`) to the matching card state slot. The Rust
+ * side returns a `RecordingCommandResponse` with `phase`
+ * (`"running" | "complete" | "error"`); we mirror that into the
+ * card so the UI shows live status instead of a stub toast.
+ * Errors thrown by the Rust side come back as a JSON
+ * `RecordingError` (tagged union); we surface the `Display`
+ * text via `error.message` (Tauri wraps the tagged payload into
+ * the thrown error's `.message` field).
+ *
+ * Lives inside the component (not module-level) because it
+ * needs the per-card `setPhase` / `setMessage` closures. The
+ * dispatch table is keyed on command name → setters + label
+ * to keep the call sites uniform.
+ */
+type FinetuneResponse = {
+  phase: "running" | "complete" | "error";
+  message: string;
+  progress?: number;
+  logTail?: string[];
+};
+type CardPhase = "idle" | "running" | "complete" | "error";
+type CardSetters = {
+  setPhase: (p: CardPhase) => void;
+  setMessage: (m: string) => void;
+  label: string;
+};
+async function runFinetuneCommand(
+  command: "start_record" | "start_train" | "activate_model",
+  slots: CardSetters,
+) {
+  const { setPhase, setMessage, label } = slots;
+  setPhase("running");
+  setMessage(`${command} → backend…`);
+  try {
+    const res = await tryTauriInvoke<FinetuneResponse>(command);
+    if (!res) {
+      // Outside the Tauri shell the buttons are `disabled` (see
+      // the `disabled={!isTauriRuntime()}` on each card), so this
+      // path only fires if the runtime flips between render and
+      // click (extremely rare). Treat as a hard error.
+      setPhase("error");
+      setMessage("Not running inside the Tauri shell.");
+      toast.error(`[${label}] Not running inside the Tauri shell.`);
+      return;
+    }
+    // Map Rust phase → UI phase. `running` and `complete` are 1:1;
+    // `error` is the same word (the Rust side sets phase="error"
+    // only on the success-return path — a thrown error goes through
+    // the catch below).
+    setPhase(res.phase);
+    setMessage(res.message);
+    if (res.phase === "complete") {
+      toast.success(`[${label}] ${res.message}`, { duration: 4000 });
+    } else if (res.phase === "error") {
+      toast.error(`[${label}] ${res.message}`, { duration: 6000 });
+    } else {
+      toast.info(`[${label}] ${res.message}`, { duration: 3000 });
+    }
+  } catch (e: any) {
+    setPhase("error");
+    const msg =
+      e?.message ?? `${command} failed — check the dashboard console.`;
+    setMessage(msg);
+    toast.error(`[${label}] ${msg}`, { duration: 6000 });
+  }
 }

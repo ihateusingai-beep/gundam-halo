@@ -379,6 +379,49 @@ augmentation workaround.
 - [ ] CHANGELOG entry for v0.1.3 documenting both layers
       and the model footprint trade-off.
 
+## Update — 2026-06-24: Layer 2 v2 status (Sprint 33b — Tauri pipeline lands)
+
+**Sprint 33b ships the Tauri Rust recording + training
+pipeline that Sprint 33 deferred.** All 5 IPC commands
+(`start_record` / `stop_record` / `start_train` /
+`get_train_progress` / `activate_model`) now run real
+work; the cockpit's 3 cards (Record / Train / Swap) wire
+to `invoke()` and bind to live `phase` from the response.
+
+What's live now (Sprint 33b):
+
+| Artifact | Status | Path |
+|---|---|---|
+| `cpal` input stream (16 kHz mono int16) | ✅ | `frontend/src-tauri/src/recording/capture.rs` |
+| `hound` WAV writer (30 s chunks, 480k samples) | ✅ | `frontend/src-tauri/src/recording/capture.rs` |
+| JSONL manifest appender (one line per chunk) | ✅ | `frontend/src-tauri/src/recording/capture.rs` |
+| `tokio` chunk-rotator (1 s poll, 3-idle exit) | ✅ | `frontend/src-tauri/src/recording/capture.rs` |
+| `WhisperHandle` (parallel Python helper subprocess) | ✅ | `frontend/src-tauri/src/recording/transcribe.rs` |
+| `TrainHandle` (LoRA fine-tune subprocess) | ✅ | `frontend/src-tauri/src/recording/transcribe.rs` |
+| `RecordingError` (4 real variants) | ✅ | `frontend/src-tauri/src/commands.rs` |
+| `toml_edit` config patch in `activate_model` | ✅ | `frontend/src-tauri/src/commands.rs` |
+| Rust unit tests (6 cases — WAV round-trip, JSONL schema, stop-flag race) | ✅ | `frontend/src-tauri/src/recording/capture.rs::tests` |
+| Frontend wire-in (VoiceTab 3 cards → live `phase`) | ✅ | `frontend/src/routes/settings/VoiceTab.tsx` |
+
+The `cpal::Stream` `!Sync` workaround (per
+`cpal-0.15.3`'s `PhantomData<*mut ()>`) means the capture
+thread is a dedicated `std::thread` — the Tauri `State`
+holds only `Arc<AtomicBool>` stop flags + `Arc<Mutex<...>>`
+counters, all `Send + Sync`.
+
+**Acceptance criterion status**:
+
+- [x] JSONL manifest schema pinned (8 unit tests pass).
+- [x] Trainer accepts `--base_model_path` + `--train_audio_dir`.
+- [x] Settings UI shows the 3 cards (Record / Train / Swap).
+- [x] Tauri IPC command surface defined + registered.
+- [x] Real microphone capture + parallel WhisperHFASR
+      transcription (Sprint 33b ships this).
+- [ ] Held-out WER < 10% with personalised model active
+      (per §4.3 acceptance criterion 6) — needs live
+      training run + held-out eval; deferred to next
+      sprint.
+
 ## Update — 2026-06-18: Layer 2 v2 status (Sprint 33 / Track 31-B)
 
 **Layer 2 v2 self-record corpus shipped the **backend half**
