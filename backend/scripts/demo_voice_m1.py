@@ -68,14 +68,8 @@ async def main() -> int:
     voice_ws.set_agent_callback(real_agent)
 
     # Boot the app + open a WS connection
-    from app.core.registry import ToolRegistry
     from app.main import create_app
     from fastapi.testclient import TestClient
-
-    # Reset the tool registry — the module-level `halo_app` already
-    # registered the default tools at import time, so create_app() in
-    # this script would otherwise see duplicates.
-    ToolRegistry.clear()
 
     app = create_app()
     print("App created. Opening WS to /ws/voice ...")

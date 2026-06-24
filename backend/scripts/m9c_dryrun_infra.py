@@ -184,8 +184,6 @@ async def phase_a() -> dict:
     # ToolRegistry defaults
     print("  loading default tools...", flush=True)
     from app.tools.builder import default_tools
-    from app.core.registry import ToolRegistry
-    ToolRegistry.clear()
     tools = default_tools()
     expected = {
         "file_read", "file_write", "shell_exec", "open_app",
@@ -248,7 +246,6 @@ async def phase_b(engine, agent, tools) -> dict:
     print("PHASE B — End-to-end /ws/voice chain (voice.text path)")
     print("=" * 60)
 
-    from app.core.registry import ToolRegistry
     from app.tools.builder import default_tools
     from app.api import voice_ws
     from app.main import create_app
@@ -288,7 +285,6 @@ async def phase_b(engine, agent, tools) -> dict:
     voice_ws.set_agent_callback(stub_native_react_voice_cb)
 
     # Boot the FastAPI app
-    ToolRegistry.clear()
     app = create_app()
 
     transcript: list[str] = []

@@ -4946,6 +4946,149 @@ transcription".
 - `frontend/src-tauri/Cargo.toml` version 0.1.6 → **0.1.7**
 - `frontend/src-tauri/tauri.conf.json` version 0.1.6 → **0.1.7**
 
+### Sprint 32 P0-1 v2 — Full registry isolation refactor
+
+Sprint 32 P0-1 v2 replaces the prior class-attribute dict
+(`_registry_entries_<cls.__name__>`) with a **per-subclass
+`ContextVar[dict]`** plus an explicit `snapshot()` / `restore()`
+isolation API. Production call sites change zero lines of code;
+the public API (`register` / `register_value` / `get` / `create`
+/ `items` / `keys` / `contains` / `clear`) is identical.
+
+#### Why
+
+The Sprint 32 P0-1 design populated `ToolRegistry` via 22
+eager imports at `app/tools/__init__.py` import time. That
+worked for production but caused test pollution: a
+`@register_tool` decorator in `tests/core/test_registry.py`
+would leak `_DummyTool` into the global registry dict and
+pollute `default_tools()` in `tests/tools/test_builder.py`,
+causing 11 false failures. The cc6ca64 surgical fix
+hardcoded 3 test-polluted keys in a per-file autouse fixture
+— functional but fragile (any new decorator test would
+need the fixture updated).
+
+The ContextVar design eliminates this class of bug entirely:
+each `RegistryBase` subclass gets its own `ContextVar[dict]`,
+and the test fixture uses `snapshot()` / `restore()` to roll
+the registry back to a known state — no hardcoded keys.
+
+#### Added (isolation API)
+
+- **`RegistryBase.snapshot()`** — returns a shallow copy of
+  the current context's entries dict.
+- **`RegistryBase.restore(snap)`** — replaces the current
+  context's entries with `snap` (clears then updates).
+- **`RegistryBase.isolation_scope()`** — context manager
+  that snapshots on enter, restores on exit. Convenient for
+  individual tests that want auto-cleanup without writing
+  fixture code.
+- **`PRODUCTION_READ_REGISTRIES`** — module-level tuple
+  enumerating the 6 registries that production code reads
+  (`ToolRegistry` / `AgentRegistry` / `ChannelRegistry` /
+  `AsrRegistry` / `TtsRegistry` / `VadRegistry`). The test
+  fixture imports this constant instead of enumerating the
+  subclasses itself — future-proof when new production-read
+  registries are added.
+
+#### Changed (registry internals)
+
+- `RegistryBase._entries()` now returns `cls._storage_var().get()`
+  (per-subclass `ContextVar[Dict[str, T]]`) instead of
+  `getattr(cls, "_registry_entries_<name>")`. Identical public
+  behaviour; production code (eager-import chains, factory
+  reads, `default_tools()` iteration) is unchanged.
+- All 6 decorator helpers (`register_tool` /
+  `register_engine` / `register_agent` / `register_asr` /
+  `register_tts` / `register_vad`) now apply the same
+  `cls.name`-attribute guard that Sprint 32 P0-1 reserved
+  for `register_tool`. Typo like
+  `@register_engine("minimax")` + `name = "minimax-m2"`
+  fails loudly at import time.
+
+#### Removed (phantom registries)
+
+- **`ModelRegistry`** — defined in Sprint 32 P0-1, **zero
+  production readers or writers** as of 2026-06-24 audit.
+  Was used as scratch surface in `tests/core/test_registry.py`;
+  replaced by `EngineRegistry` in the rewritten test.
+- **`ProjectRegistry`** — defined in Sprint 32 P0-1, zero
+  production usage. Dead code; removed.
+- **`MemoryRegistry`** — defined in Sprint 32 P0-1, zero
+  production usage. Dead code; removed.
+
+`EngineRegistry` retained with deprecation note — reserved
+for future live2d engine backends per the Sprint 32 P0-1
+design comment. Its single production writer
+(`app/engines/minimax.py:61`) still works.
+
+#### Fixed (ChannelRegistry cold-start bug)
+
+- **`app/channels/__init__.py`** — prior version was empty
+  (1-line docstring). `app/main.py`'s lifespan calls
+  `manager.start_all()` which iterates `ChannelRegistry.keys()`,
+  but with no eager import of `app.channels.telegram` the
+  registry was empty in a clean production cold start.
+  Previous code only worked because some other path (test
+  fixtures, smoke scripts) had already imported the module.
+  Fix mirrors the pattern used by `app/agents/__init__.py` and
+  `app/voice/{asr,tts,vad}/__init__.py`: eagerly import the
+  channel modules so `@ChannelRegistry.register(...)` fires
+  at package import time.
+
+#### Changed (smoke scripts)
+
+- 6 smoke/demo scripts previously called
+  `ToolRegistry.clear()` before `create_app()` as a defensive
+  measure against double-import in script context. With the
+  ContextVar design and the unchanged eager-import chain, the
+  defensive clear is no longer needed and was removed:
+  - `scripts/m9c_dryrun_infra.py` (2 sites)
+  - `scripts/m9c_voice_tools.py` (1 site)
+  - `scripts/m9a_live_voice.py` (1 site)
+  - `scripts/smoke_voice_m2_local.py` (1 site)
+  - `scripts/demo_voice_m2.py` (1 site)
+  - `scripts/demo_voice_m1.py` (1 site)
+
+#### Changed (test fixture)
+
+- `tests/core/test_registry.py` — autouse fixture rewritten
+  to use `snapshot()` / `restore()` on all 6
+  production-read registries + `EngineRegistry.clear()` for
+  the scratch surface. Drops the cc6ca64 hardcoded test keys
+  (`test_tool_decorator_class` / `test_engine_decorator` /
+  `test_agent_decorator`).
+- 6 new tests added (Sprint 32 P0-1 v2 coverage):
+  - `test_clear_empties_registry`
+  - `test_snapshot_returns_independent_copy`
+  - `test_restore_replaces_state`
+  - `test_isolation_scope_context_manager`
+  - `test_register_engine_mismatched_name_raises`
+  - `test_register_agent_mismatched_name_raises`
+- Generic registry-machinery tests (`test_register_and_get`
+  etc.) rewritten to use `EngineRegistry` (was
+  `ModelRegistry`). 17 tests total, all pass.
+
+#### Test summary (this sprint)
+
+- 17 tests in `tests/core/test_registry.py` (was 11, +6 new)
+- Full backend `pytest` (excluding slow `test_voice_ws_tts.py`):
+  - **before cc6ca64**: 1188 passed, 11 failed
+  - **after cc6ca64**: 1199 passed, 0 failed
+  - **after P0-1 v2**: 1205 passed, 0 failed (59.09s)
+- 11 false failures from `tests/tools/test_builder*.py` (the
+  original pollution source) **cannot recur** with the
+  ContextVar design — even if a future test registers a
+  fixture, the next test's fixture restores the snapshot.
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.7 → **0.1.8**
+  (significant refactor: registry isolation + cold-start
+  bug fix + phantom registry removal)
+- Frontend versions unchanged (0.1.7 from Sprint 33b) —
+  Sprint 32 P0-1 v2 is backend-only.
+
 ---
 
 ## [0.1.3] — 2026-06-11

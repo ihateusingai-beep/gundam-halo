@@ -129,7 +129,6 @@ async def main() -> int:
     from app.voice.asr.asr_factory import create_asr
     from app.voice.tts.tts_factory import create_tts
     from app.voice.halo_responder import HaloResponder
-    from app.core.registry import ToolRegistry
     from app.api import voice_ws
     from app.main import create_app
     from fastapi.testclient import TestClient
@@ -207,7 +206,6 @@ async def main() -> int:
     voice_ws.set_responder(responder)
 
     # 4. Boot the app
-    ToolRegistry.clear()
     app = create_app()
     frames = chunk_wav(FIXTURE_WAV)
     audio_secs = len(frames) * 0.25

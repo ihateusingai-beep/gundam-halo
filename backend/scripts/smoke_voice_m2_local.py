@@ -48,11 +48,9 @@ async def main() -> int:
     voice_ws.set_agent_callback(fake_agent)
     voice_ws.set_responder(responder)
 
-    from app.core.registry import ToolRegistry
     from app.main import create_app
     from fastapi.testclient import TestClient
 
-    ToolRegistry.clear()
     app = create_app()
 
     with TestClient(app) as client:

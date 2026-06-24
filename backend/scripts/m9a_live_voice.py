@@ -81,7 +81,6 @@ async def main() -> int:
     from app.voice.vad import vad_factory
     from app.voice.tts.tts_factory import create_tts
     from app.voice.halo_responder import HaloResponder
-    from app.core.registry import ToolRegistry
     from app.main import create_app
     from fastapi.testclient import TestClient
 
@@ -146,7 +145,6 @@ async def main() -> int:
     voice_ws.set_responder(responder)
 
     # 4. Boot the app and warm up pipeline
-    ToolRegistry.clear()
     app = create_app()
     pipeline_built_at = time.time() - t0
     print(f"Cold-start: {pipeline_built_at:.1f}s (engines built, app ready)")
