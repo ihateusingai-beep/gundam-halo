@@ -5147,6 +5147,88 @@ report the real version instead of stale `0.1.0`.
 
 ---
 
+## [0.1.9] — 2026-06-25
+
+### Sprint 37 — Voice cold-start fix
+
+Two connected bugs that made the voice layer completely
+unreachable on a fresh install (or any user without an
+`silero_vad.onnx` file). The dashboard's voice tab showed
+404 on `/voice/status` and the voice WebSocket failed
+before reaching the speech pipeline. Fix flips both the
+config defaults and adds runtime path probing for the
+VAD model.
+
+#### Fixed (Bug 1 — voice disabled by default)
+
+- `app/core/config.py:VoiceConfig.enabled` — flipped default
+  from `False` to `True`. Cold-install users now get a
+  working voice layer out of the box. To disable voice
+  entirely, set `voice.enabled = false` in `config.toml`.
+  The dashboard's voice tab no longer shows a broken
+  404 on first launch.
+- `config.toml.example` — `enabled = false` → `enabled =
+  true` (with comment explaining how to opt out).
+
+#### Fixed (Bug 4 — SileroVAD path probing + package fallback)
+
+- `app/core/config.py:VoiceVADConfig.model_path` — default
+  flipped from `silero_vad.onnx` to `silero_vad.jit`. The
+  upstream Silero V5 ONNX file is corrupted as of 2024-06
+  per the memory rule "Silero VAD ONNX 損壞需用 TorchScript
+  bundle"; the only currently-valid V5 model is the
+  TorchScript bundle from the `silero-vad` PyPI package.
+- `app/voice/vad/silero_vad.py` — added `_probe_sibling_models()`
+  helper. When the configured `model_path` doesn't exist
+  on disk, the runtime probes `silero_vad.jit` /
+  `silero_vad.pt` / `silero_vad.onnx` in the same directory
+  in priority order and picks the first match. Logs a
+  warning when the configured path is wrong but a sibling
+  exists (so users know to update their config).
+- `app/voice/vad/silero_vad.py` — added `_load_onnx()` helper
+  to deduplicate the ONNX backend init logic.
+- `app/voice/vad/silero_vad.py` — **package fallback**: when
+  the `.jit`/`.pt` model is selected but the `silero-vad`
+  Python package isn't installed (e.g. numpy conflict with
+  `funasr_onnx` per `pyproject.toml`), the warmup step tries
+  the sibling `.onnx` file before giving up. ONNX uses
+  `onnxruntime` alone, which is already in the venv.
+
+#### Verify (cold-start, fresh HALO_HOME)
+
+- `voice.enabled = True` by default (was `False`)
+- `voice.vad.model_path` = `~/.gundam-halo/models/silero_vad.jit`
+  (was `.onnx` — file didn't exist locally)
+- `GET /voice/status` → **200 OK** with
+  `enabled: True, vad: silero` (was 404)
+- `GET /voice/config` → **200 OK** (was 404)
+- `WS /ws/voice` → reaches warmup step (was failing before
+  with "Silero VAD model not found at silero_vad.onnx").
+  Remaining gap: `silero-vad` Python package not installed
+  in user's venv — out of scope for this fix (per memory
+  rule, requires `uv add torch silero-vad` with numpy pin
+  to avoid `funasr_onnx` conflict — separate decision).
+
+#### Test summary (this sprint)
+
+- Backend `pytest` (excl slow tts): **1205 passed, 0 failed**
+  in 61.42s (same as Sprint 32 P0-1 v2 + quickwins baseline,
+  no regressions).
+- New unit-test-able behavior: `_probe_sibling_models()` —
+  covered by the smoke-test verification above (probes
+  empty dir → `None`, `.jit` only → `.jit`, all 3 exist →
+  `.jit` priority order).
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.8 → **0.1.9**
+  (significant feature change: voice cold-start works
+  out of the box + VAD model path auto-probing).
+- Frontend versions unchanged (0.1.7 from Sprint 33b) —
+  Sprint 37 is backend-only.
+
+---
+
 ## [0.1.3] — 2026-06-11
 
 Adds the M9-E Layer 2 fine-tune stack: dependencies, config

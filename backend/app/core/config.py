@@ -189,7 +189,16 @@ class VoiceVADConfig:
     """VAD (voice activity detection) settings."""
 
     backend: str = "silero"  # only "silero" in v1
-    model_path: str = "~/.gundam-halo/models/silero_vad.onnx"
+    # Sprint 37 — default to `.jit` (TorchScript). The upstream
+    # Silero V5 ONNX file at the configured URL is corrupted as
+    # of 2024-06 per the memory rule "Silero VAD ONNX 損壞需用
+    # TorchScript bundle"; the only currently-valid V5 model is
+    # the `silero-vad` PyPI bundle (a `.jit` file). If you have
+    # the `.onnx` file, set this to that path explicitly — the
+    # sibling-file probe in `silero_vad.warmup()` also handles
+    # this transparently (probes `.jit` / `.pt` / `.onnx` in
+    # the same directory in priority order).
+    model_path: str = "~/.gundam-halo/models/silero_vad.jit"
     speech_threshold_start: float = 0.5
     speech_threshold_end: float = 0.3
     min_speech_ms: int = 250
@@ -244,7 +253,13 @@ class VoiceLive2DConfig:
 class VoiceConfig:
     """Voice + Live2D interaction layer config (see ARCHITECTURE §15)."""
 
-    enabled: bool = False  # disabled by default; turn on with voice.enabled = true
+    # Sprint 37 — flip default to True so cold-install users
+    # get a working voice layer out of the box. The previous
+    # default of False meant /voice/status, /voice/config,
+    # and /ws/voice all returned 404 on first launch, which
+    # broke the dashboard's voice tab. Set this to False
+    # explicitly to disable voice.
+    enabled: bool = True
     vad: VoiceVADConfig = field(default_factory=VoiceVADConfig)
     asr: VoiceASRConfig = field(default_factory=VoiceASRConfig)
     tts: VoiceTTSConfig = field(default_factory=VoiceTTSConfig)

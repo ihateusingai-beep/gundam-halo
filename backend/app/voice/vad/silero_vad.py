@@ -19,6 +19,15 @@ Backend dispatch:
   is corrupted as of 2024-06, so we prefer the bundled `.jit`)
 - `.jit`/`.pt` → torch.jit (the actual TorchScript model from
   `silero-vad` PyPI; the only currently-valid V5 model)
+
+Path probing (Sprint 37 — voice cold-start fix):
+  When the configured `model_path` doesn't exist on disk, the
+  warmup step probes sibling files in the same directory
+  (`silero_vad.jit`, `silero_vad.pt`, `silero_vad.onnx`) and
+  picks the first match. This makes cold-start resilient to
+  either (a) the configured extension being wrong, or (b)
+  upstream Silero's V5 ONNX being corrupted (forcing users
+  to the `.jit` PyPI bundle per memory rule).
 """
 
 from __future__ import annotations
@@ -67,12 +76,31 @@ class SileroVAD(VADInterface):
         if self._warmed_up:
             return
 
+        # Sprint 37 — probe sibling files when the configured
+        # path is missing. The probe order matches the runtime
+        # dispatch reliability: `.jit` (TorchScript, current
+        # PyPI V5) first, then `.pt` (legacy TorchScript), then
+        # `.onnx` (upstream V5 ONNX which is corrupted per
+        # memory rule "Silero VAD ONNX 損壞需用 TorchScript
+        # bundle" — but we still probe it last so users with
+        # a known-good ONNX file aren't forced to switch).
         if self._model_path is None or not self._model_path.exists():
-            raise SileroVADLoadError(
-                f"Silero VAD model not found at {self._model_path}. "
-                "See ARCHITECTURE §15.10 for model_path config. "
-                "(Auto-download coming in follow-up.)"
+            probed = self._probe_sibling_models()
+            if probed is None:
+                raise SileroVADLoadError(
+                    f"Silero VAD model not found. "
+                    f"Configured: {self._model_path}. "
+                    f"Probed (silero_vad.{{jit,pt,onnx}}) in the "
+                    f"same directory: all missing. "
+                    f"See ARCHITECTURE §15.10. "
+                    f"Auto-download coming in follow-up."
+                )
+            logger.info(
+                f"Silero VAD: configured model_path "
+                f"{self._model_path} not found; falling back to "
+                f"{probed.name} (sibling probe)"
             )
+            self._model_path = probed
 
         ext = self._model_path.suffix.lower()
         if ext in (".jit", ".pt"):
@@ -80,10 +108,27 @@ class SileroVAD(VADInterface):
             try:
                 import torch  # type: ignore
                 from silero_vad import VADIterator  # type: ignore
-            except ImportError as e:  # pragma: no cover
+            except ImportError as e:
+                # Sprint 37 fallback: if the `silero-vad` PyPI
+                # package is missing (e.g. numpy conflict with
+                # `funasr_onnx` per pyproject.toml note), try
+                # the sibling `.onnx` file before giving up.
+                # The ONNX file works with `onnxruntime` alone,
+                # which is already in the venv.
+                onnx_sibling = self._model_path.with_suffix(".onnx")
+                if onnx_sibling.is_file():
+                    logger.warning(
+                        f"torch + silero-vad not installed; falling "
+                        f"back to ONNX sibling {onnx_sibling.name}"
+                    )
+                    self._model_path = onnx_sibling
+                    self._load_onnx()
+                    return
                 raise SileroVADLoadError(
-                    "torch + silero-vad are required for TorchScript SileroVAD. "
-                    "Install with: uv add torch silero-vad"
+                    "torch + silero-vad are required for TorchScript SileroVAD, "
+                    "and no .onnx sibling is available. "
+                    "Install with: uv add torch silero-vad  (or  uv add onnxruntime "
+                    "and download silero_vad.onnx to the same directory)"
                 ) from e
             logger.info(f"Loading Silero VAD (TorchScript) from {self._model_path}")
             self._session = torch.jit.load(
@@ -94,23 +139,7 @@ class SileroVAD(VADInterface):
             # We own one iterator per VAD instance and reset it on `reset()`.
             self._vad_iterator = VADIterator(self._session)
         elif ext == ".onnx":
-            self._backend = "onnx"
-            try:
-                import onnxruntime as ort  # type: ignore
-            except ImportError as e:  # pragma: no cover
-                raise SileroVADLoadError(
-                    "onnxruntime is required for ONNX SileroVAD. "
-                    "Install with: uv add onnxruntime"
-                ) from e
-            logger.info(f"Loading Silero VAD (ONNX) from {self._model_path}")
-            sess_options = ort.SessionOptions()
-            sess_options.inter_op_num_threads = 1
-            sess_options.intra_op_num_threads = 1
-            self._session = ort.InferenceSession(
-                str(self._model_path),
-                sess_options=sess_options,
-                providers=["CPUExecutionProvider"],
-            )
+            self._load_onnx()
         else:
             raise SileroVADLoadError(
                 f"Unsupported Silero VAD model extension: {ext!r}. "
@@ -121,13 +150,64 @@ class SileroVAD(VADInterface):
         self._warmed_up = True
         logger.info(f"Silero VAD ready (backend={self._backend})")
 
+    def _load_onnx(self) -> None:
+        """Load the ONNX backend (called from warmup)."""
+        self._backend = "onnx"
+        try:
+            import onnxruntime as ort  # type: ignore
+        except ImportError as e:
+            raise SileroVADLoadError(
+                "onnxruntime is required for ONNX SileroVAD. "
+                "Install with: uv add onnxruntime"
+            ) from e
+        logger.info(f"Loading Silero VAD (ONNX) from {self._model_path}")
+        sess_options = ort.SessionOptions()
+        sess_options.inter_op_num_threads = 1
+        sess_options.intra_op_num_threads = 1
+        self._session = ort.InferenceSession(
+            str(self._model_path),
+            sess_options=sess_options,
+            providers=["CPUExecutionProvider"],
+        )
+
     def reset(self) -> None:
-        """Reset internal LSTM state and audio context buffer."""
+        """Reset internal LSTM state and audio context."""
         # State shape: (2, batch=1, 128) for v5
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
         self._context = np.zeros((0,), dtype=np.int16)
         if self._vad_iterator is not None:
             self._vad_iterator.reset_states()
+
+    def _probe_sibling_models(self) -> "Path | None":  # type: ignore[name-defined]
+        """Probe sibling files in the same directory as
+        `self._model_path`, returning the first match in
+        priority order.
+
+        Priority order (Sprint 37):
+          1. `.jit` — current Silero V5 TorchScript bundle
+             (only currently-valid V5 per memory rule).
+          2. `.pt` — legacy TorchScript bundle.
+          3. `.onnx` — upstream V5 ONNX (corrupted as of
+             2024-06 but kept for users with known-good
+             local copies).
+
+        Returns `None` if `self._model_path` is None or its
+        parent directory does not exist. Otherwise returns
+        the first existing sibling in priority order.
+        """
+        if self._model_path is None:
+            return None
+        parent = self._model_path.parent
+        if not parent.exists() or not parent.is_dir():
+            return None
+        # Strip suffix from the configured path to get the
+        # base name (e.g. `silero_vad.onnx` → `silero_vad`).
+        base = self._model_path.stem
+        for ext in (".jit", ".pt", ".onnx"):
+            candidate = parent / f"{base}{ext}"
+            if candidate.is_file():
+                return candidate
+        return None
 
     def process_frame(
         self, audio_frame: bytes, sample_rate: int = 16000

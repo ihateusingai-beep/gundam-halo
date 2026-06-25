@@ -67,13 +67,26 @@ command_prefix = "/"                  # default
 # ---------------------------------------------------------------------------
 # Voice layer (M1-M3 — see docs/ARCHITECTURE.md §15)
 # ---------------------------------------------------------------------------
+# Sprint 37: voice is enabled by default. Cold-install users get
+# a working voice layer out of the box. The previous default
+# of `false` meant /voice/status, /voice/config, and /ws/voice
+# all returned 404 on first launch, which broke the dashboard's
+# voice tab. To disable voice entirely, set this to `false`.
 [voice]
-enabled = false                       # set true to enable voice
+enabled = true
 sample_rate = 16000
 frame_duration_ms = 250
 
 [voice.vad]
 backend = "silero"                    # silero v5
+# Sprint 37: default path now points to `.jit` (TorchScript
+# bundle from the `silero-vad` PyPI package). The upstream
+# Silero V5 ONNX file is corrupted as of 2024-06; the only
+# currently-valid V5 model is the TorchScript bundle. If you
+# have a known-good `.onnx` file, set this to its path; the
+# runtime will probe `.jit`/`.pt`/`.onnx` siblings in priority
+# order so the exact filename doesn't matter.
+model_path = "~/.gundam-halo/models/silero_vad.jit"
 speech_threshold_start = 0.5
 speech_threshold_end = 0.35
 min_speech_ms = 250
