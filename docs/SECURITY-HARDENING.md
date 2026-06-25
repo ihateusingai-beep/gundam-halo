@@ -163,6 +163,30 @@ deployment, consider:
   not a sandbox.
 - **Linux AppArmor / SELinux profile** — same idea, kernel-
   enforced.
+
+## Endpoints currently unprotected (Sprint 43)
+
+Sprint 43 ships `POST /api/system/clear-crash-log` as part of the
+self-healing backend. This endpoint is **currently unprotected**
+(no auth layer) per the project's single-user assumption that all
+`/api/system/*` routes are local-only. The action is benign
+(wipes `~/.gundam-halo/state/crash_log.jsonl`; returns the
+cleared event count), so the blast radius is low.
+
+**Sprint 45 will add an auth layer** for all `/api/system/*`
+endpoints. The mechanism is undecided — likely a shared-secret
+token in `~/.gundam-halo/.env` (chmod 600) sent via the
+`Authorization: Bearer <token>` header, since the cockpit is
+already the only legitimate client. Tracked under the M12
+hardening backlog.
+
+Until then, **bind the backend to localhost** (the default —
+`server.bind_address = "127.0.0.1"` in `config.toml.example`)
+and rely on Tailscale for any remote access. Do not expose port
+8765 to the public internet; per the project memory rule "NO
+public internet exposure", the backend is **Tailscale-only**.
+
+  enforced.
 - **`HALO_REQUIRE_TAILSCALE=true`** env var — equivalent to
   setting `server.require_tailscale = true` in config.toml;
   useful for container deployments where the TOML mount

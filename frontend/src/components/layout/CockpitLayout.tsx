@@ -8,6 +8,7 @@ import { ConnectionStatus } from "@/components/gundam/ConnectionStatus";
 import { MissionLog } from "@/components/gundam/MissionLog";
 import { ProjectCard } from "@/components/gundam/ProjectCard";
 import { MaybeBackendOutdatedBanner } from "@/components/gundam/BackendOutdatedBanner";
+import { BackendHealthBanner } from "@/components/gundam/BackendHealthBanner";
 import { SignalCard } from "@/components/gundam/SignalCard";
 import { useBackendVersion } from "@/hooks/use-backend-version";
 import { useProjectsStore } from "@/stores/projects";
@@ -236,6 +237,13 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
         {mode === "active" ? "MISSION ACTIVE" : "STANDBY"} · v{APP_VERSION}
       </div>
       <div className="gundam-scan" aria-hidden="true" />
+
+      {/* Backend-health banner — Sprint 43. Renders when the Tauri
+          watchdog detects the backend is unreachable (yellow) or has
+          crashed 3+ times in the last hour (red, with action buttons
+          to clear the crash log + install the launchd supervisor).
+          Hidden by default when the backend is healthy. */}
+      <BackendHealthBanner />
 
       {/* Backend-outdated banner — only renders when git SHA mismatches
           or required features are missing. Polled every 30s. */}

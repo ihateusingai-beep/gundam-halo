@@ -8,6 +8,7 @@ import App from "./App";
 import "./services/halo-live2d-bridge";
 import "./services/halo-tray-controls";
 import "./services/halo-voice-ws";
+import "./services/halo-watchdog-events";
 import "./styles/gundam.css";
 import "./index.css";
 

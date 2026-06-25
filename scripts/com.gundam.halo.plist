@@ -121,5 +121,31 @@
     -->
     <key>ProcessType</key>
     <string>Background</string>
+
+    <!--
+      Sprint 43 — Self-Healing Backend: WatchPaths trigger for the
+      crash marker file. When the backend's `app.core.watchdog
+      .write_crash_marker()` writes to
+      $HALO_HOME/state/crash_marker (called from the uncaught
+      exception handler + crash marker writes), launchd fires
+      `on-launchd-crash.sh` which appends the event to the crash
+      log JSONL.
+
+      Why WatchPaths? launchd has no built-in "process crashed"
+      callback. WatchPaths is the closest primitive: it polls
+      the directory and fires on any change.
+
+      Note: launchd's WatchPaths is coarse — it triggers on ANY
+      file change in $HALO_HOME/state (not just crash_marker).
+      That's fine: on-launchd-crash.sh is idempotent and exits
+      silently when no marker file exists. The other state
+      files (setup_state.json, etc.) won't trigger spurious
+      crash entries because the marker file is the canonical
+      crash signal.
+    -->
+    <key>WatchPaths</key>
+    <array>
+        <string>__HALO_HOME__/state</string>
+    </array>
 </dict>
 </plist>

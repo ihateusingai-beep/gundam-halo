@@ -8,6 +8,7 @@
 
 mod commands; // Sprint 33 / Track 31-B — Personalised Fine-tune IPC commands.
 mod recording; // Sprint 33 — recording pipeline stub (real impl deferred).
+mod watchdog; // Sprint 43 — Self-Healing Backend (health probe + crash-loop guard).
 
 use std::path::Path;
 use std::process::Command;
@@ -404,6 +405,15 @@ pub fn run() {
                 app.manage(AnimationStop(stop_flag));
             }
 
+            // ---- Sprint 43 watchdog thread ----
+            // Pings /api/health every 60s; emits backend-unhealthy /
+            // backend-recovered / backend-respawn-disabled Tauri events
+            // when the state machine transitions. Complements launchd's
+            // KeepAlive with a respawn-loop guard — see
+            // docs/FEATURE-SPEC-SPRINT43-SELF-HEALING.md.
+            let watchdog_stop = watchdog::start_watchdog(app.handle().clone());
+            app.manage(WatchdogStop(watchdog_stop));
+
             // ---- Sprint 33 (Track 31-B) Personalised Fine-tune state ----
             // Register the in-memory `RecordingState` so the IPC
             // commands can `app.state::<recording::RecordingState>()`
@@ -441,6 +451,18 @@ pub fn run() {
             set_animation_speed,
             get_animation_speed,
             restart_backend,
+            // Sprint 43 — Self-Healing Backend watchdog IPC commands.
+            // The frontend calls these to:
+            //   - `get_backend_health` → render the BackendHealthBanner
+            //     initial state on cockpit mount
+            //   - `install_launchd_supervisor` → one-click install
+            //     when the supervisor plist isn't loaded
+            //   - `clear_crash_log` → wipe the crash log via the
+            //     backend's POST /api/system/clear-crash-log
+            // See docs/FEATURE-SPEC-SPRINT43-SELF-HEALING.md.
+            get_backend_health,
+            install_launchd_supervisor,
+            clear_crash_log,
             // Sprint 33 (Track 31-B) — Personalised Fine-tune
             // IPC commands. The 5 commands are stubs in this
             // sprint — the recording + training pipeline is
@@ -479,3 +501,141 @@ struct AnimationStop(Arc<AtomicBool>);
 // keep `Path` import alive for future resource-lookup helpers
 #[allow(dead_code)]
 fn _path_anchor(_: &Path) {}
+
+// ============================================================================
+// Sprint 43 — Watchdog IPC commands
+// ============================================================================
+
+/// Stop-flag wrapper for the watchdog thread, stashed in Tauri state.
+#[allow(dead_code)]
+struct WatchdogStop(Arc<AtomicBool>);
+
+#[derive(Serialize)]
+struct BackendHealth {
+    /// True if the launchd `com.gundam.halo` plist is loaded.
+    installed: bool,
+    /// PID of the supervised uvicorn, or None.
+    pid: Option<u32>,
+    /// Crash count in the last 60 min (from /api/system/health-detailed).
+    crash_count_60m: u32,
+    /// ISO 8601 timestamp of the most recent crash, or None.
+    last_crash_at: Option<String>,
+    /// ISO 8601 timestamp of the last watchdog poll (or app start).
+    last_check_at: Option<String>,
+    /// True if the backend reported respawn_disabled.
+    respawn_disabled: bool,
+}
+
+/// Read the current backend health summary. The frontend calls this
+/// on cockpit mount to render the BackendHealthBanner initial state
+/// without waiting for the first watchdog poll.
+#[tauri::command]
+async fn get_backend_health() -> BackendHealth {
+    use std::time::SystemTime;
+
+    let body = watchdog::curl_get("http://localhost:8765/api/system/health-detailed");
+
+    let (crash_count_60m, last_crash_at, respawn_disabled, installed, pid) =
+        match body.as_deref() {
+            Some(b) => {
+                let v: serde_json::Value = serde_json::from_str(b).unwrap_or_default();
+                let installed = v
+                    .get("watchdog")
+                    .and_then(|w| w.get("installed"))
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
+                let pid = v
+                    .get("watchdog")
+                    .and_then(|w| w.get("pid"))
+                    .and_then(|x| x.as_u64())
+                    .map(|p| p as u32);
+                (
+                    v.get("crash_count_60m").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                    v.get("last_crash_at").and_then(|x| x.as_str()).map(String::from),
+                    v.get("respawn_disabled").and_then(|x| x.as_bool()).unwrap_or(false),
+                    installed,
+                    pid,
+                )
+            }
+            None => (0, None, false, false, None),
+        };
+
+    // last_check_at = right now (best effort — the watchdog's
+    // authoritative timestamp is in the events it emits).
+    let last_check_at = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .map(|d| {
+            chrono::DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default()
+        });
+
+    BackendHealth {
+        installed,
+        pid,
+        crash_count_60m,
+        last_crash_at,
+        last_check_at,
+        respawn_disabled,
+    }
+}
+
+/// Install the launchd supervisor plist (`scripts/install-launchd.sh`).
+///
+/// This is the one-click "supervisor not installed" recovery path
+/// from the BackendHealthBanner. The install script prompts for
+/// sudo via the macOS GUI prompt (we don't capture stdin).
+///
+/// Returns the install output on success, or an error string on
+/// failure (so the banner can display the reason).
+#[tauri::command]
+async fn install_launchd_supervisor(repo_dir: Option<String>) -> Result<String, String> {
+    let repo_dir = repo_dir.unwrap_or_else(|| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        format!("{}/workspace/gundam-halo", home)
+    });
+    let script = format!("{}/scripts/install-launchd.sh", repo_dir);
+
+    let output = Command::new("bash")
+        .arg(&script)
+        .output()
+        .map_err(|e| format!("Failed to run {}: {}", script, e))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).into_owned())
+    }
+}
+
+/// Clear the backend crash log via POST /api/system/clear-crash-log.
+///
+/// Frontend wires this to the BackendHealthBanner "Clear crash log
+/// & retry" button. Returns the cleared event count.
+#[tauri::command]
+async fn clear_crash_log() -> Result<u32, String> {
+    let output = Command::new("curl")
+        .args([
+            "-sf",
+            "-X",
+            "POST",
+            "--max-time",
+            "5",
+            "http://localhost:8765/api/system/clear-crash-log",
+        ])
+        .output()
+        .map_err(|e| format!("curl failed: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "clear-crash-log returned non-2xx: {:?}",
+            output.status.code()
+        ));
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("invalid response JSON: {} (body: {})", e, body))?;
+    Ok(v.get("cleared").and_then(|x| x.as_u64()).unwrap_or(0) as u32)
+}
