@@ -21,11 +21,18 @@ the default. See `docs/FEATURE-SPEC-SPRINT26.md` §4.4 +
 `docs/FEATURE-SPEC-SPRINT31.md` §Appendix B.
 
 Sprint 32 P0-1 refactor: the 3 if-elif backend branches are
-replaced with a single `EngineRegistry.get(backend)` lookup
+replaced with a single `AsrRegistry.items()` lookup
 plus a per-backend kwargs adapter dict. Each ASR class opts in
-via `@register_engine("name")` (see `app/core/registry.py`).
-New ASR backends now only need to add an `@register_engine`
+via `@register_asr("name")` (see `app/core/registry.py`).
+New ASR backends now only need to add an `@register_asr`
 decorator and a kwargs adapter — no factory edit.
+
+`AsrRegistry.items()` is consulted **only on the error path**
+(see `create_asr()` below) to build a friendly "available
+backends are: …" message when the user typos a backend name.
+The actual dispatch uses the `_ASR_KWARGS_ADAPTERS` dict
+(string key → kwargs adapter) — keeping the fast path
+out of the registry abstraction.
 """
 
 from __future__ import annotations

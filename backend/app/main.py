@@ -36,10 +36,8 @@ from app.core.lockfile import (
     release as release_backend_lock,
 )
 from app.core.registry import (
-    AgentRegistry,
-    ChannelRegistry,
+    PRODUCTION_READ_REGISTRIES,
     EngineRegistry,
-    ToolRegistry,
 )
 from app.core.logging import configure_logging
 
@@ -144,8 +142,12 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     bus = get_event_bus(record_history=True)
     logger.debug("Event bus initialized")
 
-    # Initialize core registries (already class-level, just confirm)
-    for reg in [AgentRegistry, ChannelRegistry, EngineRegistry, ToolRegistry]:
+    # Initialize core registries (already class-level, just confirm).
+    # `PRODUCTION_READ_REGISTRIES` is the canonical list (Sprint 32 P0-1
+    # v2) — logging all 6 ensures the startup banner matches what
+    # production code actually reads. EngineRegistry is also included
+    # for completeness (reserved for future live2d backends).
+    for reg in PRODUCTION_READ_REGISTRIES + (EngineRegistry,):
         logger.debug(f"Registry ready: {reg.__name__}")
 
     # Tool → Live2D motion mapper (M3-B4). Translates TOOL_CALL_START/END

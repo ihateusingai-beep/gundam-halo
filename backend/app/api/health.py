@@ -5,6 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app import __version__
+
 router = APIRouter()
 
 
@@ -17,4 +19,4 @@ class HealthResponse(BaseModel):
 @router.get("", response_model=HealthResponse)
 async def health() -> HealthResponse:
     """Basic health check."""
-    return HealthResponse(status="ok", version="0.1.0", name="gundam-halo")
+    return HealthResponse(status="ok", version=__version__, name="gundam-halo")

@@ -5089,6 +5089,62 @@ design comment. Its single production writer
 - Frontend versions unchanged (0.1.7 from Sprint 33b) —
   Sprint 32 P0-1 v2 is backend-only.
 
+### Hotfix — Three trivial function-review fixes
+
+Follow-up to the Sprint 32 P0-1 v2 function review (see
+status report `STATUS-2026-06-25-quickwins.md` for context).
+Three trivial fixes that don't trigger a version bump
+(correctness corrections, no user-facing feature change):
+
+#### Fixed (Bug 3 — hardcoded version)
+
+- `app/api/health.py` — `GET /health` returned
+  `version: "0.1.0"` hardcoded. Now reads
+  `from app import __version__` so it tracks the real
+  backend version (currently `0.1.8`).
+- `app/api/system.py` — `GET /api/system/info` returned
+  `app_version: "0.1.0"` hardcoded. Same fix: imports
+  `__version__` and uses it in the response dict.
+
+The dashboard header (which reads `/api/system/info`)
+and external health checks (which read `/health`) now
+report the real version instead of stale `0.1.0`.
+
+#### Fixed (Bug 5 — incomplete registry debug log)
+
+- `app/main.py:148` — startup banner logged only 4 of the
+  7 registries (`AgentRegistry` / `ChannelRegistry` /
+  `EngineRegistry` / `ToolRegistry`). Missing
+  `AsrRegistry` / `TtsRegistry` / `VadRegistry`. Now
+  iterates `PRODUCTION_READ_REGISTRIES + (EngineRegistry,)`
+  for completeness — the canonical list introduced in
+  Sprint 32 P0-1 v2.
+
+#### Fixed (Bug 6 — stale docstring)
+
+- `app/voice/asr/asr_factory.py:23-28` — Sprint 32 P0-1
+  docstring said the dispatch was a single
+  `EngineRegistry.get(backend)` lookup. Actual code uses
+  `AsrRegistry.contains/items` (lines 73-74) **only on
+  the error path** — fast-path dispatch uses a hardcoded
+  `_ASR_KWARGS_ADAPTERS` dict. Rewrote the docstring to
+  match reality + explain why registry isn't on the hot
+  path.
+
+#### Test summary (this hotfix)
+
+- Backend `pytest` (excl slow tts): **1205 passed, 0 failed**
+  (same as Sprint 32 P0-1 v2 baseline).
+- Verify: `GET /health` returns `"version": "0.1.8"`,
+  `GET /api/system/info` returns `"app_version": "0.1.8"`
+  (was `"0.1.0"` pre-hotfix).
+
+#### Version bump
+
+- **Unchanged** at 0.1.8 (correctness fixes, no
+  user-facing feature change). Per Mavis memory rule:
+  hotfixes that don't add functionality skip the bump.
+
 ---
 
 ## [0.1.3] — 2026-06-11

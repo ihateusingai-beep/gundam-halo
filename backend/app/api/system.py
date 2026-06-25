@@ -12,6 +12,8 @@ from pydantic import BaseModel
 
 import psutil
 
+from app import __version__
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -91,7 +93,7 @@ async def get_info() -> dict:
     return {
         "platform": "mac",
         "python_version": "3.11+",
-        "app_version": "0.1.0",
+        "app_version": __version__,
         "git_sha": _read_git_sha() or "unknown",
         "build_id": int(time.time()),  # updated on every restart
         "features": [
