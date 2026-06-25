@@ -5227,6 +5227,83 @@ VAD model.
 - Frontend versions unchanged (0.1.7 from Sprint 33b) —
   Sprint 37 is backend-only.
 
+### Sprint 37.1 — Voice cold-start completes (`silero-vad` dep added)
+
+Sprint 37 fixed the **runtime** part of voice cold-start
+(model_path probing + ONNX fallback + voice.enabled
+default True) but left one **dependency-install** gap:
+the `silero-vad` Python package wasn't declared in any
+optional-dependency, so a cold `uv sync --extra voice`
+would fail at warmup with "torch + silero-vad are
+required for TorchScript SileroVAD".
+
+Sprint 37.1 closes that gap by declaring `silero-vad`
+in the `voice` extra and pinning `numpy<1.27` so combined
+`voice + voice-yuesub` installs resolve cleanly (the
+historical conflict that pyproject previously warned
+about is now stale — `silero-vad>=6.2` accepts
+`numpy>=1.26`, so the only constraint left is the
+`funasr_onnx` upper bound).
+
+#### Changed (pyproject.toml)
+
+- **`[voice]` extra** — added `"silero-vad>=5.1,<7"`.
+  Now bundles the TorchScript Silero VAD backend (the
+  only currently-valid V5 per the memory rule "Silero
+  VAD ONNX 損壞需用 TorchScript bundle"). Pulls in
+  `torch` + `torchaudio` + `numpy` transitively (already
+  declared in `voice-hf`).
+- **`[voice]` extra** — pinned `"numpy>=1.26,<1.27"`
+  (was `numpy>=1.26,<3`). The lower upper bound is the
+  yuesub compatibility constraint — combined installs
+  resolve to `numpy==1.26.4`. Voice-only users still get
+  a working install (numpy 1.26.4 is compatible with
+  everything in the `voice` extra).
+- **`[voice-yuesub]` comments** — removed the stale
+  "uv sync may need to drop silero-vad" warning. The
+  historical conflict no longer applies; replaced with
+  a Sprint 37.1 note explaining the resolution.
+
+#### Changed (config.toml.example)
+
+- Top-of-file install guide — added a 14-line Sprint 37.1
+  note explaining the `voice` extra now bundles
+  `silero-vad` and listing the other voice extras
+  (`voice-yuesub` / `voice-hf` / `voice-hf-mlx`) with
+  their install commands and dependency footprints.
+
+#### Verify (cold-start, fresh HALO_HOME)
+
+- `uv sync --extra voice` installs `silero-vad==6.2.1`
+  + `torch==2.12.1` + `numpy==1.26.4` automatically.
+- `uv sync --extra voice --extra voice-yuesub` resolves
+  cleanly to `numpy==1.26.4` (no manual pinning).
+- `uv sync --extra voice --extra voice-yuesub
+  --extra voice-hf --extra tool-send-message` resolves
+  cleanly (no manual pinning; same `numpy==1.26.4`).
+- **End-to-end voice WS**: `WS /ws/voice` now connects
+  AND Silero VAD warmup succeeds (the full path Sprint
+  37 was missing). Live2d fallback also fires. The
+  remaining gap (agent LLM call requires a real
+  `MINIMAX_API_KEY`) is out of scope.
+
+#### Test summary (this sprint)
+
+- Backend `pytest` (excl slow tts): **1205 passed, 0 failed**
+  in 59.28s (same as Sprint 37 baseline, no regressions).
+- `cargo test` + `tsc` + `vitest` not run (no frontend or
+  Rust changes).
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.9 → **0.1.10**
+  (significant dep change: voice cold-start now works
+  on a clean `uv sync --extra voice` install — was
+  previously blocked on the `silero-vad` package).
+- `uv.lock` regenerated (13 package additions: silero-vad
+  + its transitive deps).
+- Frontend versions unchanged (0.1.7 from Sprint 33b).
+
 ---
 
 ## [0.1.3] — 2026-06-11

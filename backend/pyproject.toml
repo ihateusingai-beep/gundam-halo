@@ -47,8 +47,27 @@ dev = [
 ]
 voice = [
     # M1: VAD + ASR
-    "onnxruntime>=1.17",             # Silero VAD inference
-    "numpy>=1.26,<3",                # Audio array processing
+    "onnxruntime>=1.17",             # Silero VAD inference (ONNX backend)
+    # Sprint 37.1 — Silero VAD TorchScript backend.
+    # `silero-vad` (PyPI) bundles the only currently-valid V5
+    # model as a `.jit` file. Per memory rule "Silero VAD ONNX
+    # 損壞需用 TorchScript bundle", we declare it as a voice
+    # extra dep so cold-install users get a working VAD
+    # without manual `uv add` (previously the path-probing
+    # fallback in `app/voice/vad/silero_vad.py` warned at
+    # runtime). Pulls in `torch` + `torchaudio` + `numpy`
+    # transitively; conflicts with `funasr_onnx` historically
+    # forced numpy<1.26.4, but `silero-vad>=6.2` now accepts
+    # numpy>=1.26 so the constraint is satisfiable in
+    # `voice + voice-yuesub` combined installs (numpy resolves
+    # to 1.26.4).
+    "silero-vad>=5.1,<7",
+    # Pin numpy<1.27 to keep combined `voice + voice-yuesub`
+    # installs resolvable (funasr_onnx requires numpy<1.27;
+    # this is the lower of the two upper bounds). Users who
+    # only install `voice` get whatever numpy silero-vad
+    # pulls transitively (currently 2.x).
+    "numpy>=1.26,<1.27",
     "openai-whisper>=20231117",      # Local Whisper ASR (v0.1.0–v0.1.3)
     # M2: TTS (sentence splitting + Edge TTS)
     "edge-tts>=7.0",                 # Microsoft Edge TTS (free, no API key)
@@ -96,11 +115,17 @@ voice-yuesub = [
     # yuesub-api's `OnnxTranscriber._asr` for token-span alignment
     # (the `aligner = bundle.get_aligner()` call). funasr_onnx
     # itself does NOT include an aligner — we depend on torchaudio
-    # here. Note: uv sync may need to drop silero-vad to resolve
-    # the numpy<=1.26.4 constraint funasr_onnx requires; if
-    # whisper_local users hit a silero-VAD ImportError, see
-    # scripts/setup-yuesub-models.sh comments and pin numpy
-    # via [tool.uv] constraint.
+    # here.
+    #
+    # Sprint 37.1 update: the historical "drop silero-vad to
+    # resolve numpy conflict" warning above is now stale.
+    # `silero-vad>=6.2` accepts `numpy>=1.26`, so combining
+    # `voice` + `voice-yuesub` resolves cleanly to
+    # `numpy==1.26.4` (the lower of the two upper bounds).
+    # yuesub users don't need `silero-vad` itself (they have
+    # `fsmn-vad` from SenseVoiceSmall), but `uv sync --extra voice
+    # --extra voice-yuesub` now installs both cleanly without
+    # manual numpy pinning.
     "torchaudio>=2.1",
     # pandas is required by the corrector's data loaders
     # (jyutping dictionary, char frequency, t2s mapping).

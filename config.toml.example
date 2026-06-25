@@ -3,6 +3,22 @@
 # Copy to ~/.gundam-halo/config.toml and edit. The backend reads this
 # at startup. Environment variables (HALO_HOME, MINIMAX_API_KEY, etc.)
 # override individual fields.
+#
+# Sprint 37.1: the `voice` extra now bundles `silero-vad` (the
+# TorchScript Silero V5 backend). A cold `uv sync --extra voice`
+# install is enough for the voice WS endpoint to warm up —
+# no manual `uv add silero-vad` needed. Combined with Sprint 37,
+# the voice layer works out of the box for the whisper_local
+# ASR backend (the default `voice.asr.backend = "whisper_local"`).
+# Other backends:
+#   - `voice-yuesub`: Cantonese via SenseVoiceSmall. Adds
+#     funasr_onnx + librosa + opencc + pandas (~1.5GB).
+#   - `voice-hf`: HF transformers pipeline. Adds torch +
+#     transformers + accelerate.
+#   - `voice-hf-mlx`: Apple Silicon MLX whisper (2× speedup).
+# Install with: uv sync --extra voice --extra voice-yuesub
+# (numpy is pinned to <1.27 in the voice extra so combined
+# installs resolve cleanly).
 
 # ---------------------------------------------------------------------------
 # User
