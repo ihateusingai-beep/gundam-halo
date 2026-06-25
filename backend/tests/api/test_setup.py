@@ -921,3 +921,132 @@ class TestVoiceDefault:
         )
         toml_text = (halo_home / "config.toml").read_text()
         assert "enabled = true" in toml_text or "enabled=true" in toml_text
+
+
+# ============================================================================
+# Sprint 44 — wizard UI support endpoints
+# ============================================================================
+#
+# `/api/setup/llm/validate` and `/api/setup/tts/preview` are read-only
+# "preview" endpoints that the wizard UI calls BEFORE the user clicks
+# Next. They MUST NOT persist anything — only `/api/setup/llm` (etc.)
+# write to disk.
+
+
+@pytest.fixture
+def _fresh_app(monkeypatch, tmp_path):
+    """Build a TestClient with fresh HALO_HOME for the Sprint 44 tests."""
+    monkeypatch.setenv("HALO_HOME", str(tmp_path))
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-fake")
+    config_mod.reset_config()
+    return TestClient(create_app())
+
+
+def test_setup_llm_validate_does_not_persist(tmp_path, _fresh_app, halo_home):
+    """/llm/validate: validates the key but does NOT touch config.toml
+    or the secret store. The user might validate several wrong keys
+    before settling on the right one — only the successful /llm
+    submission (after validation passes) should persist."""
+    config_path = halo_home / "config.toml"
+    assert not config_path.exists()
+
+    # Mock _test_llm_connection to fail so we don't hit the network.
+    from app.api import setup as setup_api
+
+    async def fake_fail(*a, **k):
+        return (False, "invalid_key")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(setup_api, "_test_llm_connection", fake_fail)
+
+    try:
+        r = _fresh_app.post(
+            "/api/setup/llm/validate",
+            json={
+                "provider": "minimax",
+                "api_key": "fake-bad-key",
+                "base_url": "https://api.minimax.io/v1",
+                "default_model": "MiniMax-M2",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is False
+        assert body["model"] is None
+        assert body["error_code"] == "invalid_key"
+        # Response must NEVER echo the raw key.
+        assert "fake-bad-key" not in str(body)
+
+        # No TOML was created.
+        assert not config_path.exists()
+        # No secret-store override was written (the env var may
+        # still be set by the test fixture — we only care about the
+        # persistent override layer).
+        from app.core.secrets_store import get_secret_store
+
+        store = get_secret_store()
+        # The override file (.env) should not exist OR not contain
+        # the fake key we tried to validate.
+        env_file = halo_home / ".env"
+        if env_file.exists():
+            assert "fake-bad-key" not in env_file.read_text()
+    finally:
+        monkeypatch.undo()
+
+
+def test_setup_llm_validate_returns_ok_on_valid_key(tmp_path, _fresh_app, halo_home, monkeypatch):
+    """/llm/validate returns ok=True (and the model name) when the
+    connection test passes. Still no persistence."""
+    from app.api import setup as setup_api
+
+    async def fake_ok(*a, **k):
+        return (True, None)
+
+    monkeypatch.setattr(setup_api, "_test_llm_connection", fake_ok)
+
+    r = _fresh_app.post(
+        "/api/setup/llm/validate",
+        json={
+            "provider": "minimax",
+            "api_key": "fake-good-key",
+            "base_url": "https://api.minimax.io/v1",
+            "default_model": "MiniMax-M2",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["model"] == "MiniMax-M2"
+    assert body["error"] is None
+    assert body["error_code"] is None
+    assert "fake-good-key" not in str(body)
+
+
+def test_setup_tts_preview_returns_audio_or_graceful_error(tmp_path, _fresh_app, halo_home):
+    """/tts/preview: in the test env the voice layer is not loaded, so
+    the endpoint must return 200 with ok=False (NOT a 500). The
+    frontend depends on this graceful degradation — a 500 would
+    crash the wizard with an unhelpful stack trace."""
+    r = _fresh_app.post(
+        "/api/setup/tts/preview",
+        json={
+            "backend": "edge",
+            "voice": "zh-HK-HiuMaanNeural",
+            "text": "你好，Unicorn。",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # In the CI test env (no voice layer), we expect ok=False.
+    # In a real install with voice loaded, we'd get ok=True +
+    # audio_base64 of >100 bytes. Either is acceptable.
+    if body["ok"]:
+        assert body["audio_base64"] is not None
+        assert len(body["audio_base64"]) > 100
+    else:
+        assert body["audio_base64"] is None
+        assert body["error_code"] in {
+            "voice_layer_not_loaded",
+            "tts_render_failed",
+            "empty_audio",
+        }

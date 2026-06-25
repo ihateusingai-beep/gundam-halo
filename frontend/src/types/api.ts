@@ -260,3 +260,83 @@ export interface SetupState {
   skipped: boolean;
   reason: string | null;
 }
+
+// Sprint 44 — wizard step payload (returned by every /api/setup/* POST).
+// Backend computes the next step from the live config + state file;
+// the UI just reads `current_step` + `completed_steps` to advance.
+export interface SetupStepPayload extends SetupState {
+  ok?: boolean;
+  errors?: Array<{ field: string; code: string; message: string }>;
+  redirect?: string | null;
+  // Smoke-step specific:
+  text_ok?: boolean;
+  voice_ok?: boolean;
+  text_error?: string | null;
+  voice_error?: string | null;
+  // Tailscale specific:
+  reachable?: boolean;
+  // Validation-specific (Sprint 44 — /llm/validate):
+  model?: string | null;
+  error_code?: string | null;
+}
+
+// Sprint 44 — wizard form shapes (one per step).
+export interface LLMConfig {
+  provider: "minimax" | "openai" | "anthropic" | "ollama";
+  api_key: string;
+  base_url: string;
+  default_model: string;
+  fallback_model?: string;
+}
+
+export interface VoiceASRConfig {
+  backend: "whisper_local" | "sherpa" | "yuesub";
+  model_size?: string;       // whisper_local
+  model_path?: string;       // sherpa / yuesub / fine-tuned whisper_hf
+  device?: "cpu" | "cuda" | "mps";
+}
+
+export interface VoiceTTSConfig {
+  backend: "edge" | "azure" | "piper";
+  voice: string;
+  rate: string;
+  pitch: string;
+  volume: string;
+}
+
+export interface ThemeConfig {
+  themeId:
+    | "gundam-ntd"
+    | "gundam-god"
+    | "gundam-seed"
+    | "gundam-crossbone"
+    | "gundam-destiny"
+    | "gundam-halo"
+    | "gundam-ntd-green"
+    | "gundam-cartoon";
+}
+
+export interface TailscaleConfig {
+  enabled: boolean;
+  hostname: string;
+}
+
+// Sprint 44 — TTS preview (the "preview audio" button next to each voice).
+export interface TTSPreviewResponse {
+  ok: boolean;
+  audio_base64: string | null;
+  error: string | null;
+  error_code:
+    | "voice_layer_not_loaded"
+    | "tts_render_failed"
+    | "empty_audio"
+    | null;
+}
+
+// Sprint 44 — LLM key validation (the "Validate" button before saving).
+export interface LLMValidateResponse {
+  ok: boolean;
+  model: string | null;
+  error: string | null;
+  error_code: string | null;
+}

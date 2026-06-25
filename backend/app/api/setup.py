@@ -676,6 +676,46 @@ def _llm_error_message(err_code: str | None) -> str:
     return f"Test failed: {err_code}"
 
 
+@router.post("/llm/validate", response_model=dict[str, Any])
+async def post_setup_llm_validate(payload: LLMSetupRequest) -> dict[str, Any]:
+    """Sprint 44 — inline API-key validation before the user clicks Next.
+
+    Mirrors the connection test in `/api/setup/llm` but skips the
+    secret-store write and TOML update. The wizard UI calls this
+    on every "Validate" button click so the user gets instant
+    feedback on whether their key works without having to commit
+    to saving it.
+
+    NEVER echoes the raw key in the response.
+    """
+    ok, err_code = await _test_llm_connection(
+        payload.base_url, payload.api_key, payload.default_model
+    )
+    # Translate error codes to user-friendly messages (mirror the
+    # helper used inside /llm — kept inline to avoid a closure
+    # dependency).
+    error_msg: str | None = None
+    if not ok:
+        if err_code == "timeout":
+            error_msg = "Provider timed out (10s)"
+        elif err_code == "invalid_key":
+            error_msg = "Invalid API key"
+        elif err_code == "rate_limited":
+            error_msg = "Provider rate-limited the request (429)"
+        elif err_code and err_code.startswith("network_error"):
+            error_msg = f"Network error: {err_code}"
+        elif err_code and err_code.startswith("http_"):
+            error_msg = f"Provider returned {err_code}"
+        else:
+            error_msg = f"Test failed: {err_code}"
+    return {
+        "ok": ok,
+        "model": payload.default_model if ok else None,
+        "error": error_msg,
+        "error_code": None if ok else err_code,
+    }
+
+
 @router.post("/voice-asr", response_model=dict[str, Any])
 async def post_setup_voice_asr(payload: VoiceASRRequest) -> dict[str, Any]:
     """POST /api/setup/voice-asr — save ASR config, validate model."""
@@ -742,6 +782,90 @@ async def post_setup_voice_tts(payload: VoiceTTSRequest) -> dict[str, Any]:
     state.reason = ""
     save_setup_state(home, state)
     return _step_payload(state)
+
+
+class TTSPreviewRequest(BaseModel):
+    """Body for POST /api/setup/tts/preview (Sprint 44)."""
+
+    backend: str = Field("edge", max_length=64)
+    voice: str = Field("zh-HK-HiuMaanNeural", max_length=128)
+    text: str = Field("你好，Unicorn。", min_length=1, max_length=512)
+
+    @field_validator("backend")
+    @classmethod
+    def _validate_backend(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ALLOWED_TTS_BACKENDS:
+            raise ValueError(f"TTS backend must be one of {ALLOWED_TTS_BACKENDS}")
+        return v
+
+
+@router.post("/tts/preview", response_model=dict[str, Any])
+async def post_setup_tts_preview(payload: TTSPreviewRequest) -> dict[str, Any]:
+    """Sprint 44 — render a 1-sentence TTS preview for the wizard.
+
+    The frontend calls this when the user clicks "Preview" next to a
+    TTS voice option. Returns the rendered audio as base64 so the
+    frontend can `<audio src="data:audio/wav;base64,..." />` inline.
+
+    Implementation: we route through the same TTS factory the real
+    pipeline uses (`app.voice.tts.create_tts`). If the voice layer
+    is not yet loaded (i.e. the user hasn't finished step 7), the
+    factory may fail with `voice_layer_not_loaded` — we surface that
+    as a 200 response with `ok: false` so the frontend can show a
+    friendly "Preview unavailable until step 7" message instead of
+    a hard 500.
+
+    NEVER persists the user's text input (no audit trail of what
+    they typed into the preview box).
+    """
+    import base64
+
+    try:
+        # Late import — the TTS factory pulls in optional deps
+        # (azure-cognitiveservices-speech, edge-tts, etc.) that may
+        # not be installed in test envs.
+        from app.voice.tts import create_tts
+
+        cfg = get_config()
+        # Build a minimal TTSConfig-like object that create_tts accepts.
+        # The factory accepts the live config's voice.tts section.
+        tts_engine = create_tts(cfg.voice.tts, voice_id=payload.voice)
+
+        # Synthesize. The contract is `synthesize(text) -> bytes`
+        # (WAV @ 16kHz mono). Some backends return (bytes, sample_rate).
+        result = tts_engine.synthesize(payload.text)
+        if isinstance(result, tuple):
+            audio_bytes = result[0]
+        else:
+            audio_bytes = result
+
+        if not audio_bytes or len(audio_bytes) < 100:
+            return {
+                "ok": False,
+                "audio_base64": None,
+                "error": "tts_returned_empty",
+                "error_code": "empty_audio",
+            }
+
+        return {
+            "ok": True,
+            "audio_base64": base64.b64encode(audio_bytes).decode("ascii"),
+            "error": None,
+            "error_code": None,
+        }
+    except Exception as e:
+        logger.info(f"setup/tts/preview: failed: {type(e).__name__}: {e}")
+        return {
+            "ok": False,
+            "audio_base64": None,
+            "error": str(e) if str(e) else type(e).__name__,
+            "error_code": (
+                "voice_layer_not_loaded"
+                if "voice" in str(e).lower() and "load" in str(e).lower()
+                else "tts_render_failed"
+            ),
+        }
 
 
 @router.post("/theme", response_model=dict[str, Any])

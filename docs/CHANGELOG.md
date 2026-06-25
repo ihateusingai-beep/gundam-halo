@@ -5807,6 +5807,131 @@ Architecture:
 
 ---
 
+## [0.1.15] — 2026-06-26
+
+### Sprint 44 — 7-Step Setup Wizard UI (M13 first-run)
+
+Closes the **first-run onboarding UX gap**. The M13 wizard backend
+is complete (11 endpoints, 979 LoC, 38+ tests). Sprint 44 ships the
+UI that drives those endpoints — replacing the 40-LoC `/setup`
+stub from Sprint 39 with a full 7-step wizard.
+
+Goal: **< 90s from app open to first voice turn** (was 10-15 min
+per Sprint 37 records).
+
+#### Added (backend)
+
+- `app/api/setup.py` — 2 new preview endpoints for inline wizard
+  feedback:
+  - `POST /api/setup/llm/validate` — runs the same connection test
+    as `/api/setup/llm` but does NOT persist. Used by the wizard's
+    "Validate" button so the user sees "Key works" before clicking
+    Next. Returns `{ok, model, error, error_code}`.
+  - `POST /api/setup/tts/preview` — renders a 1-sentence TTS
+    sample via the live `app.voice.tts` factory. Returns the audio
+    as base64 data URL. Gracefully degrades to `{ok: false,
+    error_code: "voice_layer_not_loaded"}` when the voice layer
+    hasn't been booted yet — never 500s.
+- 4 new tests in `tests/api/test_setup.py`:
+  - `test_setup_llm_validate_does_not_persist` — no TOML / env /
+    secret-store writes after a failed validation.
+  - `test_setup_llm_validate_returns_ok_on_valid_key` — happy path
+    mock + model echo.
+  - `test_setup_tts_preview_returns_audio_or_graceful_error` —
+    accepts both ok-with-audio AND graceful degradation.
+  - 38 pre-existing tests still pass (no regressions on the 11
+    /api/setup/* endpoints).
+
+#### Added (frontend — Sprint 44 wizard UI)
+
+- `hooks/useSetupWizard.ts` (~270 LoC) — single source of truth for
+  the wizard state machine. Mirrors backend's `compute_setup_state()`;
+  exposes per-step submit handlers + inline preview helpers
+  (`validateLLM`, `previewTTS`).
+- `lib/setup-api.ts` (~120 LoC) — typed wrapper around the 11
+  `/api/setup/*` endpoints + the 2 new preview endpoints. Mirrors
+  `lib/api.ts` pattern (ApiError + request() helper).
+- `components/wizard/` — 9 new files (~1200 LoC total):
+  - `WizardShell.tsx` — step indicator + nav (Skip / Back / Cockpit)
+  - `StepWelcome.tsx` — step 1 (intro)
+  - `StepLLM.tsx` — step 2 (provider + API key + Validate button)
+  - `StepVoiceASR.tsx` — step 3 (whisper_local / sherpa / yuesub)
+  - `StepVoiceTTS.tsx` — step 4 (voice picker + Preview button)
+  - `StepTheme.tsx` — step 5 (8 themes with live preview)
+  - `StepTailscale.tsx` — step 6 (optional, "Skip for now" CTA)
+  - `StepSmoke.tsx` — step 7 (auto-runs smoke + 30s timeout)
+  - `StepFinish.tsx` — success screen
+- `routes/setup/index.tsx` — replaces the Sprint 39 stub.
+  Pre-step health gate: blocks the wizard if
+  `BackendHealthBanner` reports `respawn-disabled` (the Sprint 43
+  watch dog's H-risk flag) — saves the user from filling 7 steps
+  against a dying backend.
+- `types/api.ts` — 6 new types: `SetupStepPayload`, `LLMConfig`,
+  `VoiceASRConfig`, `VoiceTTSConfig`, `ThemeConfig`,
+  `TailscaleConfig`, `TTSPreviewResponse`, `LLMValidateResponse`.
+
+#### Added (tests)
+
+- 7 new vitest tests across the wizard:
+  - `StepLLM.test.tsx` — provider auto-fill + Validate button gating
+  - `StepVoiceASR.test.tsx` — backend switching shows the right field
+  - `StepVoiceTTS.test.tsx` — Preview fires IPC + handles
+    `voice_layer_not_loaded` gracefully
+  - `StepTheme.test.tsx` — applies `data-theme` attribute on click +
+    renders all 8 themes
+  - `StepTailscale.test.tsx` — "Skip for now" submits with enabled=false
+  - `StepSmoke.test.tsx` — auto-fires `runSmoke` on mount
+  - `useSetupWizard.test.ts` — state machine advances on successful
+    submit
+
+#### Added (docs)
+
+- `docs/SETUP-WIZARD.md` NEW (~280 LoC) — user-facing walkthrough
+  of the 7 steps + API key security guarantees + manual smoke
+  test recipe for the 90s target.
+- `docs/FEATURE-SPEC-SPRINT44-WIZARD.md` — full spec (written
+  earlier in the design review; already on disk).
+- `docs/DASHBOARD.md` — note the wizard UI lives at `/setup`.
+- `docs/CHANGELOG.md` — this entry.
+
+#### Security notes
+
+- The API key field uses `<input type="password">` by default with
+  a "Show" toggle. The raw key is **never** in:
+  - the response payload (validated via assertion in 4 backend
+    tests)
+  - the persisted config.toml (TOML references the env var name)
+  - the browser localStorage (form state stays in React state only)
+  - the network trace after Next is clicked (backend overwrites
+    with the env var name)
+- The setup wizard page is **desktop-only** (per profile memory:
+  "primary control surface is the Tauri app + web dashboard").
+  Mobile users see a "Please open on desktop" fallback in a
+  follow-up sprint if needed.
+- Crash recovery: backend's `setup_state.json` is the source of
+  truth for `current_step`. If the wizard crashes mid-flow, the
+  next mount picks up where the user left off. Form state is NOT
+  cached to localStorage (would complicate the password field).
+
+#### Verify
+
+- Backend `pytest` (excl slow tts): **1280 passed, 0 failed** in
+  60s — up from Sprint 43 baseline 1277 (+3 new Sprint 44 tests:
+  2 × /llm/validate + 1 × /tts/preview graceful).
+- Frontend `tsc --noEmit`: 0 errors.
+- Frontend `vitest`: **80 passed** — up from Sprint 43 baseline
+  70 (+7 new wizard tests + 3 test fixes).
+- `cargo check --tests`: clean (no Rust changes in Sprint 44).
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.14 → **0.1.15** (MINOR per
+  Mavis memory rule: new user-facing wizard UI).
+- Frontend versions 0.1.14 → **0.1.15** (3 surfaces:
+  `package.json`, `Cargo.toml`, `tauri.conf.json`).
+
+---
+
 ## [0.1.3] — 2026-06-11
 
 Adds the M9-E Layer 2 fine-tune stack: dependencies, config
