@@ -101,6 +101,60 @@ async def get_voice_config() -> dict[str, Any]:
     }
 
 
+@router.get("/voice/eval-results")
+async def get_voice_eval_results() -> dict[str, Any]:
+    """Sprint 39 — held-out eval trend for the dashboard.
+
+    Reads the Sprint 38 trend JSONs from
+    `backend/tests/voice/held_out_results/*.json` and
+    returns the most recent 7 runs (newest first) for the
+    HeldOutEvalCard sparkline + the current WER threshold
+    so the card can colour-code pass/fail without a second
+    round-trip.
+
+    Returns:
+        {
+          "latest": dict | null,   # newest run, or null if no runs
+          "history": list[dict],   # most recent first, max 7
+          "threshold_pct": float,  # e.g. 15.0
+        }
+
+    Each entry in `latest` / `history[*]` is the shape
+    produced by `app.voice.held_out_eval.load_eval_history`:
+      `{timestamp, timestamp_ms, wer_pct, passed, wav_path,
+        asr_backend, duration_sec, source_path}`
+
+    Graceful: if the results dir is missing or empty,
+    returns `{"latest": null, "history": [],
+    "threshold_pct": 15.0}`. If individual JSONs are
+    malformed, they're skipped (warning logged) — the
+    rest of the trend still loads.
+    """
+    from app.voice.held_out_eval import (
+        DEFAULT_WER_THRESHOLD,
+        held_out_results_dir,
+        load_eval_history,
+    )
+
+    history = load_eval_history(held_out_results_dir(), limit=7)
+    latest = history[0] if history else None
+
+    # `load_wer_threshold()` reads from `~/.gundam-halo/test-config.toml`
+    # via `halo_home()`; the API layer doesn't need to inject
+    # HALO_HOME — the helper honours it for test redirection.
+    from app.voice.held_out_eval import load_wer_threshold
+
+    threshold = load_wer_threshold()
+
+    return {
+        "latest": latest,
+        "history": history,
+        "threshold_pct": round(threshold * 100, 2)
+        if threshold != DEFAULT_WER_THRESHOLD
+        else DEFAULT_WER_THRESHOLD * 100,
+    }
+
+
 @router.put("/voice/config")
 async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
     """Sprint 16 + 17a + 18: update the voice config in-memory + persist

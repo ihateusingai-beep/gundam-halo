@@ -235,3 +235,28 @@ export interface AuditEntry {
   event_type: string;
   data: Record<string, any>;
 }
+
+// Sprint 39 — held-out eval row (matches the backend
+// `load_eval_history()` return shape; one row per CLI run).
+// `wer_pct` is rounded to 2 dp at the backend.
+export interface EvalRunRow {
+  timestamp: string;
+  timestamp_ms: number;
+  wer_pct: number;
+  passed: boolean;
+  wav_path: string;
+  asr_backend: string;
+  duration_sec: number;
+  source_path: string;
+}
+
+// Sprint 39 — setup wizard state for the SetupWizard card.
+export interface SetupState {
+  status: string;          // "in_progress" | "complete" | "skipped" | "pending"
+  current_step: number;    // 1..8
+  completed_steps: number[];
+  started_at: string | null;
+  finished_at: string | null;
+  skipped: boolean;
+  reason: string | null;
+}

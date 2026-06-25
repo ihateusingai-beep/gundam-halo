@@ -379,6 +379,39 @@ augmentation workaround.
 - [ ] CHANGELOG entry for v0.1.3 documenting both layers
       and the model footprint trade-off.
 
+## Update — 2026-06-26: Layer 2 v2 status (Sprint 39 — eval trend endpoint)
+
+**Sprint 39 ships the backend half of the dashboard
+polish that closes the UX gap on top of the Sprint 33b
+pipeline.** The held-out eval trend is now exposed via
+`GET /voice/eval-results`, so the HeldOutEvalCard on
+the home page can render a sparkline of the last 7
+runs once the frontend cards land.
+
+What's live now (Sprint 39):
+
+| Artifact | Status | Path |
+|---|---|---|
+| `load_eval_history(results_dir, limit=7)` | ✅ | `backend/app/voice/held_out_eval.py` |
+| `GET /voice/eval-results` (returns latest + 7-row history + threshold_pct) | ✅ | `backend/app/api/voice_config_api.py` |
+| Graceful corruption handling (skips bad JSONs, never crashes) | ✅ | same |
+| 5 helper tests + 4 endpoint tests | ✅ | `tests/voice/test_load_eval_history.py`, `tests/api/test_voice_eval_results.py` |
+| HeldOutEvalCard + 3 sibling cards on home page | ⏳ | next commit (frontend half of Sprint 39) |
+
+**Acceptance criterion status** (criterion 6 — Held-out
+WER < 10% with personalised model active):
+
+- [x] Trend JSON loader reads Sprint 38 CLI output
+      (newest-first, limit, graceful on bad JSON).
+- [x] `GET /voice/eval-results` returns the trend for
+      the cockpit dashboard.
+- [ ] Held-out WER < 10% with personalised model active
+      — still blocked on user-driven personalised
+      checkpoint training run (Sprint 40). The trend
+      endpoint will show the resulting WER as soon as
+      the user runs `scripts/run_held_out_eval.py` after
+      the personalised model lands.
+
 ## Update — 2026-06-24: Layer 2 v2 status (Sprint 33b — Tauri pipeline lands)
 
 **Sprint 33b ships the Tauri Rust recording + training

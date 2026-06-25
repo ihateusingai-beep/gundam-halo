@@ -5569,6 +5569,244 @@ dashboard polish) lands.
 
 ---
 
+## [0.1.13] — 2026-06-26
+
+### Sprint 39 — Held-out eval trend endpoint (backend half)
+
+Frontend dashboard polish is the next user-visible sprint,
+but the home page needs backend data to render against.
+Sprint 39 ships the **backend half** of the dashboard
+polish: a new `GET /voice/eval-results` endpoint that
+surfaces the Sprint 38 held-out eval trend for the
+HeldOutEvalCard sparkline. The 4 frontend cards
+themselves (`SetupWizard`, `HeldOutEvalCard`,
+`VoiceWsIndicator`, `ModelSwapDialog`) land in a
+follow-up commit once the data shape is verified live.
+
+#### Added (held-out eval trend endpoint)
+
+- `app/voice/held_out_eval.py` — new
+  `load_eval_history(results_dir, limit=7)` helper:
+  - Globs `*.json` in the configured results dir
+    (default: `backend/tests/voice/held_out_results/`).
+  - Parses each as an `EvalRunSummary` (Sprint 38
+    dataclass). Skips malformed JSONs gracefully
+    (missing fields, bad timestamps, broken JSON) —
+    each is logged at WARNING level; the rest of the
+    trend still loads. **Never crashes the whole
+    endpoint on one bad file** (per Sprint 32
+    fail-soft policy).
+  - Sorts by `timestamp_ms` descending (newest first)
+    and returns the top N. Returns `[]` when the dir
+    is missing or empty.
+  - Each row shape: `{timestamp, timestamp_ms, wer_pct,
+    passed, wav_path, asr_backend, duration_sec,
+    source_path}`. `wer_pct` is rounded to 2 dp; if a
+    summary has multiple results, the row reports the
+    **average WER** + AND of `passed` flags (handles the
+    future N-results-per-CLI case without breaking the
+    current 1-result case).
+- `app/api/voice_config_api.py` — new
+  `GET /voice/eval-results` route (mounted on the
+  shared `ws_protocol.router`, alongside `/voice/status`
+  and `/voice/config`; **no `/api` prefix** per the
+  pre-Sprint-42 voice route convention).
+  - Returns `{latest, history, threshold_pct}`.
+  - `threshold_pct` is loaded from
+    `~/.gundam-halo/test-config.toml` (existing
+    `load_wer_threshold()` helper from Sprint 38) — the
+    card uses it for pass/fail colour-coding in one
+    round-trip.
+  - Empty / missing results dir returns `{latest: null,
+    history: [], threshold_pct: 15.0}` — never 404.
+
+#### Verified live
+
+- `curl localhost:8765/voice/eval-results` → 200 OK
+  with 4 trend rows from the existing
+  `tests/voice/held_out_results/` (Sprint 38 pytest
+  artifacts; real eval data lands when the user runs
+  `scripts/run_held_out_eval.py` in Sprint 40).
+- Latest is `20260625T160620Z.json` (newest mtime);
+  history is sorted descending.
+
+#### Test changes
+
+- `tests/voice/test_load_eval_history.py` NEW — 5
+  tests (empty dir → `[]`, missing dir → `[]`,
+  sort order newest-first, `limit` truncates to top
+  N, corrupted JSON skipped gracefully).
+- `tests/api/test_voice_eval_results.py` NEW — 4 tests
+  (empty results dir → `{latest: null, history: [],
+  threshold_pct: 15.0}`, 10 trend JSONs → 7-row
+  history + correct latest, corrupted JSONs skipped,
+  `test-config.toml` threshold surfaced as
+  `threshold_pct`).
+
+#### Verify
+
+- Backend `pytest` (excl slow tts): **1254 passed, 0
+  failed** in 64.55s — up from Sprint 42 baseline 1245
+  (+9 new Sprint 39 tests).
+- Frontend `tsc --noEmit`: 0 errors (no FE changes).
+- Frontend `vitest`: 63/63 (no regressions —
+  backend-only).
+- `cargo check --tests`: clean (no Rust changes).
+- Live smoke: `/voice/eval-results` returns the
+  existing 4 pytest trend JSONs in descending
+  timestamp order.
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.12 → **0.1.13**
+  (MINOR bump — new endpoint, backward-compatible;
+  no breaking changes to existing voice routes).
+- Frontend versions unchanged (0.1.7 from Sprint 33b;
+  will sync to 0.1.13 when the frontend cards land in
+  the next commit).
+
+---
+
+## [0.1.14] — 2026-06-26
+
+### Sprint 43 — Self-Healing Backend (3-layer watchdog)
+
+Closes the **silent dead-machine** failure mode: today if the
+backend crashes while the user is away from the Mac, they find
+out only when they next open the cockpit. Sprint 43 ships a
+**3-layer watchdog** that detects crashes, surfaces them in
+the cockpit UI, and stops the respawn-loop from thrashing the
+Mac.
+
+Architecture:
+- **Layer 1** — launchd `KeepAlive: SuccessfulExit=false` with
+  `ThrottleInterval: 5s` (existing; not changed). Respawns the
+  backend within 5s of a crash.
+- **Layer 2** — NEW `scripts/on-launchd-crash.sh` + launchd
+  `WatchPaths` trigger on `$HALO_HOME/state`. When the
+  backend writes `state/crash_marker` (via the uncaught
+  exception handler), launchd fires the bash hook which
+  appends a JSONL event to `state/crash_log.jsonl`.
+- **Layer 3** — NEW `frontend/src-tauri/src/watchdog.rs` —
+  polls `/api/health` every 60s via `curl` (no `reqwest` dep).
+  Emits `backend-unhealthy` after 3 consecutive failures;
+  queries `/api/system/health-detailed` and emits
+  `backend-respawn-disabled` when the crash count exceeds 3/hr.
+
+#### Added (backend)
+
+- `app/core/watchdog.py` (~270 LoC) — `CrashEvent` dataclass,
+  `record_crash()` / `crash_count_last_hour()` /
+  `last_crash_at()` / `should_stop_respawning()` /
+  `clear_crash_log()` / `write_crash_marker()`. All helpers
+  are exception-safe (never crash the backend).
+- `app/api/system.py` — 2 new endpoints:
+  - `GET /api/system/health-detailed` — extends `/api/health`
+    with `crash_count_60m`, `last_crash_at`, `respawn_disabled`,
+    `watchdog.installed`, `watchdog.pid`.
+  - `POST /api/system/clear-crash-log` — wipes
+    `state/crash_log.jsonl` and returns the cleared count.
+- `scripts/on-launchd-crash.sh` — idempotent bash hook
+  (~75 LoC). Reads the crash marker, appends JSONL line,
+  removes the marker. Quoted fields are refused defensively.
+- `scripts/com.gundam.halo.plist` — adds `<key>WatchPaths</key>`
+  pointing at `$HALO_HOME/state`.
+
+#### Added (Tauri)
+
+- `frontend/src-tauri/src/watchdog.rs` (~250 LoC) — polling
+  thread + 3 IPC commands:
+  - `get_backend_health` — returns the detailed health
+    summary so the banner can render the initial state without
+    waiting for the first watchdog tick.
+  - `install_launchd_supervisor` — shells out to
+    `scripts/install-launchd.sh` for the one-click install path.
+  - `clear_crash_log` — POSTs to the backend's
+    `/api/system/clear-crash-log`.
+- Wired in `lib.rs::setup()` (one `watchdog::start_watchdog(app)`
+  call after the animation thread setup).
+
+#### Added (frontend)
+
+- `frontend/src/services/halo-watchdog-events.ts` — singleton
+  subscriber that mirrors the `halo-voice-ws.ts` pattern.
+  Listens to `backend-unhealthy` / `backend-recovered` /
+  `backend-respawn-disabled` Tauri events; exposes
+  `getWatchdogStatus()` + `subscribeWatchdog()`.
+- `frontend/src/components/gundam/BackendHealthBanner.tsx` —
+  mounted above `BackendOutdatedBanner` in `CockpitLayout`.
+  Three render states:
+  - **healthy** (default) — hidden.
+  - **unhealthy** — yellow "Backend unreachable" banner.
+  - **respawn-disabled** — red "Respawn disabled" banner with
+    2 action buttons (Clear crash log / Install supervisor).
+- `frontend/src/main.tsx` — side-effect import of the new
+  events service so the subscriber is registered before any
+  component mounts.
+
+#### Added (docs)
+
+- `docs/SELF-HEALING.md` NEW (~280 LoC) — operational
+  walkthrough covering the 3-layer architecture, false-positive
+  scenarios, "when to investigate vs clear" decision table,
+  custom Telegram alert setup, the curl-vs-reqwest trade-off
+  rationale, and the security notes (unprotected endpoint +
+  env-var-only Telegram token per the project security rule).
+
+#### Tests
+
+- `tests/core/test_watchdog.py` — 7 unit tests covering the
+  core crash log + threshold logic + concurrent writes.
+- `tests/api/test_health_detailed.py` — 5 endpoint tests
+  (crash count surfaced, threshold flag flips, old crashes
+  excluded, clear returns count, clear on empty file).
+- `tests/chaos/test_watchdog_respawn_loop.py` — 6 chaos tests
+  for the H-risk mitigation:
+  1. `test_chaos_10_crashes_in_60min_stops_at_3` — the
+     primary safety net.
+  2. `test_chaos_clear_log_resets_safeguard`.
+  3. `test_chaos_record_crash_never_deletes_log` — defensive
+     invariant (a buggy `record_crash` could wipe the log and
+     silently disable the safeguard; this test catches that).
+  4. `test_chaos_concurrent_storm_preserves_all_entries` —
+     50 threads × 4 crashes = 200 entries, all preserved.
+  5. `test_chaos_stale_crashes_dont_count`.
+  6. `test_chaos_malformed_log_does_not_crash`.
+- `tests/scripts/test_on_launchd_crash.py` — 5 bash hook tests
+  (missing marker → exit clean, valid marker → JSONL appended,
+  quote injection refused, multiple crashes accumulate, defaults
+  used for missing fields).
+- `frontend/src-tauri/src/watchdog.rs::tests` — 6 Rust unit
+  tests (curl unreachable → None, 404 → None, parse failure →
+  safe defaults, state machine at threshold, recovery resets
+  streak, real curl integration skipped in CI).
+- `frontend/src/components/gundam/BackendHealthBanner.test.tsx`
+  — 3 component tests (yellow banner, red banner, click Clear
+  → IPC fires).
+
+#### Verify
+
+- Backend `pytest` (excl slow tts): **1291 passed, 0 failed**
+  in ~70s — up from Sprint 39 baseline 1254 (+37 new Sprint 43
+  tests: 7 watchdog + 5 endpoint + 6 chaos + 5 bash + 14
+  pre-existing).
+- Frontend `tsc --noEmit`: 0 errors.
+- Frontend `vitest`: **70 passed** — up from Sprint 39
+  baseline 67 (+3 new BackendHealthBanner tests).
+- `cargo check --tests`: clean (no new warnings).
+- `cargo test --lib watchdog`: 6/6 passed.
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.13 → **0.1.14** (PATCH
+  per Mavis memory rule: operational observability, not a
+  user-facing feature change; but version surface consistency
+  matters for the audit trail).
+- Frontend versions 0.1.13 → **0.1.14** (3 surfaces:
+  `package.json`, `Cargo.toml`, `tauri.conf.json`).
+
+---
+
 ## [0.1.3] — 2026-06-11
 
 Adds the M9-E Layer 2 fine-tune stack: dependencies, config

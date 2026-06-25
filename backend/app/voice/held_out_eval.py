@@ -386,3 +386,159 @@ def held_out_results_dir() -> Path:
     """
     # backend dir = parent of `app/` = parent of `voice/`
     return Path(__file__).resolve().parent.parent.parent / "tests" / "voice" / HELD_OUT_RESULTS_DIRNAME
+
+
+# ---------------------------------------------------------------------------
+# Trend JSON loader (Sprint 39 — for /api/voice/eval-results)
+# ---------------------------------------------------------------------------
+
+
+def _summary_avg_wer(summary: EvalRunSummary) -> float:
+    """Average WER across all results in a summary (single result
+    case is just the one value).
+
+    The CLI currently writes 1 result per summary (one
+    held-out recording → one eval), but the dataclass
+    supports N — average keeps the dashboard math stable
+    if/when the CLI evolves to run multiple WAVs per
+    invocation (e.g. a held-out test-set of 5 recordings).
+    """
+    if not summary.results:
+        return 0.0
+    return sum(r.wer for r in summary.results) / len(summary.results)
+
+
+def _parse_summary(path: Path) -> EvalRunSummary | None:
+    """Parse one trend JSON file. Returns None on any parse error.
+
+    The CLI writes a flat dataclass dump via `to_json()`,
+    which matches `EvalRunSummary` field-for-field. We
+    parse defensively: missing required fields → None
+    (logged at the caller, then skipped — never crash
+    the whole trend endpoint on one bad file).
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return None
+        # Required fields for EvalRunSummary:
+        if "timestamp" not in raw or not isinstance(raw["timestamp"], str):
+            return None
+        results_raw = raw.get("results", [])
+        if not isinstance(results_raw, list):
+            return None
+        # Re-hydrate each EvalResult; skip this whole summary
+        # if any result is malformed (one bad row shouldn't
+        # pull the whole trend, but we don't half-parse a
+        # summary either — atomic per summary).
+        results: list[EvalResult] = []
+        for r in results_raw:
+            if not isinstance(r, dict):
+                return None
+            try:
+                results.append(
+                    EvalResult(
+                        timestamp=str(r.get("timestamp", "")),
+                        wav_path=str(r.get("wav_path", "")),
+                        transcript_path=str(r.get("transcript_path", "")),
+                        reference=str(r.get("reference", "")),
+                        hypothesis=str(r.get("hypothesis", "")),
+                        wer=float(r.get("wer", 0.0)),
+                        threshold=float(r.get("threshold", 0.0)),
+                        passed=bool(r.get("passed", False)),
+                        duration_s=float(r.get("duration_s", 0.0)),
+                        asr_backend=str(r.get("asr_backend", "")),
+                        notes=str(r.get("notes", "")),
+                    )
+                )
+            except (TypeError, ValueError):
+                return None
+        return EvalRunSummary(timestamp=raw["timestamp"], results=results)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def load_eval_history(
+    results_dir: Path | None = None,
+    limit: int = 7,
+) -> list[dict]:
+    """Load the most recent N trend JSONs as dashboard-ready dicts.
+
+    Returns a list of `{timestamp, timestamp_ms, wer_pct, passed,
+    wav_path, asr_backend, duration_sec, source_path}` dicts,
+    sorted by `timestamp_ms` descending (newest first). The
+    frontend treats each dict as one sparkline point.
+
+    Skips corrupted JSONs gracefully (missing fields, bad
+    timestamps, malformed results) — they're logged at WARNING
+    level and the rest of the trend still loads.
+
+    Returns `[]` when:
+      - `results_dir` is None
+      - `results_dir` does not exist
+      - `results_dir` is empty (no `*.json` files)
+      - all JSONs are corrupted
+
+    Sprint 39: this drives `/api/voice/eval-results`. The
+    sparkline shape is intentionally tiny (60×24 px, 7
+    points) so we don't need pagination — `limit=7` is
+    the maximum the UI ever requests.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    if results_dir is None:
+        results_dir = held_out_results_dir()
+    if not results_dir.is_dir():
+        return []
+    json_paths = sorted(results_dir.glob("*.json"))
+    if not json_paths:
+        return []
+
+    rows: list[dict] = []
+    for p in json_paths:
+        summary = _parse_summary(p)
+        if summary is None:
+            log.warning(
+                "held_out_eval: skipping malformed trend JSON %s", p
+            )
+            continue
+        # ISO 8601 → epoch ms for stable sort key. The CLI
+        # writes UTC (`+00:00` suffix), but tolerate offset
+        # variants from older runs.
+        try:
+            ts = datetime.fromisoformat(summary.timestamp)
+            ts_ms = int(ts.timestamp() * 1000)
+        except (TypeError, ValueError):
+            log.warning(
+                "held_out_eval: skipping %s — bad timestamp %r",
+                p,
+                summary.timestamp,
+            )
+            continue
+        # Use the first result's fields for the dashboard
+        # card (the CLI currently writes exactly 1 result per
+        # summary; multi-result is future-proofing).
+        head = summary.results[0] if summary.results else None
+        rows.append(
+            {
+                "timestamp": summary.timestamp,
+                "timestamp_ms": ts_ms,
+                # Average across all results in the summary
+                # — handles the future N-results case.
+                "wer_pct": round(_summary_avg_wer(summary) * 100, 2),
+                "passed": all(r.passed for r in summary.results)
+                if summary.results
+                else False,
+                "wav_path": head.wav_path if head else "",
+                "asr_backend": head.asr_backend if head else "",
+                "duration_sec": round(
+                    sum(r.duration_s for r in summary.results), 2
+                ),
+                "source_path": str(p),
+            }
+        )
+
+    # Sort newest first, take top N.
+    rows.sort(key=lambda r: r["timestamp_ms"], reverse=True)
+    return rows[:limit] if limit > 0 else rows

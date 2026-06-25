@@ -151,6 +151,39 @@ The first-person cockpit layout above. No active project selected.
 - Right: Mac system gauges
 - Bottom: recent activity stream (collapsed by default)
 
+#### Top-of-cockpit banners (Sprint 43)
+
+Two banners mount above the Mission Roster. Both hide by default
+when the backend is healthy.
+
+| Banner | Source | When shown | Actions |
+|---|---|---|---|
+| `BackendHealthBanner` | Tauri `watchdog.rs` (60 s `curl` poll + `/api/system/health-detailed`) | Yellow: 3 consecutive `/api/health` failures. Red: crash count ≥ 3 in last 60 min. | Red banner: "Clear crash log & retry" (wipes `state/crash_log.jsonl`) + "Install launchd supervisor" (one-click `scripts/install-launchd.sh`). |
+| `BackendOutdatedBanner` (existing) | `GET /api/system/info` + git SHA compare | Frontend SHA ≠ backend SHA, or missing features. | "Copy restart command" / "Restart backend (Tauri)" / "Reload page" / "Snooze". |
+
+The watchdog's respawn-loop guard is the **H-risk mitigation** —
+see `docs/SELF-HEALING.md` for the full architecture.
+
+#### System Status grid (Sprint 39)
+
+Below the existing Mission Roster, a 2×2 grid of
+status cards surfaces backend capabilities that
+would otherwise be hidden in settings tabs and CLI
+scripts:
+
+| Card | Source | Notes |
+|---|---|---|
+| `SetupWizard` | `GET /api/setup/state` | Shows current step (1-8) + "Resume setup" link. Pulses yellow when `status === "in_progress"`. Hidden when setup is complete. |
+| `VoiceWsIndicator` | `services/halo-voice-ws.ts::getVoiceStatus()` | Live pill coloured by `state` (cyan=ready, blue=listening, magenta=thinking, orange=speaking, pink=reconnecting, red=error). 2 s poll, matches the existing VoiceTab pattern. |
+| `HeldOutEvalCard` | `GET /voice/eval-results` (Sprint 39) | Latest WER as a big number, pass/fail badge, and a 60×24 px SVG sparkline of the last 7 runs. Empty state ("No evals yet — run `scripts/record-held-out.sh`") when the trend dir is empty. |
+| `ModelSwapDialog` | `invoke('activate_model')` (Sprint 33b) | shadcn `<Dialog>` with a `toml_edit` diff preview (active `whisper_local` → proposed `whisper_hf` + checkpoint path). "Confirm" button fires the IPC. |
+
+All 4 cards render gracefully when their data
+sources are missing — the home page never crashes
+on empty state. Mobile (375 px) layout stacks them
+vertically via the existing Tailwind grid; no media
+query changes needed.
+
 ### 4.2 `/projects/:id` — Project detail (primary use)
 
 Same cockpit layout, but the **center is now the active project's chat** + agent output. Specifically:

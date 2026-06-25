@@ -8,6 +8,7 @@ import { ProjectDetailPage } from "@/routes/projects/[id]";
 import { ProjectMemoryPage } from "@/routes/projects/[id]/memory";
 import { SessionDetailPage } from "@/routes/projects/[id]/sessions/[sessionId]";
 import { SettingsPage } from "@/routes/settings";
+import { SetupPage } from "@/routes/setup";
 import { AuditDashboardPage } from "@/routes/audit";
 import { ThemeSwitcher } from "@/components/gundam/ThemeSwitcher";
 import { CommandPalette } from "@/components/gundam/CommandPalette";
@@ -33,6 +34,7 @@ function AppRoutes() {
         element={<SessionDetailPage />}
       />
       <Route path="/settings" element={<SettingsPage />} />
+      <Route path="/setup" element={<SetupPage />} />
       <Route path="/audit" element={<AuditDashboardPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

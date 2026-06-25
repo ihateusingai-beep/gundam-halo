@@ -4,10 +4,12 @@
  */
 
 import type {
+  EvalRunRow,
   Gauges,
   HealthResponse,
   ProjectCreate,
   ProjectSummary,
+  SetupState,
   SessionInfo,
   SessionStart,
   SessionListItem,
@@ -89,6 +91,33 @@ export const api = {
       build_id: number;
       features: string[];
     }>("/api/system/info"),
+
+  // Sprint 39: held-out eval trend for the HeldOutEvalCard.
+  //   - `latest` (EvalRunRow | null) — newest run, or null if no runs yet
+  //   - `history` (EvalRunRow[]) — most recent first, max 7
+  //   - `threshold_pct` (number) — WER pass/fail bar from
+  //     `~/.gundam-halo/test-config.toml` (default 15.0).
+  // The backend reads `backend/tests/voice/held_out_results/*.json`
+  // (Sprint 38 trend files). Missing dir → `{latest: null,
+  // history: [], threshold_pct: 15.0}`. Corrupt JSONs are skipped
+  // silently — see `app/voice/held_out_eval.py::load_eval_history`.
+  getVoiceEvalResults: () =>
+    request<{
+      latest: EvalRunRow | null;
+      history: EvalRunRow[];
+      threshold_pct: number;
+    }>("/voice/eval-results"),
+
+  // Sprint 39: setup wizard state for the SetupWizard card.
+  //   - `status` (string) — "in_progress" | "complete" | "skipped" | ...
+  //   - `current_step` (int) — 1..8 (matches the 8 wizard steps)
+  //   - `completed_steps` (int[]) — list of step numbers the user finished
+  //   - `started_at` / `finished_at` (string | null) — ISO timestamps
+  //   - `skipped` (bool) — true if the user opted to skip (out of M13 scope)
+  //   - `reason` (string | null) — populated when `skipped` is true
+  // Missing endpoint → ApiError 404. Caller handles via try/catch.
+  getSetupState: () =>
+    request<SetupState>("/api/setup/state"),
 
   // Sprint 16 + 17a + 17b: voice config GET / PUT.
   //   - `wake_phrases` (Sprint 16) — list of strings, multi-line
