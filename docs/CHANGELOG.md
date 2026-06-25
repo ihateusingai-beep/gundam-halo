@@ -5459,6 +5459,114 @@ Sprint 38 uses the cached `~/.cache/whisper/base.pt`
   (was ⏳; the eval plumbing ships but the criterion
   itself needs the live personalised fine-tune + re-eval).
 
+### Sprint 42 — Backend security hardening + ops polish
+
+Three open items from the Sprint 37-38 function-review
+audit. Cheap to fix (no new features, just polish + docs);
+closes user-visible issues before Sprint 39 (Frontend
+dashboard polish) lands.
+
+#### Fixed (Bug 2 — `/api/health` mount prefix)
+
+- `app/api/health.py` — added a separate `legacy_router`
+  with the bare-`/health` route (kept for backwards compat).
+- `app/main.py` — changed the canonical mount to
+  `prefix="/api/health"`. The legacy `/health` mount
+  stays as a separate `health.legacy_router` (hidden
+  from OpenAPI docs via `include_in_schema=False`).
+- Both paths return the same payload
+  (`{status: "ok", version: __version__, name: "gundam-halo"}`).
+- External health probes (Tailscale ACL `healthCheck`,
+  launchd `SuccessfulExit=false` predicates) that
+  expect `/api/health` now work — the bare `/health`
+  path stays for the frontend + smoke scripts.
+
+#### Fixed (TOML fail-loud on malformed config)
+
+- `app/core/config_loader.py` — added `ConfigParseError`
+  exception (carries `config_path` / `line` / `column`
+  / `message`); wrapped `_load_toml`'s `tomllib.load(f)`
+  call to translate `tomllib.TOMLDecodeError` into a
+  friendly 1-line message + `uv run python -c ...`
+  repro hint. Python 3.11's `tomllib.TOMLDecodeError`
+  doesn't carry structured `lineno` / `colno` — the
+  loader parses them out of the error message string
+  via a `_TOML_LINENO_RE` regex; defaults to (1, 1)
+  for "at end of document"-style errors.
+- Before: malformed TOML → raw `tomllib.TOMLDecodeError`
+  stack trace at startup. After:
+  `Failed to parse /Users/kencheng/.gundam-halo/config.toml:1:11 — Expected ']' at the end of a table declaration. Fix the TOML syntax or validate manually with: uv run python -c "import tomllib; tomllib.load(open('/Users/kencheng/.gundam-halo/config.toml', 'rb'))"`.
+
+#### Added (Tailscale ACL docs)
+
+- `docs/SECURITY-HARDENING.md` NEW (~200 LoC) — single
+  operational doc covering:
+  - **Why Tailscale** (per profile memory: "NO public
+    internet exposure")
+  - **Tailscale ACL JSON snippet** — paste into Tailscale
+    admin → Access Controls. Tags `tag:admin` (your
+    devices) and `tag:gundam-halo` (the backend); `healthCheck`
+    pings `/api/health` every 60 s.
+  - **advertise-tags** setup: `sudo tailscale up
+    --advertise-tags=tag:gundam-halo --hostname=gundam-halo`.
+  - **4 common pitfalls** (MagicDNS mismatch, tag not
+    approved, `require_tailscale=false` accidentally set,
+    DERP relay latency).
+  - **Audit log** location + rotation
+    (`~/.gundam-halo/logs/audit.log`, 100 MB cap, manual
+    rotation procedure).
+  - **Process-level hardening** (Seatbelt / AppArmor /
+    SELinux) — manual, not auto-installed.
+- `config.toml.example [server]` block — added a Sprint 42
+  cross-link comment pointing at `docs/SECURITY-HARDENING.md`.
+
+#### Verified (already-fixed items — no change needed)
+
+- `file_write_paths` defaults are tight (`~/workspace` +
+  `~/.gundam-halo/projects`, not `~/`). No change.
+- `ChannelRegistry` cold-start fix from Sprint 32 P0-1 v2
+  verified working: `GET /api/channels` returns 200 on a
+  fresh `HALO_HOME` (no manual config.toml required).
+
+#### Test changes
+
+- `tests/api/test_health_route.py` NEW — 4 tests
+  (`/api/health` returns 200 + correct payload, `/health`
+  legacy alias works, trailing-slash tolerated, legacy
+  route hidden from OpenAPI).
+- `tests/core/test_config_loader_toml_errors.py` NEW —
+  5 tests (missing TOML → empty dict regression, unclosed
+  table bracket → ConfigParseError at correct line/column,
+  unterminated string → ConfigParseError, error message
+  includes `uv run python -c ...` repro hint, exception
+  attributes accessible for callers that want their
+  own error UI).
+
+#### Verify
+
+- Backend `pytest` (excl slow tts): **1245 passed, 0 failed**
+  in 67.64s — up from Sprint 38 baseline 1236 (+9 new
+  Sprint 42 tests).
+- Frontend `tsc --noEmit`: 0 errors.
+- Frontend `vitest`: 63/63 (no regressions — backend-only).
+- `cargo check --tests`: clean (no Rust changes).
+- `GET /api/health`: 200 OK with `{"status": "ok",
+  "version": "0.1.12", "name": "gundam-halo"}`.
+- `GET /health`: 200 OK with the same payload (legacy
+  alias preserved).
+- Manual: write `~/.gundam-halo/config.toml` with
+  `[voice.vad\nbad = 1\n` → restart backend → expect the
+  1-line friendly error message above (no stack trace).
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.11 → **0.1.12**
+  (PATCH bump per Mavis memory rule: security fix is
+  correctness, not a user-facing feature change, but
+  version surface consistency matters for the audit
+  trail).
+- Frontend versions unchanged (0.1.7 from Sprint 33b).
+
 ---
 
 ## [0.1.3] — 2026-06-11

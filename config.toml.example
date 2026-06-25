@@ -51,6 +51,9 @@ port = 8765                        # bound, but only reachable via Tailscale
 log_level = "INFO"                  # DEBUG / INFO / WARNING / ERROR
 require_tailscale = true            # reject non-Tailscale connections
 tailscale_hostname = "gundam-halo"
+# Sprint 42: ACL setup + healthCheck JSON lives in
+# docs/SECURITY-HARDENING.md. Run install.sh --with-tailscale
+# for the print-on-install hint, or read the doc directly.
 
 # ---------------------------------------------------------------------------
 # Mac control pane (security-sensitive — default-deny)

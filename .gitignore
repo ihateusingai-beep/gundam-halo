@@ -134,6 +134,14 @@ lerna-debug.log*
 # projects/*/.cache/
 # sessions/.active/
 
+# Sprint 38 held-out eval CLI output (trend data).
+# Generated when tests/scripts/test_run_held_out_eval.py runs
+# — contains tmp_path WAV paths, not real eval results.
+# Real eval JSONs (from `python scripts/run_held_out_eval.py`)
+# are written to ~/.gundam-halo/recordings/, NOT this dir.
+backend/tests/voice/held_out_results/*.json
+!backend/tests/voice/held_out_results/.gitkeep
+
 # Local screenshots (mockups, scratch references). Per session
 # 2026-06-13: binary artifacts stay out of git. Re-add to commit
 # if/when a screenshot becomes part of the docs/ surface.

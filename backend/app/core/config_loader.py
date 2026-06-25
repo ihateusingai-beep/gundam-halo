@@ -29,6 +29,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -107,12 +108,69 @@ def reset_config() -> None:
 # ---------------------------------------------------------------------------
 
 
+class ConfigParseError(RuntimeError):
+    """Raised when ~/.gundam-halo/config.toml is malformed (Sprint 42).
+
+    Carries the offending file path + line + column so
+    `app/main.py:lifespan` can surface a 1-line friendly
+    error message instead of a raw `tomllib.TOMLDecodeError`
+    stack trace on cold start.
+
+    The lifespan re-raises after logging — the process
+    exits non-zero, the user's process supervisor (launchd,
+    supervisord, etc.) notices + keeps the old binary
+    running until the user fixes the TOML.
+    """
+
+    def __init__(
+        self, config_path: Path, line: int, column: int, message: str
+    ):
+        self.config_path = config_path
+        self.line = line
+        self.column = column
+        super().__init__(
+            f"Failed to parse {config_path}:{line}:{column} — {message}. "
+            f"Fix the TOML syntax or validate manually with: "
+            f"uv run python -c \"import tomllib; "
+            f"tomllib.load(open('{config_path}', 'rb'))\""
+        )
+
+
+# Regex to extract "(at line N, column M)" from tomllib's
+# error message (Python 3.11's TOMLDecodeError doesn't carry
+# structured lineno/colno attributes — only the string).
+_TOML_LINENO_RE = re.compile(r"at line (\d+), column (\d+)")
+
+
 def _load_toml(path: Path) -> dict:
-    """Load a TOML file. Returns empty dict if not found."""
+    """Load a TOML file. Returns empty dict if not found.
+
+    Raises ConfigParseError with the offending file path +
+    line + column on malformed input (per Sprint 42
+    hardening). Without this catch, a malformed
+    ~/.gundam-halo/config.toml raises the raw
+    `tomllib.TOMLDecodeError` stack trace at startup —
+    hard to read, easy to misdiagnose.
+    """
     if not path.exists():
         return {}
-    with open(path, "rb") as f:
-        return tomllib.load(f)
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        # Python 3.11's TOMLDecodeError doesn't expose
+        # structured lineno/colno; the string carries them.
+        # Default to (1, 1) for "at end of document"-style
+        # errors that don't include a position.
+        match = _TOML_LINENO_RE.search(str(e))
+        line = int(match.group(1)) if match else 1
+        column = int(match.group(2)) if match else 1
+        raise ConfigParseError(
+            config_path=path,
+            line=line,
+            column=column,
+            message=str(e),
+        ) from e
 
 
 def _env(name: str, default: str = "") -> str:

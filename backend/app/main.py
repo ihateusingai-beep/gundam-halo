@@ -312,9 +312,15 @@ def create_app() -> FastAPI:
     # 5/7 smoke-test failures. The 9th (`projects`) is mounted below
     # immediately after `projects_health` so its static `/health` path
     # wins registration-order over the catch-all `/{name}` route.
-    # `health` mounts with prefix="/health" (router-relative path is
-    # empty, so the prefix becomes the URL); `ws` is root-mounted.
-    halo_app.include_router(health.router, prefix="/health", tags=["health"])
+    # `health` mounts with prefix="/api/health" (Sprint 42 — matches
+    # REST convention; external health probes like Tailscale ACLs
+    # expect this path). The legacy bare `/health` mount is preserved
+    # via `health.legacy_router` for backwards compat with the
+    # frontend `api.ts:health` helper + older smoke scripts.
+    halo_app.include_router(health.router, prefix="/api/health", tags=["health"])
+    halo_app.include_router(
+        health.legacy_router, prefix="/health", tags=["health-legacy"]
+    )
     halo_app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
     halo_app.include_router(mac.router, prefix="/api/mac", tags=["mac"])
     halo_app.include_router(system.router, prefix="/api/system", tags=["system"])
