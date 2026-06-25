@@ -5306,6 +5306,161 @@ about is now stale — `silero-vad>=6.2` accepts
 
 ---
 
+## [0.1.11] — 2026-06-25
+
+### Sprint 38 — Held-out Cantonese eval plumbing (M9-E §4 acceptance criterion 6 prep)
+
+M9-E Layer 2 acceptance criterion 6 — "Held-out WER
+< 10% with personalised model active" — has been
+**blocked** since Sprint 32 because `scripts/record-held-out.sh`
+(the interactive recorder that Sprint 26 §4.3 promised)
+was never written. Sprint 38 ships the plumbing:
+the recorder, the model-cache verifier, the CLI runner,
+and the testable helper module that backs all three.
+The live training run + personalised-checkpoint re-eval
+remain user-driven follow-ups.
+
+#### Added
+
+- **`backend/app/voice/held_out_eval.py`** NEW (~280 LoC) —
+  shared Python helpers backing the 3 scripts:
+  - `halo_home()` / `recordings_dir()` — honours
+    `HALO_HOME` env var (for test redirection).
+  - `latest_heldout_wav()` / `heldout_paths()` —
+    pick the latest `held-out-<date>.wav` by mtime,
+    matching the test file's contract.
+  - `word_error_rate()` — Levenshtein-DP WER (same
+    math as `tests/voice/test_wer_helpers.py`; defined
+    here too so the CLI doesn't import from tests/).
+  - `load_wer_threshold()` — reads
+    `~/.gundam-halo/test-config.toml
+    [held_out_eval].wer_threshold` (default 0.15).
+  - `wav_to_pcm_bytes()` — read 16 kHz mono s16le WAV
+    into raw PCM bytes (validates format).
+  - `whisper_cache_dir()` / `check_cached_whisper_model()`
+    — locate `~/.cache/whisper/<size>.pt` (honours
+    `WHISPER_CACHE` env var).
+  - `heldout_filename()` / `today_iso_date()` /
+    `next_heldout_path()` — date + filename helpers for
+    `record-held-out.sh`.
+  - `EvalResult` / `EvalRunSummary` dataclasses — JSON-
+    serialisable trend data for `tests/voice/held_out_results/`.
+- **`backend/scripts/record-held-out.sh`** NEW (~140 LoC
+  bash) — interactive recorder per Sprint 26 §4.3:
+  1. Picks a recorder: `rec` (SoX) on macOS/Linux,
+     falls back to `afrecord` (macOS built-in) or
+     `arecord` (Linux ALSA).
+  2. Records 30 s of mono 16 kHz s16le WAV.
+  3. Plays back via `afplay` / `aplay`.
+  4. Opens `$EDITOR` on the `.txt` sidecar; user types
+     the correct Cantonese transcript.
+  5. Validates transcript is non-empty.
+  6. Prints file paths + reminder to run pytest.
+- **`backend/scripts/setup-held-out-model.sh`** NEW
+  (~80 LoC bash) — verifies `~/.cache/whisper/base.pt`
+  exists and is loadable (auto-download hint if not).
+  Uses the project's `.venv/bin/python` so the
+  `import whisper` check sees the installed package.
+- **`backend/scripts/run_held_out_eval.py`** NEW
+  (~200 LoC Python) — CLI runner that:
+  1. Locates the latest held-out WAV (or accepts
+     `--wav` / `--txt` overrides).
+  2. Builds the ASR backend via `asr_factory.create_asr`
+     (defaults to `whisper_local`; honours `--backend`
+     override for the personalised-checkpoint path).
+  3. Reads the WAV → PCM bytes → `transcribe(pcm, 16000)`.
+  4. Computes WER + pass/fail vs the threshold.
+  5. Writes trend JSON under
+     `tests/voice/held_out_results/<timestamp>.json`.
+  Exit codes: 0 = pass, 1 = fail, 2 = no held-out WAV,
+  3 = backend load or inference failure.
+- **`backend/tests/scripts/test_held_out_eval_helpers.py`**
+  NEW — 18 tests covering the shared helpers
+  (filename validation, WER math edge cases, threshold
+  resolution, mtime-based WAV picking, WAV format
+  validation).
+- **`backend/tests/scripts/test_run_held_out_eval.py`**
+  NEW — 13 tests covering the CLI runner (path
+  resolution, ASR factory mocking, exit codes,
+  JSON trend output).
+
+#### Changed
+
+- **`docs/FEATURE-SPEC-SPRINT38.md`** NEW (~190 LoC) —
+  full Sprint 38 spec (goal, design, files, acceptance
+  criterion, out-of-scope section).
+- **`docs/tickets/M9-E.md`** — Layer 2 acceptance
+  checklist updated: Sprint 33b capture pipeline now
+  ✅; held-out WER criterion now blocked on user-driven
+  personalised-checkpoint training (instead of the
+  prior "blocked on recording pipeline").
+
+#### Why `base.pt` (not HF `whisper-yue-base`)
+
+Sprint 38 uses the cached `~/.cache/whisper/base.pt`
+(75 MB, already on the user's Mac from Sprint 32's
+`uv sync --extra voice`) as the eval baseline. Reasons:
+
+- The HF `whisper-yue-base` model (~750 MB) wasn't a
+  pre-existing dep, would require a fresh download
+  dance (`huggingface_hub.snapshot_download`), and
+  the user picked the smaller `base.pt` for the Sprint
+  38 baseline (Q: scope question answer: "openai-whisper
+  base.pt (cached)").
+- The baseline WER sets the regression bar for the
+  **personalised** model. Once Sprint 30 Track B's
+  fine-tune runs and the user sets
+  `voice.asr.backend = "whisper_hf"` +
+  `voice.asr.model_path = <checkpoint dir>`,
+  `run_held_out_eval.py` automatically picks up the
+  new backend (no script changes — the factory reads
+  the config).
+- Sprint 26 §4.3 acceptance criterion 2 says "WER < 15%"
+  on the baseline; the personalised-model criterion 6
+  tightens to "< 10%". The CLI defaults to the 15%
+  threshold and lets the user override via
+  `--threshold` or `test-config.toml`.
+
+#### Out of scope (deferred to user-driven follow-ups)
+
+- The 30-min self-record corpus (requires user
+  recording via the Tauri app).
+- The LoRA fine-tune run (~1-2 hr on Apple Silicon via
+  `scripts/finetune_whisper_yue.py --base_model_path
+  ~/.gundam-halo/models/whisper-yue-base/`).
+- The personalised-checkpoint re-eval (same script,
+  different `model_path`, threshold lowered to 10%).
+- M9-E acceptance criterion 6 → ✅ (only after the
+  live run completes).
+
+#### Verify
+
+- `bash scripts/setup-held-out-model.sh` — verifies
+  `base.pt` cached (138 MB on this Mac), loads it
+  successfully.
+- `python -m pytest tests/scripts/test_held_out_eval_helpers.py`
+  → 18/18 pass.
+- `python -m pytest tests/scripts/test_run_held_out_eval.py`
+  → 13/13 pass (mocked ASR; no real Whisper).
+- Backend `pytest` (excl slow tts): **1236 passed, 0 failed**
+  in 60.22s — up from Sprint 37 baseline 1205 (+31 new
+  Sprint 38 tests).
+- Frontend `tsc --noEmit`: 0 errors.
+- Frontend `vitest`: 63/63 (no regressions).
+- `cargo check --tests`: clean (no Rust changes).
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.10 → **0.1.11**
+  (significant feature: held-out eval plumbing ships —
+  the last M9-E blocker is the user-driven training run).
+- Frontend versions unchanged (0.1.7 from Sprint 33b).
+- M9-E Layer 2 acceptance criterion 6 status: still ⏳
+  (was ⏳; the eval plumbing ships but the criterion
+  itself needs the live personalised fine-tune + re-eval).
+
+---
+
 ## [0.1.3] — 2026-06-11
 
 Adds the M9-E Layer 2 fine-tune stack: dependencies, config

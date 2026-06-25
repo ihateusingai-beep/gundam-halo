@@ -467,15 +467,16 @@ The user's day-to-day path:
 - [x] Trainer accepts `--base_model_path` + `--train_audio_dir`.
 - [x] Settings UI shows the 3 cards (Record / Train / Swap).
 - [x] Tauri IPC command surface defined + registered.
-- [ ] Real microphone capture + parallel WhisperHFASR
-      transcription — **deferred** to follow-up sprint.
-      The Rust scaffold (`recording.rs`) defines the
-      pipeline shape and validates `ChunkRecord`s; the
-      capture thread + mpsc transcription queue are the
-      next sprint's work.
+- [x] Real microphone capture + parallel WhisperHFASR
+      transcription (Sprint 33b — Tauri Rust pipeline
+      lands; all 5 IPC commands run real work).
 - [ ] Held-out WER < 10% with personalised model active
-      (per §4.3 acceptance criterion 6) — blocked on
-      the deferred recording pipeline.
+      (per §4.3 acceptance criterion 6) — held-out eval
+      plumbing ships in Sprint 38 (`scripts/record-held-out.sh`
+      + `scripts/run_held_out_eval.py`); the personalised
+      fine-tune checkpoint swap is the user's next step
+      (run Sprint 30 Track B `finetune_whisper_yue.py` then
+      set `voice.asr.backend = "whisper_hf"` and re-eval).
 
 ## Commits (planned)
 
