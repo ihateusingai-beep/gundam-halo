@@ -463,6 +463,12 @@ pub fn run() {
             get_backend_health,
             install_launchd_supervisor,
             clear_crash_log,
+            // Sprint 41 — RestartNudgeBanner cancel button.
+            // Calls POST /api/system/cancel-restart to abort a
+            // pending self-restart triggered by an ASR/corrector
+            // config change. See docs/HELD-OUT-EVAL.md §3 for the
+            // countdown UX.
+            cancel_restart,
             // Sprint 33 (Track 31-B) — Personalised Fine-tune
             // IPC commands. The 5 commands are stubs in this
             // sprint — the recording + training pipeline is
@@ -638,4 +644,37 @@ async fn clear_crash_log() -> Result<u32, String> {
     let v: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| format!("invalid response JSON: {} (body: {})", e, body))?;
     Ok(v.get("cleared").and_then(|x| x.as_u64()).unwrap_or(0) as u32)
+}
+
+/// Sprint 41 — cancel a pending self-restart via the RestartNudgeBanner.
+///
+/// Shells out to `POST /api/system/cancel-restart`. Returns
+/// `{ok: true, cancelled: bool}` on success. The endpoint is
+/// idempotent — calling it when no restart is scheduled is a
+/// no-op (returns `{cancelled: false}`).
+#[tauri::command]
+async fn cancel_restart() -> Result<bool, String> {
+    let output = Command::new("curl")
+        .args([
+            "-sf",
+            "-X",
+            "POST",
+            "--max-time",
+            "5",
+            "http://localhost:8765/api/system/cancel-restart",
+        ])
+        .output()
+        .map_err(|e| format!("curl failed: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "cancel-restart returned non-2xx: {:?}",
+            output.status.code()
+        ));
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("invalid response JSON: {} (body: {})", e, body))?;
+    Ok(v.get("cancelled").and_then(|x| x.as_bool()).unwrap_or(false))
 }

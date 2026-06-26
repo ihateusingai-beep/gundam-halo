@@ -29,6 +29,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,13 @@ logger = logging.getLogger(__name__)
 # the asr fields (see put_voice_config).
 _restart_scheduled: bool = False
 _restart_scheduled_reason: str = ""
+# Sprint 41: monotonic-clock timestamp at which the
+# scheduled restart will fire. None when no restart is
+# scheduled. Used by `get_restart_countdown_s()` for the
+# RestartNudgeBanner's live countdown. We use
+# `time.monotonic()` (immune to wall-clock changes) rather
+# than `time.time()`.
+_restart_scheduled_at: float | None = None
 
 
 def is_restart_scheduled() -> bool:
@@ -66,6 +74,7 @@ def _set_restart_scheduled(scheduled: bool, reason: str = "") -> None:
     _restart_scheduled = scheduled
     _restart_scheduled_reason = reason
     if not scheduled:
+        _restart_scheduled_at = None
         logger.debug(f"[halo.restart] restart flag cleared: reason={reason!r}")
 
 
@@ -82,6 +91,13 @@ def schedule_restart(
     and the same PID — there's no fork, so the parent
     never sees a defunct child.
 
+    Sprint 41: also flips `_restart_scheduled = True` and
+    records the scheduled-at timestamp, so the
+    RestartNudgeBanner can show a live countdown via
+    `get_restart_countdown_s()`. The flag is cleared by
+    `cancel_scheduled_restart()` (user-initiated cancel)
+    or `_set_restart_scheduled(False)` (non-asr PUT).
+
     Args:
         delay_s: seconds to wait before the exec. Default
             5.0 gives in-flight voice turns time to finish
@@ -91,6 +107,11 @@ def schedule_restart(
             caller usually passes the trigger (e.g.
             "asr_config_change").
     """
+    global _restart_scheduled, _restart_scheduled_reason, _restart_scheduled_at
+    _restart_scheduled = True
+    _restart_scheduled_reason = reason
+    _restart_scheduled_at = time.monotonic() + delay_s
+
     async def _do_restart() -> None:
         logger.info(
             f"[halo.restart] scheduling self-restart in "
@@ -100,8 +121,18 @@ def schedule_restart(
             await asyncio.sleep(delay_s)
         except asyncio.CancelledError:
             # The event loop was cancelled (e.g. during
-            # shutdown). Abort the restart.
+            # shutdown or by `cancel_scheduled_restart()`).
+            # Abort the restart.
             logger.info("[halo.restart] restart cancelled")
+            _restart_scheduled_at = None
+            return
+        # If we get here, the asyncio task wasn't cancelled
+        # but the flag may have been cleared by
+        # `cancel_scheduled_restart()`. Check before exec.
+        if not _restart_scheduled:
+            logger.info(
+                "[halo.restart] restart aborted (flag cleared)"
+            )
             return
         logger.info(
             f"[halo.restart] execvp {sys.executable} "
@@ -139,8 +170,49 @@ def schedule_restart(
         )
 
 
+def get_restart_countdown_s() -> float | None:
+    """Seconds remaining until the scheduled restart fires.
+
+    Returns None when no restart is scheduled. Uses
+    `time.monotonic()` so it's immune to wall-clock changes
+    (the user adjusting their clock won't break the
+    countdown). Returns `max(0.0, remaining)` so the
+    countdown never goes negative — once 0 is reached,
+    the asyncio task has either fired or been cancelled.
+    """
+    if _restart_scheduled_at is None:
+        return None
+    remaining = _restart_scheduled_at - time.monotonic()
+    return max(0.0, remaining)
+
+
+def cancel_scheduled_restart() -> bool:
+    """Cancel a pending self-restart (Sprint 41).
+
+    Idempotent: returns True if a restart was actually
+    cancelled, False if no restart was scheduled (safe to
+    call multiple times). Sets the module-level flags so
+    /voice/config immediately reports `restart_scheduled:
+    false`. The asyncio task may still complete its sleep
+    (we can't reach into a different event loop), but it
+    checks the flag before exec and bails cleanly.
+
+    Returns True if a cancellation actually happened.
+    """
+    global _restart_scheduled, _restart_scheduled_reason, _restart_scheduled_at
+    was_scheduled = _restart_scheduled
+    _restart_scheduled = False
+    _restart_scheduled_reason = ""
+    _restart_scheduled_at = None
+    if was_scheduled:
+        logger.info("[halo.restart] scheduled restart cancelled by user")
+    return was_scheduled
+
+
 __all__ = [
     "schedule_restart",
     "is_restart_scheduled",
     "_set_restart_scheduled",
+    "get_restart_countdown_s",
+    "cancel_scheduled_restart",
 ]

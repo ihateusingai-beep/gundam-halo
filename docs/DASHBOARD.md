@@ -159,10 +159,30 @@ when the backend is healthy.
 | Banner | Source | When shown | Actions |
 |---|---|---|---|
 | `BackendHealthBanner` | Tauri `watchdog.rs` (60 s `curl` poll + `/api/system/health-detailed`) | Yellow: 3 consecutive `/api/health` failures. Red: crash count ≥ 3 in last 60 min. | Red banner: "Clear crash log & retry" (wipes `state/crash_log.jsonl`) + "Install launchd supervisor" (one-click `scripts/install-launchd.sh`). |
+| `RestartNudgeBanner` (Sprint 41) | `GET /voice/config` polled every 1 s (gated — interval only runs while a restart is scheduled) | Cyan pulsing pill with live 5-second countdown when the user changes `asr_backend` / `asr_corrector` (the backend schedules a self-restart to reload the voice pipeline). | "Cancel" button → `cancel_restart` Tauri IPC → `POST /api/system/cancel-restart` → clears the flag + timestamp. Outside the Tauri shell: shows a manual-restart instructions toast. |
 | `BackendOutdatedBanner` (existing) | `GET /api/system/info` + git SHA compare | Frontend SHA ≠ backend SHA, or missing features. | "Copy restart command" / "Restart backend (Tauri)" / "Reload page" / "Snooze". |
 
 The watchdog's respawn-loop guard is the **H-risk mitigation** —
 see `docs/SELF-HEALING.md` for the full architecture.
+
+#### MissionCard activity tiers (Sprint 41 Feature F)
+
+Each mission in the cockpit's Mission Roster renders a
+**left-border colour** that encodes the project's last
+activity tier (per `frontend/src/lib/activity-tier.ts`):
+
+| Tier | When | Colour | Label |
+|---|---|---|---|
+| `fresh` | < 1 hour ago | `--success` (green) | ACTIVE |
+| `recent` | < 24 hours ago | `--accent` (cyan) | RECENT |
+| `stale` | < 7 days ago | `--warning` (amber) | STALE |
+| `dormant` | ≥ 7 days ago OR no timestamp | `--danger` (rose) | DORMANT |
+| `archived` | `project.status === "archived"` | `--text-muted` (grey) | ARCHIVED |
+
+The pilot sees "which projects need attention" at a glance —
+dormant projects float to the top of attention, fresh ones
+blink green for "recently active". Future work: per-user
+`[ui]` config block for customisable thresholds.
 
 #### System Status grid (Sprint 39)
 

@@ -92,6 +92,13 @@ async def get_voice_config() -> dict[str, Any]:
     ASR / TTS / Live2D fields it doesn't need to edit.
     """
     cfg = get_config().voice
+    # Sprint 41: expose the live restart countdown so the
+    # RestartNudgeBanner can render a 5-second timer without
+    # needing to track its own clock.
+    from app.core.restart import (
+        get_restart_countdown_s,
+        is_restart_scheduled,
+    )
     return {
         "wake_phrases": list(cfg.wake_phrases),
         "strict_wake_phrase": cfg.strict_wake_phrase,
@@ -107,6 +114,12 @@ async def get_voice_config() -> dict[str, Any]:
         # by any subsequent PUT that doesn't change either
         # field (see put_voice_config).
         "restart_required": get_restart_required(),
+        # Sprint 41: live countdown for the RestartNudgeBanner.
+        # `restart_scheduled` is true when the 5-second timer
+        # is ticking; `restart_in_seconds` is the remaining
+        # time (or None when no restart is scheduled).
+        "restart_scheduled": is_restart_scheduled(),
+        "restart_in_seconds": get_restart_countdown_s(),
     }
 
 

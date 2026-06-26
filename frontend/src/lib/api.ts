@@ -202,6 +202,9 @@ export const api = {
       asr_corrector?: string;
       always_on_mic?: boolean;
       restart_required?: boolean;
+      // Sprint 41 — live countdown for the RestartNudgeBanner.
+      restart_scheduled?: boolean;
+      restart_in_seconds?: number | null;
     }>("/voice/config"),
   setVoiceConfig: (payload: {
     wake_phrases: string[];

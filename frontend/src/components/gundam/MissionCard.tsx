@@ -3,6 +3,11 @@ import { Link } from "react-router";
 import type { ProjectSummary } from "@/types/api";
 import { cn } from "@/lib/utils";
 import { formatRelative } from "@/lib/time";
+import {
+  activityTier,
+  TIER_COLORS,
+  TIER_LABELS,
+} from "@/lib/activity-tier";
 
 interface MissionCardProps {
   project: ProjectSummary;
@@ -13,15 +18,17 @@ interface MissionCardProps {
  *
  *  Same data as ProjectCard but with bigger padding, stronger corner
  *  brackets, and a hover-revealed "ENGAGE ▸" hint.
+ *
+ *  Sprint 41: left-border colour + status label reflect the
+ *  project's activity tier (fresh / recent / stale / dormant /
+ *  archived) — derived from `last_activity_at`. The pilot sees
+ *  "which projects need attention" at a glance.
  */
 export function MissionCard({ project, className = "" }: MissionCardProps) {
   const isArchived = project.status === "archived";
-
-  const statusColor = isArchived
-    ? "var(--text-muted)"
-    : "var(--success)";
-
-  const statusLabel = isArchived ? "ARCHIVED" : "ACTIVE";
+  const tier = activityTier(project.last_activity_at, new Date(), isArchived);
+  const statusColor = TIER_COLORS[tier];
+  const statusLabel = TIER_LABELS[tier];
 
   const lastActivity = project.last_activity_at
     ? formatRelative(project.last_activity_at)
@@ -30,11 +37,14 @@ export function MissionCard({ project, className = "" }: MissionCardProps) {
   return (
     <Link
       to={`/projects/${project.name}`}
+      data-testid="mission-card"
+      data-activity-tier={tier}
       className={cn(
         "gundam-mission-card",
         isArchived && "gundam-mission-card-archived",
         className,
       )}
+      style={{ borderLeftColor: statusColor, borderLeftWidth: 4 }}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">

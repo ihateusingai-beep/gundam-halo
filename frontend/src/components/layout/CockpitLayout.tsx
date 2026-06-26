@@ -9,6 +9,7 @@ import { MissionLog } from "@/components/gundam/MissionLog";
 import { ProjectCard } from "@/components/gundam/ProjectCard";
 import { MaybeBackendOutdatedBanner } from "@/components/gundam/BackendOutdatedBanner";
 import { BackendHealthBanner } from "@/components/gundam/BackendHealthBanner";
+import { RestartNudgeBanner } from "@/components/gundam/RestartNudgeBanner";
 import { SignalCard } from "@/components/gundam/SignalCard";
 import { useBackendVersion } from "@/hooks/use-backend-version";
 import { useProjectsStore } from "@/stores/projects";
@@ -244,6 +245,12 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
           to clear the crash log + install the launchd supervisor).
           Hidden by default when the backend is healthy. */}
       <BackendHealthBanner />
+
+      {/* Sprint 41 — restart nudge banner. Renders when the
+          backend has a self-restart scheduled (5-second
+          countdown after an asr_backend / asr_corrector
+          change). Hidden by default. */}
+      <RestartNudgeBanner />
 
       {/* Backend-outdated banner — only renders when git SHA mismatches
           or required features are missing. Polled every 30s. */}

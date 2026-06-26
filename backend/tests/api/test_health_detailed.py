@@ -116,3 +116,46 @@ def test_clear_crash_log_empty_returns_zero(client, tmp_path):
     r = client.post("/api/system/clear-crash-log")
     assert r.status_code == 200
     assert r.json() == {"ok": True, "cleared": 0}
+
+
+# ---------------------------------------------------------------------------
+# Sprint 41 — /api/system/cancel-restart route tests
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_restart_returns_ok_when_no_restart_scheduled(client):
+    """Idempotent: returns ok=true even when no restart was scheduled."""
+    r = client.post("/api/system/cancel-restart")
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"ok": True, "cancelled": False}
+
+
+def test_cancel_restart_returns_cancelled_true_when_scheduled(client):
+    """After schedule_restart, cancel returns cancelled=true."""
+    from app.core import restart
+
+    restart.schedule_restart(delay_s=5.0, reason="test")
+    try:
+        r = client.post("/api/system/cancel-restart")
+        assert r.status_code == 200
+        body = r.json()
+        assert body == {"ok": True, "cancelled": True}
+        # Side effect: flag is cleared.
+        assert restart.is_restart_scheduled() is False
+    finally:
+        # Defensive cleanup so other tests aren't affected.
+        restart.cancel_scheduled_restart()
+
+
+def test_cancel_restart_then_voice_config_reports_not_scheduled(client):
+    """End-to-end: schedule → cancel → GET /voice/config shows
+    restart_scheduled=false + restart_in_seconds=None."""
+    from app.core import restart
+
+    restart.schedule_restart(delay_s=5.0, reason="test")
+    client.post("/api/system/cancel-restart")
+    r = client.get("/voice/config")
+    body = r.json()
+    assert body["restart_scheduled"] is False
+    assert body["restart_in_seconds"] is None

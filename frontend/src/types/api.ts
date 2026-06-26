@@ -265,6 +265,18 @@ export interface EvalJob {
   error: string | null;
 }
 
+// Sprint 41 — voice config adds two restart-related fields.
+//   - restart_scheduled: true when the 5-second restart
+//     timer is ticking (the user changed asr_backend or
+//     asr_corrector and the backend is about to restart).
+//   - restart_in_seconds: float | null — remaining seconds
+//     until the restart fires. Null when no restart is
+//     scheduled. Floors at 0.0 (never negative).
+export type VoiceConfigWithRestart = {
+  restart_scheduled?: boolean;
+  restart_in_seconds?: number | null;
+};
+
 // Sprint 39 — setup wizard state for the SetupWizard card.
 export interface SetupState {
   status: string;          // "in_progress" | "complete" | "skipped" | "pending"

@@ -509,14 +509,14 @@ def test_schedule_restart_module_is_importable_and_handles_no_loop(caplog):
         "no running asyncio loop" in record.message
         for record in caplog.records
     ), f"expected warning, got: {[r.message for r in caplog.records]}"
-    # In the no-loop path, the flag is set BEFORE the
-    # schedule_restart call (by the caller in
-    # put_voice_config), so the flag here stays False
-    # because schedule_restart only sets it via
-    # _set_restart_scheduled in the running-loop path.
-    # The caller in voice_ws.py is the one that flips
-    # the flag, not schedule_restart itself.
-    assert restart_mod.is_restart_scheduled() is False
+    # Sprint 41: schedule_restart() now flips `_restart_scheduled = True`
+    # itself (before my change, the caller in put_voice_config was the
+    # one that flipped it). The flag stays True even in the no-loop
+    # path because the asyncio task creation fails AFTER the flag is
+    # set. This is correct — /voice/config must report
+    # `restart_scheduled: true` so the cockpit's RestartNudgeBanner
+    # can show the countdown + Cancel button.
+    assert restart_mod.is_restart_scheduled() is True
     # Cleanup
     restart_mod._set_restart_scheduled(False, reason="test_cleanup")
 

@@ -176,3 +176,21 @@ async def post_clear_crash_log() -> dict:
     home = Path(get_config().home)
     cleared = clear_crash_log(home)
     return {"ok": True, "cleared": cleared}
+
+
+@router.post("/cancel-restart")
+async def post_cancel_restart() -> dict[str, Any]:
+    """Sprint 41 — cancel a pending self-restart.
+
+    The RestartNudgeBanner in the cockpit fires this when the
+    user clicks "Cancel" during the 5-second restart countdown.
+    Idempotent: returns `{ok: true, cancelled: bool}` regardless
+    of whether a restart was actually scheduled (safe to call
+    from any UI state).
+
+    Backend implementation lives in `app.core.restart`.
+    """
+    from app.core.restart import cancel_scheduled_restart
+
+    was_scheduled = cancel_scheduled_restart()
+    return {"ok": True, "cancelled": was_scheduled}

@@ -6081,6 +6081,124 @@ verification a 1-button flow.
 
 ---
 
+## [0.1.17] — 2026-06-27
+
+### Sprint 41 — Wave 1 quick wins (MissionCard activity colours + Restart nudge banner)
+
+Two small UX polish features from the 2026-06-26 design
+review packed into one sprint. Both fit in ~600 LoC combined
+and ship without any new backend infrastructure.
+
+#### Added — Feature F: MissionCard Activity Colours
+
+- `frontend/src/lib/activity-tier.ts` NEW (~80 LoC) — pure
+  function `activityTier(last_activity_at, now, archived)`
+  that maps a project's last-active timestamp to one of
+  5 tiers:
+  - `fresh` — < 1 hour (green)
+  - `recent` — < 24 hours (cyan)
+  - `stale` — < 7 days (amber)
+  - `dormant` — ≥ 7 days (rose-red)
+  - `archived` — manual override (grey)
+  - Defensive: malformed timestamp → "stale"; null →
+    "dormant"; future timestamp (clock skew) → "fresh".
+- `frontend/src/components/gundam/MissionCard.tsx` —
+  replaces the binary active/archived status dot with the
+  5-tier system. Renders the tier colour as a 4px left
+  border + the tier label inline next to the dot.
+- `frontend/src/components/gundam/MissionCard.test.tsx` —
+  new `data-activity-tier` attribute for testability.
+- 9 new vitest tests in `lib/activity-tier.test.ts` —
+  covers all 5 tier boundaries + null/malformed/future
+  timestamps + archived override.
+
+#### Added — Feature I: Restart Nudge Banner
+
+- `backend/app/core/restart.py` — adds `_restart_scheduled_at`
+  (monotonic-clock timestamp) + 2 new functions:
+  - `get_restart_countdown_s()` — float seconds remaining
+    (or None), immune to wall-clock changes via
+    `time.monotonic()`. Floors at 0.0.
+  - `cancel_scheduled_restart()` — clears the flag +
+    timestamp. The asyncio task may have already started
+    its sleep; the task checks the flag before exec and
+    bails cleanly. Idempotent (safe to call when no
+    restart is scheduled).
+  - `schedule_restart()` now flips `_restart_scheduled = True`
+    itself (was previously set by `_set_restart_scheduled`
+    in the caller). Single source of truth for "a restart
+    is pending".
+  - **Breaking change**: existing test
+    `test_schedule_restart_module_is_importable_and_handles_no_loop`
+    assumed the flag stayed False in the no-loop path;
+    updated to expect True (matches the new behavior).
+- `backend/app/api/voice_config_api.py::get_voice_config()` —
+  adds 2 new fields to the response payload:
+  - `restart_scheduled: bool`
+  - `restart_in_seconds: float | None`
+  - Frontend polls this every 1 s while a restart is
+    scheduled (interval gated — stops when not scheduled).
+- `backend/app/api/system.py` — new endpoint:
+  - `POST /api/system/cancel-restart` → calls
+    `cancel_scheduled_restart()`. Returns `{ok: true,
+    cancelled: bool}`. Idempotent.
+- `frontend/src-tauri/src/lib.rs` — new IPC command
+  `cancel_restart` → shells out to `POST
+  /api/system/cancel-restart` via curl. Returns the
+  `cancelled` bool to the frontend.
+- `frontend/src/components/gundam/RestartNudgeBanner.tsx`
+  NEW (~120 LoC) — cyan pulsing banner with:
+  - Live countdown text ("Backend restarting in 5s…")
+  - "Cancel" button → fires `cancel_restart` IPC
+  - Outside the Tauri shell: button shows a manual-restart
+    instructions toast (curl-free fallback for web dev)
+  - Auto-hides when `restart_in_seconds <= 0`
+  - Polls `/voice/config` every 1 s while a restart is
+    scheduled (gated interval)
+- `frontend/src/components/layout/CockpitLayout.tsx` —
+  mounts `<RestartNudgeBanner />` above the existing
+  `BackendHealthBanner` (top-of-cockpit stack).
+- `frontend/src/types/api.ts` + `frontend/src/lib/api.ts` —
+  adds the 2 new voice config fields.
+
+#### Tests
+
+- 9 vitest tests for the activity-tier helper (5 tier
+  boundaries + null/malformed/future + archived + colour
+  /label map).
+- 3 vitest tests for RestartNudgeBanner (hidden by default,
+  shows countdown + Cancel, click Cancel fires IPC).
+- 6 pytest tests for `restart.py` countdown + cancel
+  (`_restart_scheduled_at` recorded, countdown decrements,
+  cancel clears state, idempotent cancel, returns None when
+  not scheduled, floors at 0).
+- 3 pytest tests for `/api/system/cancel-restart` endpoint
+  (idempotent returns `cancelled: false`, returns
+  `cancelled: true` when scheduled, GET /voice/config shows
+  not-scheduled after cancel).
+- 1 existing pytest test updated for the new flag-flip
+  contract.
+
+#### Verify
+
+- Backend `pytest` (excl slow tts): **1317 passed, 0 failed**
+  in 63.91s — up from Sprint 40 baseline 1308 (+9 new
+  Sprint 41 tests).
+- Frontend `tsc --noEmit`: 0 errors.
+- Frontend `vitest`: **98 passed** — up from Sprint 40
+  baseline 86 (+12 new Sprint 41 tests: 9 tier + 3 banner).
+- `cargo check --tests`: clean (no new warnings).
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.16 → **0.1.17** (PATCH
+  per Mavis memory rule: small UX polish, not a new user-
+  facing feature).
+- Frontend versions 0.1.16 → **0.1.17** (3 surfaces:
+  `package.json`, `Cargo.toml`, `tauri.conf.json`).
+
+---
+
 ## [0.1.3] — 2026-06-11
 
 Adds the M9-E Layer 2 fine-tune stack: dependencies, config
