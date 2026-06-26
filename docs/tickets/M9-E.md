@@ -379,6 +379,46 @@ augmentation workaround.
 - [ ] CHANGELOG entry for v0.1.3 documenting both layers
       and the model footprint trade-off.
 
+## Update — 2026-06-27: Layer 2 v2 status (Sprint 40 — orchestrator + UI)
+
+**Sprint 40 ships the orchestrator + UI affordance that makes
+M9-E Layer 2 acceptance criterion 6 user-action-achievable
+in one click.** The criterion itself is still user-driven
+(the pilot records 30s of Cantonese + runs the orchestrator),
+but the path is now: click "Run eval" on the HeldOutEvalCard →
+wait 2 min → see baseline WER → click "Fine-tune + re-eval"
+→ wait 30-60 min → see "↗ −Xpp WER improvement · ✓ M9-E criterion 6".
+
+What's live now (Sprint 40):
+
+| Artifact | Status | Path |
+|---|---|---|
+| `scripts/run_held_out_pipeline.py` orchestrator (4 modes) | ✅ | `backend/scripts/` |
+| `app/core/eval_jobs.py` thread-safe job state store | ✅ | `backend/app/core/` |
+| `POST /voice/run-held-out-eval` + `GET .../{id}` + `POST /voice/run-finetune` + `GET /voice/list-jobs` | ✅ | `backend/app/api/voice_config_api.py` |
+| HeldOutEvalCard "Run eval" + "Fine-tune" buttons | ✅ | `frontend/src/components/dashboard/` |
+| Improvement indicator (green ↗ when backend changes) | ✅ | same |
+| `services/halo-eval-jobs.ts` singleton + 3 s polling | ✅ | `frontend/src/services/` |
+| `docs/HELD-OUT-EVAL.md` user walkthrough | ✅ | `docs/` |
+
+28 new pytest tests + 6 new vitest tests; total backend
+baseline now **1308 passed** in 61.60s.
+
+**Acceptance criterion status** (criterion 6):
+
+- [x] Trend JSON loader (Sprint 39)
+- [x] `/voice/eval-results` endpoint (Sprint 39)
+- [x] HeldOutEvalCard with sparkline (Sprint 39)
+- [x] Orchestrator + Run buttons + improvement indicator
+      (Sprint 40)
+- [ ] **Held-out WER < 10% with personalised model active** —
+      shipped (orchestrator + UI) + **user-action-required**
+      (live recording + fine-tune). The pilot opens the
+      cockpit, clicks "Run eval", records 30s of Cantonese,
+      waits 2 min, clicks "Fine-tune + re-eval", waits 30-60
+      min, sees the green ↗. Once verified, the milestone
+      is closed.
+
 ## Update — 2026-06-26: Layer 2 v2 status (Sprint 39 — eval trend endpoint)
 
 **Sprint 39 ships the backend half of the dashboard

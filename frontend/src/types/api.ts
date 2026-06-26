@@ -250,6 +250,21 @@ export interface EvalRunRow {
   source_path: string;
 }
 
+// Sprint 40 — background eval job (returned by /voice/run-held-out-eval
+// and /voice/run-finetune endpoints).
+export interface EvalJob {
+  job_id: string;
+  kind: "held-out-eval" | "finetune";
+  status: "pending" | "running" | "succeeded" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  log_path: string | null;
+  trend_json_path: string | null;
+  report_path: string | null;
+  error: string | null;
+}
+
 // Sprint 39 — setup wizard state for the SetupWizard card.
 export interface SetupState {
   status: string;          // "in_progress" | "complete" | "skipped" | "pending"

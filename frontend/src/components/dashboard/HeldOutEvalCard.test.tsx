@@ -1,33 +1,41 @@
 /**
- * HeldOutEvalCard.test.tsx — Sprint 39 Track B acceptance test.
+ * HeldOutEvalCard.test.tsx — Sprint 39 + Sprint 40 acceptance tests.
  *
- * Verifies the "ready" branch renders the right WER number, PASS
- * badge, and sparkline polyline. The empty / error branches are
- * covered by the live smoke (manual); unit-testing them would
- * just duplicate the same DOM assertions for slightly different
- * text content.
+ * Sprint 39 verifies the "ready" branch renders the right WER
+ * number, PASS badge, and sparkline polyline.
  *
- * Mocking strategy:
- *   - `api.getVoiceEvalResults` is mocked to return 3 valid runs
- *     (newest first: 18% → 14% → 12%) below the 15% threshold
- *     so the latest passes.
- *   - The 10s interval is not exercised.
+ * Sprint 40 adds:
+ *   - Improvement indicator shows when the 2 latest trend rows
+ *     have different `asr_backend` values (the "M9-E criterion 6
+ *     visually closed" signal).
+ *   - The "Run eval" button fires the right IPC.
  */
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const getVoiceEvalResultsMock = vi.fn();
+const startHeldOutEvalMock = vi.fn();
+const startFinetuneMock = vi.fn();
+
 vi.mock("@/lib/api", () => ({
   api: {
     getVoiceEvalResults: (...args: unknown[]) => getVoiceEvalResultsMock(...args),
+    startHeldOutEval: (...args: unknown[]) => startHeldOutEvalMock(...args),
+    startFinetune: (...args: unknown[]) => startFinetuneMock(...args),
   },
 }));
+
+// Reset the eval-jobs singleton between tests.
+import { _resetEvalJobsForTests } from "@/services/halo-eval-jobs";
 
 import { HeldOutEvalCard } from "@/components/dashboard/HeldOutEvalCard";
 
 afterEach(() => {
   getVoiceEvalResultsMock.mockReset();
+  startHeldOutEvalMock.mockReset();
+  startFinetuneMock.mockReset();
+  _resetEvalJobsForTests();
   cleanup();
 });
 
@@ -88,27 +96,143 @@ describe("HeldOutEvalCard", () => {
     const card = screen.getByTestId("held-out-eval-card");
     expect(card.getAttribute("data-state")).toBe("ready");
     expect(card.getAttribute("data-passed")).toBe("true");
-
-    // The WER is shown to 1 dp + a "WER" suffix label.
     expect(card.textContent).toContain("12.0%");
-    expect(card.textContent).toContain("WER");
-
-    // The PASS badge is rendered as uppercase text.
     expect(card.textContent).toContain("PASS");
-
-    // The threshold + backend are surfaced.
     expect(card.textContent).toContain("Threshold 15.0%");
     expect(card.textContent).toContain("whisper_local");
 
-    // The sparkline SVG renders with exactly 3 polyline points
-    // (one per run, oldest-first after the render-side reverse).
     const svg = screen.getByTestId("wer-sparkline");
     expect(svg).toBeTruthy();
     const polyline = svg.querySelector("polyline");
     expect(polyline).toBeTruthy();
     const points = polyline?.getAttribute("points") ?? "";
-    // 3 runs → 3 (x,y) pairs.
     const pointCount = points.trim().split(/\s+/).length;
     expect(pointCount).toBe(3);
+  });
+
+  it("renders the improvement badge when the 2 latest runs use different backends", async () => {
+    getVoiceEvalResultsMock.mockResolvedValue({
+      latest: {
+        // After personalised run — WER 8% < 10% → M9-E met.
+        timestamp: "2026-06-26T11:00:00+00:00",
+        timestamp_ms: 1782411600000,
+        wer_pct: 8.0,
+        passed: true,
+        wav_path: "/tmp/held-out.wav",
+        asr_backend: "whisper_hf",
+        duration_sec: 28.0,
+        source_path: "/tmp/run-after.json",
+      },
+      history: [
+        {
+          timestamp: "2026-06-26T11:00:00+00:00",
+          timestamp_ms: 1782411600000,
+          wer_pct: 8.0,
+          passed: true,
+          wav_path: "/tmp/held-out.wav",
+          asr_backend: "whisper_hf",
+          duration_sec: 28.0,
+          source_path: "/tmp/run-after.json",
+        },
+        {
+          // Baseline run — WER 50% with whisper_local.
+          timestamp: "2026-06-26T09:00:00+00:00",
+          timestamp_ms: 1782404400000,
+          wer_pct: 50.0,
+          passed: false,
+          wav_path: "/tmp/held-out.wav",
+          asr_backend: "whisper_local",
+          duration_sec: 30.5,
+          source_path: "/tmp/run-baseline.json",
+        },
+      ],
+      threshold_pct: 15.0,
+    });
+
+    render(<HeldOutEvalCard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("improvement-badge")).toBeTruthy();
+    });
+
+    const badge = screen.getByTestId("improvement-badge");
+    expect(badge.getAttribute("data-met-criterion-6")).toBe("true");
+    expect(badge.textContent).toContain("−42.0pp WER");
+    expect(badge.textContent).toContain("M9-E criterion 6");
+  });
+
+  it("does NOT render the improvement badge when both runs use the same backend", async () => {
+    // Re-run the same backend — would be noise to claim "improvement".
+    getVoiceEvalResultsMock.mockResolvedValue({
+      latest: {
+        timestamp: "2026-06-26T11:00:00+00:00",
+        timestamp_ms: 1782411600000,
+        wer_pct: 14.0,
+        passed: true,
+        wav_path: "/tmp/held-out.wav",
+        asr_backend: "whisper_local",
+        duration_sec: 28.0,
+        source_path: "/tmp/run.json",
+      },
+      history: [
+        {
+          timestamp: "2026-06-26T11:00:00+00:00",
+          timestamp_ms: 1782411600000,
+          wer_pct: 14.0,
+          passed: true,
+          wav_path: "/tmp/held-out.wav",
+          asr_backend: "whisper_local",
+          duration_sec: 28.0,
+          source_path: "/tmp/run.json",
+        },
+        {
+          timestamp: "2026-06-25T10:00:00+00:00",
+          timestamp_ms: 1782321600000,
+          wer_pct: 18.0,
+          passed: false,
+          wav_path: "/tmp/held-out.wav",
+          asr_backend: "whisper_local",
+          duration_sec: 30.5,
+          source_path: "/tmp/run2.json",
+        },
+      ],
+      threshold_pct: 15.0,
+    });
+
+    render(<HeldOutEvalCard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("held-out-eval-card")).toBeTruthy();
+    });
+
+    expect(screen.queryByTestId("improvement-badge")).toBeNull();
+  });
+
+  it("Run eval button fires startHeldOutEval IPC", async () => {
+    getVoiceEvalResultsMock.mockResolvedValue({
+      latest: null,
+      history: [],
+      threshold_pct: 15.0,
+    });
+    startHeldOutEvalMock.mockResolvedValue({
+      job_id: "held-out-eval-test",
+      status: "pending",
+    });
+
+    render(<HeldOutEvalCard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("held-out-eval-card")).toBeTruthy();
+    });
+
+    const btn = screen.getByTestId("run-eval-button");
+    btn.click();
+
+    await waitFor(() => {
+      expect(startHeldOutEvalMock).toHaveBeenCalledTimes(1);
+    });
+    // Threshold is forwarded from the card's display state.
+    const [params] = startHeldOutEvalMock.mock.calls[0];
+    expect(params).toMatchObject({ threshold: 15.0 });
   });
 });

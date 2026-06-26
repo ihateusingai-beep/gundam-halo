@@ -21,10 +21,14 @@ comments and structure.
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
+import threading
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+from pydantic import BaseModel, Field
 
 from app.api.restart_handler import (
     get_restart_required,
@@ -33,6 +37,11 @@ from app.api.restart_handler import (
 )
 from app.api.ws_protocol import router
 from app.core.config import get_config
+from app.core.eval_jobs import (
+    JOB_KIND_FINETUNE,
+    JOB_KIND_HELD_OUT_EVAL,
+    get_store,
+)
 from app.core.toml_doc import read_doc, update_section_key, write_doc
 
 logger = logging.getLogger(__name__)
@@ -394,4 +403,209 @@ async def put_voice_config(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-__all__ = ["voice_status", "get_voice_config", "put_voice_config"]
+# ---------------------------------------------------------------------------
+# Sprint 40 — held-out eval + fine-tune background runners
+# ---------------------------------------------------------------------------
+
+
+class RunEvalRequest(BaseModel):
+    """Body for POST /voice/run-held-out-eval (Sprint 40)."""
+
+    threshold: float = Field(0.15, ge=0.0, le=1.0)
+    model_size: str = Field("base", pattern="^(tiny|base|small|medium)$")
+    halo_home: str | None = Field(None, max_length=512)
+
+
+class RunFinetuneRequest(BaseModel):
+    """Body for POST /voice/run-finetune (Sprint 40)."""
+
+    train_corpus_dir: str | None = Field(None, max_length=512)
+    output_model_dir: str | None = Field(None, max_length=512)
+    halo_home: str | None = Field(None, max_length=512)
+
+
+def _run_orchestrator_thread(
+    job_id: str,
+    args: list[str],
+    halo_home: Path,
+) -> None:
+    """Background-thread target: run the orchestrator subprocess,
+    mark the job's terminal state when done.
+
+    Lives in voice_config_api.py to keep the wiring close to the
+    endpoints that fire it. Mirrors the watchdog's std::thread
+    pattern from Sprint 43 (no tokio, no async — pure sync).
+    """
+    store = get_store(halo_home)
+    try:
+        store.mark_running(job_id)
+    except Exception as e:
+        logger.error(f"could not mark job {job_id} as running: {e}")
+        return
+
+    scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
+    orchestrator = scripts_dir / "run_held_out_pipeline.py"
+
+    log_dir = halo_home / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{job_id}.log"
+
+    cmd = [sys.executable, str(orchestrator)] + args
+    try:
+        with log_path.open("w", encoding="utf-8") as logf:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(scripts_dir.parent),  # backend root
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+        exit_code = proc.returncode
+    except Exception as e:
+        logger.error(f"orchestrator for job {job_id} crashed: {e}")
+        try:
+            store.complete_job(
+                job_id,
+                exit_code=3,
+                error=f"orchestrator_crash: {type(e).__name__}: {e}",
+            )
+        except Exception:
+            pass
+        return
+
+    # Pick the most recent trend JSON (written by run_held_out_eval.py).
+    trend_path: str | None = None
+    try:
+        results_dir = halo_home / "tests" / "voice" / "held_out_results"
+        if results_dir.is_dir():
+            newest = max(
+                results_dir.glob("*.json"),
+                key=lambda p: p.stat().st_mtime,
+                default=None,
+            )
+            if newest is not None:
+                trend_path = str(newest)
+    except Exception as e:
+        logger.warning(f"could not locate trend JSON for {job_id}: {e}")
+
+    try:
+        store.complete_job(
+            job_id,
+            exit_code=exit_code,
+            trend_json_path=trend_path,
+            error=None if exit_code == 0 else f"orchestrator_exit_{exit_code}",
+        )
+    except Exception as e:
+        logger.error(f"could not mark job {job_id} complete: {e}")
+
+
+@router.post("/voice/run-held-out-eval")
+async def post_run_held_out_eval(payload: RunEvalRequest) -> dict[str, Any]:
+    """Sprint 40 — kick off a held-out eval in a background thread.
+
+    Returns 202-style `{job_id}` immediately. The client polls
+    GET /voice/run-held-out-eval/{job_id} for status.
+
+    The eval can take 30s-2min depending on Whisper model size +
+    recording length. Running it inline would block the FastAPI
+    event loop; the thread keeps the UI responsive.
+    """
+    halo_home = Path(payload.halo_home).expanduser().resolve() if payload.halo_home else Path(get_config().home).resolve()
+
+    store = get_store(halo_home)
+    job = store.create_job(JOB_KIND_HELD_OUT_EVAL)
+
+    args = [
+        "--mode",
+        "eval",
+        "--threshold",
+        str(payload.threshold),
+        "--model-size",
+        payload.model_size,
+    ]
+    if payload.halo_home:
+        args += ["--halo-home", payload.halo_home]
+    thread = threading.Thread(
+        target=_run_orchestrator_thread,
+        args=(job.job_id, args, halo_home),
+        name=f"eval-{job.job_id}",
+        daemon=True,
+    )
+    thread.start()
+    return {"job_id": job.job_id, "status": "pending"}
+
+
+@router.get("/voice/run-held-out-eval/{job_id}")
+async def get_run_held_out_eval(job_id: str) -> dict[str, Any]:
+    """Sprint 40 — poll an eval job's state.
+
+    Returns 404 if `job_id` is unknown. Otherwise the full job state.
+    """
+    halo_home = Path(get_config().home).resolve()
+    store = get_store(halo_home)
+    job = store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id!r} not found")
+    return job.to_dict()
+
+
+@router.post("/voice/run-finetune")
+async def post_run_finetune(payload: RunFinetuneRequest) -> dict[str, Any]:
+    """Sprint 40 — kick off a LoRA fine-tune in a background thread.
+
+    Fine-tune + after-eval can take 30-60 minutes (Common Voice
+    yue is ~50h; LoRA on a single user's 30-min corpus is much
+    faster). The thread keeps the FastAPI event loop responsive.
+
+    After the job completes, the user clicks "Activate
+    personalised model" on the Sprint 39 ModelSwapDialog to swap
+    `voice.asr.backend` + `model_path` in config.toml.
+    """
+    halo_home = Path(payload.halo_home).expanduser().resolve() if payload.halo_home else Path(get_config().home).resolve()
+
+    store = get_store(halo_home)
+    job = store.create_job(JOB_KIND_FINETUNE)
+
+    args = [
+        "--mode",
+        "finetune",
+        "--halo-home",
+        str(halo_home),
+    ]
+    if payload.train_corpus_dir:
+        args += ["--train-corpus-dir", payload.train_corpus_dir]
+    if payload.output_model_dir:
+        args += ["--output-model-dir", payload.output_model_dir]
+    thread = threading.Thread(
+        target=_run_orchestrator_thread,
+        args=(job.job_id, args, halo_home),
+        name=f"finetune-{job.job_id}",
+        daemon=True,
+    )
+    thread.start()
+    return {"job_id": job.job_id, "status": "pending"}
+
+
+@router.get("/voice/list-jobs")
+async def list_eval_jobs(limit: int = 10) -> dict[str, Any]:
+    """Sprint 40 — list recent eval/finetune jobs (newest first).
+
+    Used by the HeldOutEvalCard to show "Last eval: 2 hours ago
+    (PASS)" without polling the active job.
+    """
+    halo_home = Path(get_config().home).resolve()
+    store = get_store(halo_home)
+    jobs = store.list_jobs(limit=limit)
+    return {"jobs": [j.to_dict() for j in jobs]}
+
+
+__all__ = [
+    "voice_status",
+    "get_voice_config",
+    "put_voice_config",
+    "post_run_held_out_eval",
+    "get_run_held_out_eval",
+    "post_run_finetune",
+    "list_eval_jobs",
+]

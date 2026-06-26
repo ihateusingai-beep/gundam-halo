@@ -121,6 +121,21 @@ backend = "whisper_local"             # v1: "whisper_local" is the only one wire
 model_size = "base"                   # tiny/base/small/medium/large
 device = "auto"                       # auto | cpu | mps (Apple Silicon)
 
+# Sprint 40 — personalised fine-tune:
+# After Sprint 33b + Sprint 38/39/40, you can run the held-out eval
+# pipeline end-to-end via:
+#   1. Click "Run eval" on the HeldOutEvalCard (records + evaluates)
+#   2. Click "Fine-tune + re-eval" (Common Voice yue LoRA, ~30-60 min)
+#   3. Click "Activate personalised model" on the ModelSwapDialog
+#   4. Restart the backend
+# See docs/HELD-OUT-EVAL.md for the full walkthrough.
+#
+# To manually swap (instead of using the ModelSwapDialog):
+#   backend = "whisper_hf"
+#   model_path = "~/.gundam-halo/models/whisper-yue-personalised/"
+# (model_path is honoured by both whisper_local and whisper_hf backends;
+#  see app/core/config.py and app/voice/asr/whisper_hf.py)
+
 [voice.tts]
 backend = "edge"                      # edge (free) | pyttsx3 (offline)
 voice = "zh-HK-HiuMaanNeural"         # Cantonese-leaning

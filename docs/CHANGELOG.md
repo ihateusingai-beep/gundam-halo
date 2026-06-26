@@ -5932,6 +5932,155 @@ per Sprint 37 records).
 
 ---
 
+## [0.1.16] — 2026-06-27
+
+### Sprint 40 — Held-out eval orchestrator + UI (M9-E criterion 6 path)
+
+Closes the **user-action path** for the last unchecked M9-E
+acceptance criterion ("Held-out WER < 10% with personalised
+model active"). The plumbing has been live since Sprint 38
+(eval scripts) + Sprint 39 (eval-results endpoint + dashboard);
+Sprint 40 adds the **orchestrator + UI affordance** to make the
+verification a 1-button flow.
+
+#### Added (backend)
+
+- `scripts/run_held_out_pipeline.py` NEW (~290 LoC) — the
+  orchestrator CLI. 4 modes:
+  - `record` — just record a held-out clip (delegates to
+    `scripts/record-held-out.sh`)
+  - `eval` — just run eval (delegates to
+    `scripts/run_held_out_eval.py`)
+  - `finetune` — just fine-tune (delegates to
+    `scripts/finetune_whisper_yue.py`)
+  - `full` — baseline → finetune → after-eval → diff report.
+    This is the user-facing "complete M9-E criterion 6 in one
+    shot" path.
+  - Diff report prints "Baseline WER: X% / Latest WER: Y% /
+    Improvement: −Zpp" + flags "✓ M9-E criterion 6 MET" when
+    after WER < 10%.
+  - Does NOT reimplement the existing scripts — composes
+    them via subprocess + chains exit codes.
+- `app/core/eval_jobs.py` NEW (~250 LoC) — thread-safe
+  in-memory + JSON-persisted job state store. Module-level
+  singleton (`get_store(home)`). Jobs persist across
+  backend restarts; orphaned "running" jobs (from a previous
+  process whose subprocess was reaped) are auto-marked
+  `failed` with `error: "backend_restart"` on the next
+  startup.
+- `app/api/voice_config_api.py` — 4 new endpoints:
+  - `POST /voice/run-held-out-eval` — start a baseline eval
+    in a background thread. Returns `{job_id, status:
+    "pending"}`.
+  - `GET /voice/run-held-out-eval/{job_id}` — poll job state
+    (200 with full `EvalJob` JSON, or 404 for unknown id).
+  - `POST /voice/run-finetune` — start a LoRA fine-tune in a
+    background thread.
+  - `GET /voice/list-jobs` — list recent jobs (newest first).
+- 28 new pytest tests (across 3 new test files):
+  - `tests/core/test_eval_jobs.py` — 7 tests (lifecycle,
+    concurrent jobs, state persistence, orphan cleanup,
+    failure exit codes, JSON parseability).
+  - `tests/scripts/test_run_held_out_pipeline.py` — 15 tests
+    (diff math (4 cases incl. M9E criterion met / no-change /
+    regression), summary WER averaging, mode dispatch (5 modes
+    + --skip-finetune-eval + error propagation), threshold
+    passthrough, missing script rc=2).
+  - `tests/api/test_voice_eval_jobs.py` — 6 tests (POST
+    returns job_id, GET returns 404 / full state / list,
+    trend_json_path persisted on succeeded jobs).
+- Trend JSON format unchanged — Sprint 38 contract preserved.
+  No Sprint 39 HeldOutEvalCard changes required for the
+  sparkline to keep working.
+
+#### Added (frontend)
+
+- `services/halo-eval-jobs.ts` NEW (~140 LoC) — singleton
+  subscriber mirroring the `halo-watchdog-events.ts` /
+  `halo-voice-ws.ts` pattern. Tracks an active background
+  job + polls `GET /voice/run-held-out-eval/{job_id}` every
+  3 s. Auto-stops polling when the job reaches a terminal
+  state. Fires `halo-eval-results-stale` window event on
+  succeeded held-out-eval (the HeldOutEvalCard listens + auto-
+  refetches `/voice/eval-results`).
+- `components/dashboard/HeldOutEvalCard.tsx` (Sprint 39 →
+  Sprint 40):
+  - **Run eval button** — calls `POST /voice/run-held-out-eval`.
+    Disabled while a job is running.
+  - **Fine-tune + re-eval button** — calls `POST
+    /voice/run-finetune`. Disabled when there's no baseline
+    run yet (only 1 trend row) or a job is running.
+  - **Active job pill** — renders the in-progress job's
+    `kind` + `status` + elapsed seconds + dismiss button.
+    Dismiss does NOT kill the subprocess (it just stops
+    tracking on the frontend).
+  - **Improvement indicator** — when the 2 latest trend
+    rows have different `asr_backend` values AND the latest
+    is lower, render "↗ −Zpp WER (−Y%)" with a green
+    ↗. When the latest WER is < 10%, also render "✓ M9-E
+    criterion 6" inline. This is the **visual closure** of
+    M9-E Layer 2 acceptance criterion 6.
+- `lib/api.ts` — adds `startHeldOutEval` / `getHeldOutEvalJob` /
+  `startFinetune` / `listEvalJobs` typed wrappers.
+- `types/api.ts` — adds `EvalJob` type.
+- 6 new vitest tests:
+  - `services/halo-eval-jobs.test.ts` — 3 tests (startTracking +
+    getActive round-trip, stopTracking clears, subscribers get
+    immediate notification).
+  - `HeldOutEvalCard.test.tsx` — 3 new tests (improvement badge
+    shows when backends differ + criterion-6 met when WER <
+    10%, badge DOES NOT show when backends are the same, "Run
+    eval" button fires `startHeldOutEval` IPC).
+
+#### Added (docs)
+
+- `docs/HELD-OUT-EVAL.md` NEW (~280 LoC) — user-facing
+  walkthrough of the 90-second + 60-minute paths, the
+  orchestrator architecture diagram, the 4-endpoint API
+  surface, the improvement-indicator rules (when it shows,
+  when it doesn't, why), and 6 common failure-mode recipes
+  (eval unavailable, button greyed out, OOM, no improvement,
+  job stuck, regression).
+- `docs/FEATURE-SPEC-SPRINT40-LIVE-EVAL.md` (the design spec
+  written earlier; already on disk).
+- `docs/tickets/M9-E.md` — update criterion 6 status to
+  "shipped (orchestrator + UI); user-action-required (live
+  recording + fine-tune)".
+- `docs/CHANGELOG.md` — this entry.
+
+#### Test changes (Sprint 40 only)
+
+- `tests/core/test_eval_jobs.py` — 7 NEW tests.
+- `tests/scripts/test_run_held_out_pipeline.py` — 15 NEW tests.
+- `tests/api/test_voice_eval_jobs.py` — 6 NEW tests
+  (file renamed from `test_run_held_out_eval.py` to avoid
+  the Sprint 38 naming conflict).
+- `services/halo-eval-jobs.test.ts` — 3 NEW tests.
+- `components/dashboard/HeldOutEvalCard.test.tsx` — 3 NEW
+  tests on top of the Sprint 39 acceptance test.
+
+#### Verify
+
+- Backend `pytest` (excl slow tts): **1308 passed, 0 failed**
+  in 61.60s — up from Sprint 39 baseline 1280 (+28 new
+  Sprint 40 tests: 7 + 15 + 6).
+- Frontend `tsc --noEmit`: 0 errors.
+- Frontend `vitest`: **86 passed** — up from Sprint 39 baseline
+  80 (+6 new Sprint 40 tests: 3 service + 3 card).
+- `cargo check --tests`: clean (no Rust changes in Sprint 40).
+
+#### Version bump
+
+- `app/__init__.py` `__version__` 0.1.15 → **0.1.16** (PATCH
+  per Mavis memory rule: operational + UI affordance, not a
+  user-facing feature change in itself; the user-facing
+  feature is the criterion-6 closure, but it's gated on
+  them running the orchestrator).
+- Frontend versions 0.1.15 → **0.1.16** (3 surfaces:
+  `package.json`, `Cargo.toml`, `tauri.conf.json`).
+
+---
+
 ## [0.1.3] — 2026-06-11
 
 Adds the M9-E Layer 2 fine-tune stack: dependencies, config

@@ -175,7 +175,7 @@ scripts:
 |---|---|---|
 | `SetupWizard` | `GET /api/setup/state` | Shows current step (1-8) + "Resume setup" link. Pulses yellow when `status === "in_progress"`. Hidden when setup is complete. |
 | `VoiceWsIndicator` | `services/halo-voice-ws.ts::getVoiceStatus()` | Live pill coloured by `state` (cyan=ready, blue=listening, magenta=thinking, orange=speaking, pink=reconnecting, red=error). 2 s poll, matches the existing VoiceTab pattern. |
-| `HeldOutEvalCard` | `GET /voice/eval-results` (Sprint 39) | Latest WER as a big number, pass/fail badge, and a 60×24 px SVG sparkline of the last 7 runs. Empty state ("No evals yet — run `scripts/record-held-out.sh`") when the trend dir is empty. |
+| `HeldOutEvalCard` | `GET /voice/eval-results` (Sprint 39) + `POST /voice/run-held-out-eval` / `POST /voice/run-finetune` (Sprint 40) | Latest WER as a big number, pass/fail badge, and a 60×24 px SVG sparkline of the last 7 runs. **Sprint 40**: "Run eval" + "Fine-tune + re-eval" buttons (background jobs), active-job progress pill, and an improvement indicator (green ↗ + "✓ M9-E criterion 6") when the 2 latest runs use different ASR backends. Empty state ("No evals yet — click Run eval") when the trend dir is empty. |
 | `ModelSwapDialog` | `invoke('activate_model')` (Sprint 33b) | shadcn `<Dialog>` with a `toml_edit` diff preview (active `whisper_local` → proposed `whisper_hf` + checkpoint path). "Confirm" button fires the IPC. |
 
 All 4 cards render gracefully when their data

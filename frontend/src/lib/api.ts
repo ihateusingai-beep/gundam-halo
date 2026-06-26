@@ -5,6 +5,7 @@
 
 import type {
   EvalRunRow,
+  EvalJob,
   Gauges,
   HealthResponse,
   ProjectCreate,
@@ -107,6 +108,51 @@ export const api = {
       history: EvalRunRow[];
       threshold_pct: number;
     }>("/voice/eval-results"),
+
+  // Sprint 40: held-out eval + fine-tune background runner (M9-E criterion 6).
+  //   - `startHeldOutEval` → POST /voice/run-held-out-eval (returns {job_id})
+  //   - `getHeldOutEvalJob` → GET /voice/run-held-out-eval/{id}
+  //   - `startFinetune` → POST /voice/run-finetune
+  //   - `listEvalJobs` → GET /voice/list-jobs
+  // The HeldOutEvalCard polls getHeldOutEvalJob every 3s while a job is
+  // running, then refetches /voice/eval-results when the job succeeds.
+  startHeldOutEval: (params?: {
+    threshold?: number;
+    model_size?: "tiny" | "base" | "small" | "medium";
+    halo_home?: string;
+  }) =>
+    request<{ job_id: string; status: string }>("/voice/run-held-out-eval", {
+      method: "POST",
+      body: JSON.stringify({
+        threshold: params?.threshold ?? 0.15,
+        model_size: params?.model_size ?? "base",
+        halo_home: params?.halo_home,
+      }),
+    }),
+
+  getHeldOutEvalJob: (jobId: string) =>
+    request<EvalJob>(
+      `/voice/run-held-out-eval/${encodeURIComponent(jobId)}`,
+    ),
+
+  startFinetune: (params?: {
+    train_corpus_dir?: string;
+    output_model_dir?: string;
+    halo_home?: string;
+  }) =>
+    request<{ job_id: string; status: string }>("/voice/run-finetune", {
+      method: "POST",
+      body: JSON.stringify({
+        train_corpus_dir: params?.train_corpus_dir,
+        output_model_dir: params?.output_model_dir,
+        halo_home: params?.halo_home,
+      }),
+    }),
+
+  listEvalJobs: (limit = 10) =>
+    request<{ jobs: EvalJob[] }>(
+      `/voice/list-jobs?limit=${limit}`,
+    ),
 
   // Sprint 39: setup wizard state for the SetupWizard card.
   //   - `status` (string) — "in_progress" | "complete" | "skipped" | ...
