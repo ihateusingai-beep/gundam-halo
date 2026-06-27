@@ -274,3 +274,100 @@ def test_missing_script_returns_rc_2(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(orch, "SCRIPTS_DIR", tmp_path / "no-such-dir")
     rc = main(["--mode", "eval", "--halo-home", str(tmp_path)])
     assert rc == 2
+
+
+# ---------------------------------------------------------------------------
+# Sprint 45 — --base-model-path flag + default fix
+# ---------------------------------------------------------------------------
+
+
+def test_base_model_path_default_is_whisper_yue_base_not_recordings_models(
+    tmp_path: Path,
+):
+    """Regression: Sprint 40 default was `recordings/models/whisper-base`
+    (parent-walk bug). Sprint 45 must default to
+    `~/.gundam-halo/models/whisper-yue-base`."""
+    with patch("scripts.run_held_out_pipeline.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        rc = main(["--mode", "finetune", "--halo-home", str(tmp_path)])
+    assert rc == 0
+    cmd = mock_run.call_args[0][0]
+    # Find --base_model_path flag in the spawned command.
+    assert "--base_model_path" in cmd, f"--base_model_path flag missing in {cmd}"
+    flag_idx = cmd.index("--base_model_path")
+    base_path = Path(cmd[flag_idx + 1])
+    # Must NOT contain /recordings/ in the path.
+    assert "/recordings/" not in str(base_path), (
+        f"base_model_path leaked recordings/ parent: {base_path}"
+    )
+    # Must end with /models/whisper-yue-base.
+    assert base_path.name == "whisper-yue-base", (
+        f"expected whisper-yue-base, got {base_path.name}"
+    )
+    # Must be under the resolved halo_home, not under recordings/.
+    assert base_path.parent.name == "models"
+
+
+def test_base_model_path_flag_overrides_default(tmp_path: Path):
+    """Explicit `--base-model-path=...` is forwarded to finetune script."""
+    custom_base = tmp_path / "models" / "whisper-experimental"
+    custom_base.mkdir(parents=True, exist_ok=True)
+    with patch("scripts.run_held_out_pipeline.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        rc = main(
+            [
+                "--mode", "finetune",
+                "--halo-home", str(tmp_path),
+                "--base-model-path", str(custom_base),
+            ]
+        )
+    assert rc == 0
+    cmd = mock_run.call_args[0][0]
+    assert "--base_model_path" in cmd
+    flag_idx = cmd.index("--base_model_path")
+    assert Path(cmd[flag_idx + 1]) == custom_base
+
+
+def test_empty_base_model_path_skips_flag(tmp_path: Path):
+    """`--base-model-path=""` omits the flag — finetune_whisper_yue.py
+    falls back to HF Hub openai/whisper-base (English-only)."""
+    with patch("scripts.run_held_out_pipeline.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        rc = main(
+            [
+                "--mode", "finetune",
+                "--halo-home", str(tmp_path),
+                "--base-model-path", "",
+            ]
+        )
+    assert rc == 0
+    cmd = mock_run.call_args[0][0]
+    assert "--base_model_path" not in cmd, (
+        f"--base_model_path should be omitted when flag is empty, got {cmd}"
+    )
+
+
+def test_resolve_train_corpus_dir_helper_picks_latest_yue_self(tmp_path: Path, monkeypatch):
+    """Unit test on the helper that powers the new endpoint's
+    auto-detection. Latest `yue-self-*/` dir wins."""
+    from app.api import voice_config_api
+
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    older = recordings / "yue-self-2026-06-26"
+    older.mkdir()
+    (older / "manifest.jsonl").write_text(
+        '{"audio_path": "/a.wav", "text": "old", "duration_s": 30, "sample_rate": 16000}\n'
+    )
+    newer = recordings / "yue-self-2026-06-27"
+    newer.mkdir()
+    # Force mtime ordering.
+    import os
+    import time
+    os.utime(older, (time.time() - 3600, time.time() - 3600))
+    os.utime(newer, (time.time(), time.time()))
+
+    # Override _resolve_halo_home to return tmp_path.
+    monkeypatch.setattr(voice_config_api, "_resolve_halo_home", lambda: tmp_path)
+    result = voice_config_api._latest_self_record_corpus(tmp_path)
+    assert result == newer

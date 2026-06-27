@@ -17,12 +17,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const getVoiceEvalResultsMock = vi.fn();
 const startHeldOutEvalMock = vi.fn();
 const startFinetuneMock = vi.fn();
+const listSelfRecordCorporaMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   api: {
     getVoiceEvalResults: (...args: unknown[]) => getVoiceEvalResultsMock(...args),
     startHeldOutEval: (...args: unknown[]) => startHeldOutEvalMock(...args),
     startFinetune: (...args: unknown[]) => startFinetuneMock(...args),
+    listSelfRecordCorpora: (...args: unknown[]) =>
+      listSelfRecordCorporaMock(...args),
   },
 }));
 
@@ -35,6 +38,10 @@ afterEach(() => {
   getVoiceEvalResultsMock.mockReset();
   startHeldOutEvalMock.mockReset();
   startFinetuneMock.mockReset();
+  listSelfRecordCorporaMock.mockReset();
+  // Default: no self-record corpora (tests that want a corpus must
+  // override this mock with mockResolvedValueOnce or mockResolvedValue).
+  listSelfRecordCorporaMock.mockResolvedValue({ corpora: [], latest_path: null });
   _resetEvalJobsForTests();
   cleanup();
 });
@@ -234,5 +241,137 @@ describe("HeldOutEvalCard", () => {
     // Threshold is forwarded from the card's display state.
     const [params] = startHeldOutEvalMock.mock.calls[0];
     expect(params).toMatchObject({ threshold: 15.0 });
+  });
+
+  // ---------------------------------------------------------------------
+  // Sprint 45 — latest-corpus hint above the fine-tune button.
+  // ---------------------------------------------------------------------
+
+  it("displays the latest corpus path and chunk count when corpora exist", async () => {
+    getVoiceEvalResultsMock.mockResolvedValue({
+      latest: {
+        timestamp: "2026-06-26T10:00:00+00:00",
+        timestamp_ms: 1782408000000,
+        wer_pct: 12.0,
+        passed: true,
+        wav_path: "/tmp/held-out.wav",
+        asr_backend: "whisper_local",
+        duration_sec: 30.5,
+        source_path: "/tmp/run.json",
+      },
+      history: [
+        {
+          timestamp: "2026-06-26T10:00:00+00:00",
+          timestamp_ms: 1782408000000,
+          wer_pct: 12.0,
+          passed: true,
+          wav_path: "/tmp/held-out.wav",
+          asr_backend: "whisper_local",
+          duration_sec: 30.5,
+          source_path: "/tmp/run.json",
+        },
+      ],
+      threshold_pct: 15.0,
+    });
+    listSelfRecordCorporaMock.mockResolvedValue({
+      corpora: [
+        {
+          path: "/Users/kencheng/.gundam-halo/recordings/yue-self-2026-06-27",
+          date: "2026-06-27",
+          chunk_count: 12,
+          manifest_chunks: 12,
+          total_duration_s: 360.5,
+          rejected_lines: 0,
+          is_latest: true,
+        },
+      ],
+      latest_path: "/Users/kencheng/.gundam-halo/recordings/yue-self-2026-06-27",
+    });
+
+    render(<HeldOutEvalCard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("latest-corpus-hint")).toBeTruthy();
+    });
+
+    const hint = screen.getByTestId("latest-corpus-hint");
+    expect(hint.textContent).toContain("Will fine-tune on:");
+    expect(screen.getByTestId("latest-corpus-path").textContent).toContain(
+      "yue-self-2026-06-27",
+    );
+    expect(screen.getByTestId("latest-corpus-meta").textContent).toContain(
+      "12 chunks",
+    );
+    expect(screen.getByTestId("latest-corpus-meta").textContent).toContain(
+      "360.5s",
+    );
+    expect(screen.queryByTestId("latest-corpus-rejected")).toBeNull();
+  });
+
+  it("hides the hint when no corpora exist", async () => {
+    getVoiceEvalResultsMock.mockResolvedValue({
+      latest: {
+        timestamp: "2026-06-26T10:00:00+00:00",
+        timestamp_ms: 1782408000000,
+        wer_pct: 12.0,
+        passed: true,
+        wav_path: "/tmp/held-out.wav",
+        asr_backend: "whisper_local",
+        duration_sec: 30.5,
+        source_path: "/tmp/run.json",
+      },
+      history: [],
+      threshold_pct: 15.0,
+    });
+    // listSelfRecordCorporaMock returns empty by default from afterEach.
+
+    render(<HeldOutEvalCard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("held-out-eval-card")).toBeTruthy();
+    });
+
+    expect(screen.queryByTestId("latest-corpus-hint")).toBeNull();
+  });
+
+  it("warns on rejected manifest lines", async () => {
+    getVoiceEvalResultsMock.mockResolvedValue({
+      latest: {
+        timestamp: "2026-06-26T10:00:00+00:00",
+        timestamp_ms: 1782408000000,
+        wer_pct: 12.0,
+        passed: true,
+        wav_path: "/tmp/held-out.wav",
+        asr_backend: "whisper_local",
+        duration_sec: 30.5,
+        source_path: "/tmp/run.json",
+      },
+      history: [],
+      threshold_pct: 15.0,
+    });
+    listSelfRecordCorporaMock.mockResolvedValue({
+      corpora: [
+        {
+          path: "/Users/kencheng/.gundam-halo/recordings/yue-self-2026-06-27",
+          date: "2026-06-27",
+          chunk_count: 5,
+          manifest_chunks: 3,
+          total_duration_s: 90.0,
+          rejected_lines: 2,
+          is_latest: true,
+        },
+      ],
+      latest_path: "/Users/kencheng/.gundam-halo/recordings/yue-self-2026-06-27",
+    });
+
+    render(<HeldOutEvalCard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("latest-corpus-rejected")).toBeTruthy();
+    });
+
+    const rejected = screen.getByTestId("latest-corpus-rejected");
+    expect(rejected.textContent).toContain("2 rejected");
+    expect(rejected.getAttribute("title")).toContain("2 manifest row");
   });
 });

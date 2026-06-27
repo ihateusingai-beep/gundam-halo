@@ -39,6 +39,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   frames could overlap or play past the queue head. Now
   sequentially awaited with stale-frame skip.
 
+### Sprint 45 — Self-record corpus fine-tune path (M9-E criterion 6 user-action)
+
+Closes the last mile of M9-E Layer 2 acceptance criterion 6 by
+wiring the existing pieces into a 1-click flow: Tauri Record card
+writes `yue-self-<date>/`, HeldOutEvalCard shows which corpus
+the fine-tune will use, and `POST /voice/run-finetune` auto-detects
+it without CLI override. Also fixes a Sprint 40 orchestrator bug
+where `--base_model_path` defaulted to a nonexistent directory.
+
+#### Fixed — Sprint 40 orchestrator `--base_model_path` parent-walk bug
+
+- **backend**: `scripts/run_held_out_pipeline.py::_cmd_finetune`
+  previously computed `--base_model_path = train_corpus_dir.parent
+  / "models" / "whisper-base"`. For `--train-corpus-dir=
+  ~/.gundam-halo/recordings/yue-self-2026-06-27/`, the parent
+  was `recordings/`, so the resolved path was
+  `~/.gundam-halo/recordings/models/whisper-base/` (does not
+  exist). Sprint 45:
+  - Default is now `~/.gundam-halo/models/whisper-yue-base/`
+    (Common Voice yue baseline checkpoint).
+  - `--base-model-path` is a real CLI flag (was hardcoded).
+  - Empty string `--base-model-path=""` skips the flag entirely,
+    letting `finetune_whisper_yue.py` fall back to HF Hub
+    `openai/whisper-base` (English-only).
+
+#### Added — Auto-detection + manifest preflight
+
+- **backend**: `GET /voice/self-record-corpora` — scans
+  `~/.gundam-halo/recordings/yue-self-*/`, returns one row per
+  corpus (newest first) with `chunk_count`, `manifest_chunks`,
+  `total_duration_s`, `rejected_lines`, `is_latest`. Empty
+  list if the user hasn't recorded yet. Graceful on missing
+  `recordings/` (no 404).
+- **backend**: `POST /voice/run-finetune` extended —
+  - `RunFinetuneRequest` adds optional `base_model_path` field.
+  - `_resolve_train_corpus_dir()` — auto-detects latest
+    `yue-self-*/` when `payload.train_corpus_dir` is None.
+    Falls back to `recordings/manifest.jsonl` flat, then 400.
+  - `_resolve_base_model_path()` — uses
+    `~/.gundam-halo/models/whisper-yue-base/` if it exists,
+    else skips the flag.
+  - `_preflight_validate_manifest()` — validates the corpus's
+    `manifest.jsonl` BEFORE spawning the orchestrator. Missing
+    or empty → 400 with a friendly error message. Saves the
+    user 30-60s of orchestrator spawn time on broken corpora.
+  - Response echoes back the resolved `train_corpus_dir` and
+    `base_model_path` so the UI can confirm what got queued.
+
+#### Added — HeldOutEvalCard latest-corpus hint
+
+- **frontend**: `HeldOutEvalCard.tsx` — fetches
+  `/voice/self-record-corpora` on mount + every 10s. Renders
+  a small hint above the run buttons:
+  ```
+  Will fine-tune on: recordings/yue-self-2026-06-27
+  12 chunks · 360.5s
+  ```
+  Shows a warning span when `rejected_lines > 0`, with a
+  tooltip explaining the validation skip.
+- **frontend**: `lib/api.ts` — adds `listSelfRecordCorpora()`
+  + extends `startFinetune()` to accept `base_model_path`.
+- **frontend**: `types/api.ts` — adds `SelfRecordCorpusSummary`
+  + `SelfRecordCorporaResponse` interfaces.
+
+#### Tests
+
+- **backend**: `tests/scripts/test_run_held_out_pipeline.py`
+  extended (+4 tests):
+  - `test_base_model_path_default_is_whisper_yue_base_not_recordings_models`
+    (regression for the parent-walk bug).
+  - `test_base_model_path_flag_overrides_default`.
+  - `test_empty_base_model_path_skips_flag`.
+  - `test_resolve_train_corpus_dir_helper_picks_latest_yue_self`.
+- **backend**: `tests/api/test_voice_self_record_corpora.py`
+  NEW (+5 tests): empty HALO_HOME, single corpus, multi-corpus
+  sort order, `is_latest` flag, rejected-lines reporting.
+- **backend**: `tests/api/test_voice_finetune_preflight.py`
+  NEW (+4 tests): valid manifest, missing manifest.jsonl,
+  empty manifest, garbage JSONL.
+- **frontend**: `HeldOutEvalCard.test.tsx` extended (+3 tests):
+  - `test_displays the latest corpus path and chunk count when corpora exist`.
+  - `test_hides the hint when no corpora exist`.
+  - `test_warns on rejected manifest lines`.
+
 ### Sprint 18 — cockpit audio-reactive HUD + ASR switcher (read-only → editable)
 
 Sprint 18 closes two open follow-ups from Sprint 16 + 17b:

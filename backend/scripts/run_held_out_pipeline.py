@@ -60,6 +60,7 @@ if str(BACKEND_DIR) not in sys.path:
 # Default locations (overridable via flags).
 DEFAULT_HALO_HOME = Path.home() / ".gundam-halo"
 DEFAULT_TRAIN_CORPUS_DIR = DEFAULT_HALO_HOME / "recordings"
+DEFAULT_BASE_MODEL_PATH = DEFAULT_HALO_HOME / "models" / "whisper-yue-base"
 DEFAULT_OUTPUT_MODEL_DIR = DEFAULT_HALO_HOME / "models" / "whisper-yue-personalised"
 DEFAULT_THRESHOLD = 0.15  # Sprint 26 §4.3 baseline target
 LOG_FILE_SUFFIX = ".orchestrator.log"
@@ -98,7 +99,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--train-corpus-dir",
         type=Path,
         default=DEFAULT_TRAIN_CORPUS_DIR,
-        help=f"Training corpus dir (default: {DEFAULT_TRAIN_CORPUS_DIR}).",
+        help=(
+            "Training corpus dir — directory containing manifest.jsonl. "
+            "Default: %(default)s. For self-record corpora, point at "
+            "$HALO_HOME/recordings/yue-self-<date>/."
+        ),
+    )
+    p.add_argument(
+        "--base-model-path",
+        # type=str (NOT Path) so empty string '' is preserved — argparse
+        # converts '' → '.' (current dir) when type=Path. We need to
+        # distinguish "skip the flag" from "default the flag" downstream.
+        type=str,
+        default=str(DEFAULT_BASE_MODEL_PATH),
+        help=(
+            "Base HF-format Whisper checkpoint to fine-tune from. "
+            "Default: %(default)s (Common Voice yue baseline). "
+            "Pass an empty string ('') to skip — falls back to the HF "
+            "Hub openai/whisper-base (English-only) for pure self-record "
+            "experiments."
+        ),
     )
     p.add_argument(
         "--output-model-dir",
@@ -227,19 +247,24 @@ def _cmd_finetune(args: argparse.Namespace, halo_home: Path, log_path: Path | No
     if not script.exists():
         print(f"[orchestrator] missing script: {script}", file=sys.stderr)
         return 2
+    cmd = [
+        "python",
+        str(script),
+        "--train_audio_dir",
+        str(args.train_corpus_dir),
+        "--output_dir",
+        str(args.output_model_dir),
+        "--num_train_epochs",
+        "1",  # 1 epoch is enough for ~30min corpus; user can bump later
+    ]
+    # Sprint 45: --base-model-path is now an explicit flag with the
+    # Common Voice yue baseline as default. Empty string skips the
+    # flag entirely (lets finetune_whisper_yue.py fall back to HF Hub).
+    base_str = (args.base_model_path or "").strip()
+    if base_str:
+        cmd += ["--base_model_path", base_str]
     return _run_subprocess(
-        [
-            "python",
-            str(script),
-            "--base_model_path",
-            str(args.train_corpus_dir.parent / "models" / "whisper-base"),
-            "--train_audio_dir",
-            str(args.train_corpus_dir),
-            "--output_dir",
-            str(args.output_model_dir),
-            "--num_train_epochs",
-            "1",  # 1 epoch is enough for ~30min corpus; user can bump later
-        ],
+        cmd,
         cwd=BACKEND_DIR,
         log_path=log_path,
         dry_run=args.dry_run,

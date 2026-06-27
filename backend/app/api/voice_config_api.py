@@ -21,6 +21,7 @@ comments and structure.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -430,11 +431,200 @@ class RunEvalRequest(BaseModel):
 
 
 class RunFinetuneRequest(BaseModel):
-    """Body for POST /voice/run-finetune (Sprint 40)."""
+    """Body for POST /voice/run-finetune (Sprint 40 + 45).
+
+    All path fields are optional. When omitted, the backend
+    auto-detects the most recent `yue-self-<date>/` dir under
+    `$HALO_HOME/recordings/` for the corpus, and uses the Common
+    Voice yue baseline checkpoint at `$HALO_HOME/models/whisper-yue-base/`
+    as the fine-tune starting point.
+
+    Sprint 45 additions:
+      - `base_model_path` — explicit override of the starting
+        checkpoint (pass empty string `""` to fall through to the
+        HF Hub `openai/whisper-base` English-only weights).
+    """
 
     train_corpus_dir: str | None = Field(None, max_length=512)
+    base_model_path: str | None = Field(None, max_length=512)
     output_model_dir: str | None = Field(None, max_length=512)
     halo_home: str | None = Field(None, max_length=512)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 45 — self-record corpus auto-detect + manifest preflight
+# ---------------------------------------------------------------------------
+
+
+DEFAULT_HALO_HOME = Path.home() / ".gundam-halo"
+DEFAULT_BASE_MODEL_PATH = DEFAULT_HALO_HOME / "models" / "whisper-yue-base"
+CORPUS_DIR_PREFIX = "yue-self-"
+
+
+def _resolve_halo_home() -> Path:
+    """Resolve $HALO_HOME (env var overrides the default)."""
+    env = os.environ.get("HALO_HOME")
+    if env:
+        return Path(env).expanduser().resolve()
+    return DEFAULT_HALO_HOME.resolve()
+
+
+def _latest_self_record_corpus(halo_home: Path) -> Path | None:
+    """Return the newest `yue-self-*` dir under `recordings/`.
+
+    Sorts by mtime (newest first). Returns None if `recordings/`
+    doesn't exist or has no dated subdirs.
+    """
+    recordings = halo_home / "recordings"
+    if not recordings.is_dir():
+        return None
+    dated = sorted(
+        (d for d in recordings.glob(f"{CORPUS_DIR_PREFIX}*") if d.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return dated[0] if dated else None
+
+
+def _resolve_train_corpus_dir(payload: RunFinetuneRequest, halo_home: Path) -> Path:
+    """Resolve the training corpus directory.
+
+    Priority:
+      1. `payload.train_corpus_dir` (explicit override).
+      2. Latest `yue-self-*/` dir under `recordings/`.
+      3. `recordings/` itself (parent fallback — only if it has a
+         flat `manifest.jsonl`).
+      4. HTTP 400 with a hint pointing at the Record card.
+    """
+    if payload.train_corpus_dir:
+        return Path(payload.train_corpus_dir).expanduser().resolve()
+
+    latest = _latest_self_record_corpus(halo_home)
+    if latest is not None:
+        return latest
+
+    parent_fallback = halo_home / "recordings"
+    if (parent_fallback / "manifest.jsonl").is_file():
+        return parent_fallback
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "No self-record corpus found. Record at least one chunk via "
+            "the Tauri Record card, or pass `train_corpus_dir` explicitly."
+        ),
+    )
+
+
+def _resolve_base_model_path(payload: RunFinetuneRequest, halo_home: Path) -> Path | None:
+    """Resolve the base HF-format Whisper checkpoint.
+
+    Priority:
+      1. `payload.base_model_path` (explicit override).
+      2. `$HALO_HOME/models/whisper-yue-base/` if it exists.
+      3. None (let `finetune_whisper_yue.py` fall back to HF Hub
+         `openai/whisper-base`).
+
+    Returns None when no local base is found and no override was
+    supplied — the orchestrator treats None as "skip the flag".
+    """
+    if payload.base_model_path is not None:
+        stripped = payload.base_model_path.strip()
+        if not stripped:
+            return None  # explicit "skip"
+        return Path(stripped).expanduser().resolve()
+    candidate = (halo_home / "models" / "whisper-yue-base").resolve()
+    return candidate if candidate.is_dir() else None
+
+
+def _preflight_validate_manifest(train_dir: Path) -> str | None:
+    """Validate the corpus's `manifest.jsonl`. Returns None if OK,
+    else an error message suitable for surfacing to the UI.
+
+    The check is fast (just reads the JSONL) and rejects:
+      - Missing `manifest.jsonl`.
+      - Empty manifest.
+      - Schema-violating rows (all rows rejected).
+    """
+    manifest = train_dir / "manifest.jsonl"
+    if not manifest.is_file():
+        return (
+            f"manifest.jsonl not found in {train_dir}. "
+            "Did the Record card finish flushing?"
+        )
+    from app.voice.self_record_manifest import iter_manifest
+
+    rows = 0
+    try:
+        for _sample in iter_manifest(manifest):
+            rows += 1
+    except FileNotFoundError as e:
+        return str(e)
+    if rows == 0:
+        return f"manifest is empty: {manifest}"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 45 — GET /voice/self-record-corpora (dashboard affordance)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/voice/self-record-corpora")
+async def list_self_record_corpora() -> dict[str, Any]:
+    """Scan `$HALO_HOME/recordings/yue-self-*` and summarise each.
+
+    Returns `{corpora: list, latest_path: str | null}`. Each corpus
+    carries enough metadata for `HeldOutEvalCard` to render a
+    "Will fine-tune on: <path> (N chunks · Ms)" hint above the
+    fine-tune button without a second round-trip.
+
+    Order: newest-first by directory mtime. The first entry is
+    flagged `is_latest: true`; the rest are `is_latest: false`.
+
+    Empty result if no corpus dirs exist yet (the user hasn't
+    recorded anything). Graceful: missing `recordings/` dir →
+    empty list (no 404).
+    """
+    from app.voice.self_record_manifest import summarise as manifest_summarise
+
+    halo_home = _resolve_halo_home()
+    recordings = halo_home / "recordings"
+    if not recordings.is_dir():
+        return {"corpora": [], "latest_path": None}
+
+    dated = sorted(
+        (d for d in recordings.glob(f"{CORPUS_DIR_PREFIX}*") if d.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    corpora = []
+    for i, d in enumerate(dated):
+        chunk_files = list(d.glob("chunk-*.wav"))
+        manifest = d / "manifest.jsonl"
+        if manifest.is_file():
+            ms = manifest_summarise(manifest)
+            manifest_chunks = ms.total_chunks
+            total_duration = ms.total_duration_s
+            rejected = ms.rejected_lines
+        else:
+            manifest_chunks = 0
+            total_duration = 0.0
+            rejected = 0
+        date_part = d.name[len(CORPUS_DIR_PREFIX):] if d.name.startswith(CORPUS_DIR_PREFIX) else d.name
+        corpora.append({
+            "path": str(d),
+            "date": date_part,
+            "chunk_count": len(chunk_files),
+            "manifest_chunks": manifest_chunks,
+            "total_duration_s": round(total_duration, 2),
+            "rejected_lines": rejected,
+            "is_latest": i == 0,
+        })
+    return {
+        "corpora": corpora,
+        "latest_path": corpora[0]["path"] if corpora else None,
+    }
 
 
 def _run_orchestrator_thread(
@@ -565,17 +755,35 @@ async def get_run_held_out_eval(job_id: str) -> dict[str, Any]:
 
 @router.post("/voice/run-finetune")
 async def post_run_finetune(payload: RunFinetuneRequest) -> dict[str, Any]:
-    """Sprint 40 — kick off a LoRA fine-tune in a background thread.
+    """Sprint 40 + 45 — kick off a LoRA fine-tune in a background thread.
 
     Fine-tune + after-eval can take 30-60 minutes (Common Voice
     yue is ~50h; LoRA on a single user's 30-min corpus is much
     faster). The thread keeps the FastAPI event loop responsive.
+
+    Sprint 45 wiring:
+      - `train_corpus_dir` auto-detected (latest `yue-self-*/`)
+        when not explicitly passed.
+      - `base_model_path` auto-resolved (CV-yue baseline) when
+        not explicitly passed.
+      - Manifest pre-flight rejects broken corpora immediately
+        (returns 400 + error string), saving the user a 30-60s
+        wait for the orchestrator to spawn.
 
     After the job completes, the user clicks "Activate
     personalised model" on the Sprint 39 ModelSwapDialog to swap
     `voice.asr.backend` + `model_path` in config.toml.
     """
     halo_home = Path(payload.halo_home).expanduser().resolve() if payload.halo_home else Path(get_config().home).resolve()
+
+    # Sprint 45: resolve + preflight BEFORE spawning the thread.
+    # Bad path / broken manifest → 400 immediately, no background
+    # job created, no log file written.
+    train_dir = _resolve_train_corpus_dir(payload, halo_home)
+    base_model = _resolve_base_model_path(payload, halo_home)
+    preflight_error = _preflight_validate_manifest(train_dir)
+    if preflight_error is not None:
+        raise HTTPException(status_code=400, detail=preflight_error)
 
     store = get_store(halo_home)
     job = store.create_job(JOB_KIND_FINETUNE)
@@ -585,9 +793,11 @@ async def post_run_finetune(payload: RunFinetuneRequest) -> dict[str, Any]:
         "finetune",
         "--halo-home",
         str(halo_home),
+        "--train-corpus-dir",
+        str(train_dir),
     ]
-    if payload.train_corpus_dir:
-        args += ["--train-corpus-dir", payload.train_corpus_dir]
+    if base_model is not None:
+        args += ["--base-model-path", str(base_model)]
     if payload.output_model_dir:
         args += ["--output-model-dir", payload.output_model_dir]
     thread = threading.Thread(
@@ -597,7 +807,12 @@ async def post_run_finetune(payload: RunFinetuneRequest) -> dict[str, Any]:
         daemon=True,
     )
     thread.start()
-    return {"job_id": job.job_id, "status": "pending"}
+    return {
+        "job_id": job.job_id,
+        "status": "pending",
+        "train_corpus_dir": str(train_dir),
+        "base_model_path": str(base_model) if base_model else None,
+    }
 
 
 @router.get("/voice/list-jobs")
@@ -621,4 +836,8 @@ __all__ = [
     "get_run_held_out_eval",
     "post_run_finetune",
     "list_eval_jobs",
+    "list_self_record_corpora",
+    "_resolve_train_corpus_dir",
+    "_resolve_base_model_path",
+    "_preflight_validate_manifest",
 ]

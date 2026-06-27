@@ -10,6 +10,7 @@ import type {
   HealthResponse,
   ProjectCreate,
   ProjectSummary,
+  SelfRecordCorporaResponse,
   SetupState,
   SessionInfo,
   SessionStart,
@@ -137,13 +138,22 @@ export const api = {
 
   startFinetune: (params?: {
     train_corpus_dir?: string;
+    base_model_path?: string;
     output_model_dir?: string;
     halo_home?: string;
   }) =>
-    request<{ job_id: string; status: string }>("/voice/run-finetune", {
+    request<{
+      job_id: string;
+      status: string;
+      // Sprint 45: server-side auto-detection echoes back the
+      // resolved paths so the UI can confirm what got queued.
+      train_corpus_dir?: string;
+      base_model_path?: string | null;
+    }>("/voice/run-finetune", {
       method: "POST",
       body: JSON.stringify({
         train_corpus_dir: params?.train_corpus_dir,
+        base_model_path: params?.base_model_path,
         output_model_dir: params?.output_model_dir,
         halo_home: params?.halo_home,
       }),
@@ -153,6 +163,12 @@ export const api = {
     request<{ jobs: EvalJob[] }>(
       `/voice/list-jobs?limit=${limit}`,
     ),
+
+  // Sprint 45: scan $HALO_HOME/recordings/yue-self-*/. Used by
+  // HeldOutEvalCard to render the "Will fine-tune on: <path>
+  // (N chunks · Ms)" hint above the fine-tune button.
+  listSelfRecordCorpora: () =>
+    request<SelfRecordCorporaResponse>("/voice/self-record-corpora"),
 
   // Sprint 39: setup wizard state for the SetupWizard card.
   //   - `status` (string) — "in_progress" | "complete" | "skipped" | ...

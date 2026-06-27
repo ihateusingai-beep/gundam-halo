@@ -62,12 +62,28 @@ def test_post_run_held_out_eval_returns_job_id(client):
     assert body["job_id"].startswith("held-out-eval-")
 
 
-def test_post_run_finetune_returns_job_id(client):
-    """POST starts a background finetune thread + returns job_id."""
+def test_post_run_finetune_returns_job_id(client, tmp_path):
+    """POST starts a background finetune thread + returns job_id.
+
+    Sprint 45: the endpoint now requires a valid manifest at the
+    resolved corpus dir (preflight). Test writes a fake manifest
+    + chunk wav so preflight passes.
+    """
+    corpus = tmp_path / "yue-self-2026-06-27"
+    corpus.mkdir()
+    (corpus / "manifest.jsonl").write_text(
+        json.dumps({
+            "audio_path": str(corpus / "chunk-000.wav"),
+            "text": "你好世界",
+            "duration_s": 30.0,
+            "sample_rate": 16000,
+        }) + "\n",
+        encoding="utf-8",
+    )
     r = client.post(
         "/voice/run-finetune",
         json={
-            "train_corpus_dir": "/tmp/corpus",
+            "train_corpus_dir": str(corpus),
             "output_model_dir": "/tmp/model",
         },
     )
@@ -75,6 +91,8 @@ def test_post_run_finetune_returns_job_id(client):
     body = r.json()
     assert "job_id" in body
     assert body["job_id"].startswith("finetune-")
+    # Sprint 45: response echoes back the resolved paths.
+    assert body["train_corpus_dir"] == str(corpus)
 
 
 def test_get_run_held_out_eval_returns_404_for_unknown_job(client):
@@ -102,12 +120,31 @@ def test_get_run_held_out_eval_returns_full_state_for_known_job(client):
     assert body["status"] in ("pending", "running", "succeeded", "failed")
 
 
-def test_list_jobs_returns_newest_first(client):
-    """After 2 POSTs, /list-jobs returns both, newest first."""
+def test_list_jobs_returns_newest_first(client, tmp_path):
+    """After 2 POSTs, /list-jobs returns both, newest first.
+
+    Sprint 45: the finetune endpoint requires a valid manifest.
+    Write a fake one before the second POST.
+    """
     r1 = client.post("/voice/run-held-out-eval", json={})
     assert r1.status_code == 200
     time.sleep(0.05)  # ensure distinct started_at timestamps
-    r2 = client.post("/voice/run-finetune", json={})
+
+    corpus = tmp_path / "yue-self-2026-06-27"
+    corpus.mkdir()
+    (corpus / "manifest.jsonl").write_text(
+        json.dumps({
+            "audio_path": str(corpus / "chunk-000.wav"),
+            "text": "test",
+            "duration_s": 30.0,
+            "sample_rate": 16000,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    r2 = client.post(
+        "/voice/run-finetune",
+        json={"train_corpus_dir": str(corpus)},
+    )
     assert r2.status_code == 200
 
     r = client.get("/voice/list-jobs")

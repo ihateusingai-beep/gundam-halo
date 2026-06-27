@@ -247,9 +247,86 @@ A: Yes — the fine-tune script auto-detects MPS via
   plumbing (the scripts the orchestrator composes).
 - `docs/FEATURE-SPEC-SPRINT39.md` — the eval-results endpoint
   + HeldOutEvalCard.
+- `docs/FEATURE-SPEC-SPRINT45-SELF-RECORD-FINETUNE.md` —
+  Sprint 45 self-record corpus auto-detect + manifest preflight.
 - `docs/tickets/M9-E.md` — M9-E Layer 2 v2 status (now
   user-action-required to close).
 - `scripts/record-held-out.sh` — the bash recorder.
 - `scripts/run_held_out_eval.py` — the single-eval runner.
 - `scripts/finetune_whisper_yue.py` — the LoRA fine-tune
+
+## Sprint 45 — Self-record corpus fine-tune path
+
+The full "1-click" user-action path now lives in three places:
+
+1. **Tauri Record card** writes
+   `~/.gundam-halo/recordings/yue-self-<YYYY-MM-DD>/` with
+   `chunk-NNN.wav` + `manifest.jsonl` (Sprint 33b).
+2. **HeldOutEvalCard** lists available corpora (via
+   `GET /voice/self-record-corpora`) and shows a hint above the
+   fine-tune button:
+   ```
+   Will fine-tune on: recordings/yue-self-2026-06-27
+   12 chunks · 360.5s
+   ```
+3. **`POST /voice/run-finetune`** auto-resolves the corpus + base
+   model, runs manifest preflight, and kicks off the orchestrator
+   thread. Returns immediately with:
+   ```json
+   {
+     "job_id": "finetune-1730123456",
+     "status": "pending",
+     "train_corpus_dir": "/Users/.../yue-self-2026-06-27",
+     "base_model_path": "/Users/.../models/whisper-yue-base"
+   }
+   ```
+
+### Auto-detection rules (priority order)
+
+For `train_corpus_dir`:
+
+1. `payload.train_corpus_dir` (explicit override).
+2. Latest `yue-self-*/` dir under `recordings/` (by mtime).
+3. `recordings/manifest.jsonl` flat fallback (rare).
+4. `400` with a hint pointing at the Record card.
+
+For `base_model_path`:
+
+1. `payload.base_model_path` (explicit override; empty string skips).
+2. `$HALO_HOME/models/whisper-yue-base/` if it exists (Common Voice yue
+   baseline).
+3. Skip — let `finetune_whisper_yue.py` fall back to HF Hub
+   `openai/whisper-base`.
+
+### Manifest preflight
+
+The endpoint validates the corpus's `manifest.jsonl` **before** spawning
+the orchestrator. Failures return 400 immediately:
+
+- `manifest.jsonl not found in <dir>. Did the Record card finish flushing?`
+- `manifest is empty: <path>`
+
+### CLI power-user path
+
+For users who prefer the terminal:
+
+```bash
+uv run python scripts/run_held_out_pipeline.py --mode finetune \
+    --train-corpus-dir ~/.gundam-halo/recordings/yue-self-2026-06-27 \
+    --base-model-path ~/.gundam-halo/models/whisper-yue-base \
+    --output-model-dir ~/.gundam-halo/models/whisper-yue-self-2026-06-27
+```
+
+`--base-model-path=""` (empty string) skips the flag entirely and falls
+back to the HF Hub `openai/whisper-base` (English-only weights) — useful
+for pure self-record experiments that don't want the CV-yue prior.
+
+### What was wrong in Sprint 40
+
+The Sprint 40 orchestrator computed `--base_model_path` as
+`train_corpus_dir.parent / "models" / "whisper-base"`, which resolved
+to `~/.gundam-halo/recordings/models/whisper-base/` (does not exist).
+Sprint 45 fixes the default to
+`~/.gundam-halo/models/whisper-yue-base` and adds it as an explicit
+flag.
   recipe.

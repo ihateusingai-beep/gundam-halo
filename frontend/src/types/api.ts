@@ -265,6 +265,24 @@ export interface EvalJob {
   error: string | null;
 }
 
+// Sprint 45 — one self-record corpus dir (e.g. yue-self-2026-06-27/).
+// Returned by GET /voice/self-record-corpora, ordered newest-first;
+// the first item has `is_latest: true`.
+export interface SelfRecordCorpusSummary {
+  path: string;
+  date: string;
+  chunk_count: number;
+  manifest_chunks: number;
+  total_duration_s: number;
+  rejected_lines: number;
+  is_latest: boolean;
+}
+
+export interface SelfRecordCorporaResponse {
+  corpora: SelfRecordCorpusSummary[];
+  latest_path: string | null;
+}
+
 // Sprint 41 — voice config adds two restart-related fields.
 //   - restart_scheduled: true when the 5-second restart
 //     timer is ticking (the user changed asr_backend or

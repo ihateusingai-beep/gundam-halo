@@ -26,6 +26,15 @@
  *      poll GET /voice/run-held-out-eval/{job_id} every 3 s
  *      via the singleton subscriber in `services/halo-eval-jobs.ts`.
  *
+ * Sprint 45 adds:
+ *   5. **Latest-corpus hint** — fetches GET /voice/self-record-corpora
+ *      on mount + every `POLL_INTERVAL_MS`. Renders a small
+ *      "Will fine-tune on: <dir> (N chunks · Ms)" line above the
+ *      run buttons so the pilot sees which `yue-self-<date>/`
+ *      the backend will pick up. When the manifest has rejected
+ *      rows, a warning span surfaces the count + tooltip
+ *      pointing at the validation skip.
+ *
  * Render states (Sprint 39, unchanged):
  *   - **loading**: initial fetch in flight.
  *   - **empty**: no trend JSONs yet.
@@ -41,7 +50,7 @@ import { useCallback, useEffect, useState } from "react";
 import { HudCard } from "@/components/gundam/HudCard";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import type { EvalRunRow } from "@/types/api";
+import type { EvalRunRow, SelfRecordCorpusSummary } from "@/types/api";
 import {
   getActiveEvalJob,
   startTracking,
@@ -112,11 +121,27 @@ export function HeldOutEvalCard() {
   const [startingEval, setStartingEval] = useState(false);
   const [startingFinetune, setStartingFinetune] = useState(false);
   const [activeJob, setActiveJob] = useState(() => getActiveEvalJob());
+  // Sprint 45: latest self-record corpus summary (drives the
+  // "Will fine-tune on: ..." hint above the buttons).
+  const [latestCorpus, setLatestCorpus] = useState<SelfRecordCorpusSummary | null>(null);
 
   // Subscribe to active-job transitions (driven by halo-eval-jobs).
   useEffect(() => {
     const unsub = subscribeActiveEvalJob((j) => setActiveJob(j));
     return unsub;
+  }, []);
+
+  const fetchLatestCorpus = useCallback(async () => {
+    try {
+      const res = await api.listSelfRecordCorpora();
+      // Backend already sorts newest-first; pick the first item
+      // (or `latest_path` field if exposed). Falls back to null
+      // when the user hasn't recorded anything yet.
+      setLatestCorpus(res.corpora[0] ?? null);
+    } catch (e) {
+      console.warn("[HeldOutEvalCard] failed to list corpora:", e);
+      setLatestCorpus(null);
+    }
   }, []);
 
   const fetchResults = useCallback(async () => {
@@ -146,9 +171,18 @@ export function HeldOutEvalCard() {
   // Initial + periodic poll.
   useEffect(() => {
     void fetchResults();
+    void fetchLatestCorpus();
     const id = setInterval(fetchResults, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [fetchResults]);
+  }, [fetchResults, fetchLatestCorpus]);
+
+  // When an active fine-tune finishes, refresh corpora list
+  // (the user may record more between runs).
+  useEffect(() => {
+    if (activeJob?.job.status === "succeeded" && activeJob.job.kind === "finetune") {
+      void fetchLatestCorpus();
+    }
+  }, [activeJob, fetchLatestCorpus]);
 
   // When an active job completes (succeeded), refresh the eval-results.
   useEffect(() => {
@@ -423,6 +457,43 @@ export function HeldOutEvalCard() {
             >
               dismiss
             </button>
+          </div>
+        )}
+
+        {/* Sprint 45 — latest-corpus hint above the fine-tune button.
+            Renders only when at least one yue-self-* dir exists.
+            Shows the resolved path + chunk count + duration, plus
+            a warning span if the manifest has rejected lines. */}
+        {latestCorpus && (
+          <div
+            data-testid="latest-corpus-hint"
+            className="mt-2 text-[10px] font-mono text-[var(--text-muted)]"
+          >
+            Will fine-tune on:{" "}
+            <span
+              className="text-[var(--accent)]"
+              data-testid="latest-corpus-path"
+              title={latestCorpus.path}
+            >
+              {latestCorpus.path.split("/").slice(-2).join("/")}
+            </span>
+            <br />
+            <span data-testid="latest-corpus-meta">
+              {latestCorpus.manifest_chunks} chunks ·{" "}
+              {latestCorpus.total_duration_s.toFixed(1)}s
+              {latestCorpus.rejected_lines > 0 && (
+                <>
+                  {" · "}
+                  <span
+                    data-testid="latest-corpus-rejected"
+                    className="text-[var(--warning)]"
+                    title={`${latestCorpus.rejected_lines} manifest row(s) failed schema validation and were skipped`}
+                  >
+                    {latestCorpus.rejected_lines} rejected
+                  </span>
+                </>
+              )}
+            </span>
           </div>
         )}
 
