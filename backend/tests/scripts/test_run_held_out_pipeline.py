@@ -371,3 +371,65 @@ def test_resolve_train_corpus_dir_helper_picks_latest_yue_self(tmp_path: Path, m
     monkeypatch.setattr(voice_config_api, "_resolve_halo_home", lambda: tmp_path)
     result = voice_config_api._latest_self_record_corpus(tmp_path)
     assert result == newer
+
+
+# ---------------------------------------------------------------------------
+# Sprint 46 — corpus_id auto-derivation
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_id_derived_from_yue_self_dir(tmp_path: Path):
+    """`yue-self-2026-06-27/` → --corpus-id \"self:2026-06-27\"."""
+    import scripts.run_held_out_pipeline as orch
+
+    train_dir = tmp_path / "yue-self-2026-06-27"
+    train_dir.mkdir()
+    result = orch._corpus_id_from_train_dir(train_dir)
+    assert result == "self:2026-06-27"
+
+
+def test_corpus_id_fallback_for_unusual_dir_name(tmp_path: Path):
+    """Non-yue-self dir → self:<basename> fallback."""
+    import scripts.run_held_out_pipeline as orch
+
+    train_dir = tmp_path / "my-custom-corpus"
+    train_dir.mkdir()
+    result = orch._corpus_id_from_train_dir(train_dir)
+    assert result == "self:my-custom-corpus"
+
+
+def test_empty_train_corpus_dir_yields_empty_corpus_id():
+    """None / empty path → no --corpus-id flag (defensive)."""
+    import scripts.run_held_out_pipeline as orch
+
+    assert orch._corpus_id_from_train_dir(None) == ""
+    assert orch._corpus_id_from_train_dir(Path("")) == ""
+
+
+def test_orchestrator_passes_corpus_id_to_eval_subprocess(tmp_path: Path):
+    """When train_dir is set, the orchestrator forwards
+    `--corpus-id \"self:...\"` to the eval subprocess."""
+    from scripts.run_held_out_pipeline import _corpus_id_from_train_dir
+
+    train_dir = tmp_path / "yue-self-2026-06-27"
+    train_dir.mkdir()
+    corpus_id = _corpus_id_from_train_dir(train_dir)
+
+    # Verify the same logic the orchestrator uses inside _cmd_eval.
+    # Use dry_run=False so subprocess.run is actually invoked (the
+    # dry_run path short-circuits without calling subprocess.run).
+    with patch("scripts.run_held_out_pipeline.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        import argparse
+        from scripts.run_held_out_pipeline import _cmd_eval
+        args = argparse.Namespace(
+            threshold=0.15,
+            train_corpus_dir=train_dir,
+            dry_run=False,  # must be False to actually invoke subprocess
+        )
+        rc = _cmd_eval(args, tmp_path, log_path=None)
+    assert rc == 0
+    cmd = mock_run.call_args[0][0]
+    assert "--corpus-id" in cmd
+    flag_idx = cmd.index("--corpus-id")
+    assert cmd[flag_idx + 1] == corpus_id == "self:2026-06-27"

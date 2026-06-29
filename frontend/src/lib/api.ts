@@ -11,6 +11,7 @@ import type {
   ProjectCreate,
   ProjectSummary,
   SelfRecordCorporaResponse,
+  CorpusBreakdownResponse,
   SetupState,
   SessionInfo,
   SessionStart,
@@ -169,6 +170,14 @@ export const api = {
   // (N chunks · Ms)" hint above the fine-tune button.
   listSelfRecordCorpora: () =>
     request<SelfRecordCorporaResponse>("/voice/self-record-corpora"),
+
+  // Sprint 46: per-corpus WER breakdown. Drives the stacked bar
+  // chart in HeldOutEvalCard. `limit` caps how many of the most
+  // recent runs are bucketed (default 20).
+  getEvalCorpusBreakdown: (limit = 20) =>
+    request<CorpusBreakdownResponse>(
+      `/voice/eval-corpus-breakdown?limit=${limit}`,
+    ),
 
   // Sprint 39: setup wizard state for the SetupWizard card.
   //   - `status` (string) — "in_progress" | "complete" | "skipped" | ...

@@ -248,6 +248,10 @@ export interface EvalRunRow {
   asr_backend: string;
   duration_sec: number;
   source_path: string;
+  // Sprint 46: optional corpus tag. Empty string = unattributed
+  // (legacy runs from Sprint 38-45; bucketed as "unattributed"
+  // by the breakdown endpoint).
+  corpus_id?: string;
 }
 
 // Sprint 40 — background eval job (returned by /voice/run-held-out-eval
@@ -281,6 +285,32 @@ export interface SelfRecordCorpusSummary {
 export interface SelfRecordCorporaResponse {
   corpora: SelfRecordCorpusSummary[];
   latest_path: string | null;
+}
+
+// Sprint 46 — per-corpus WER breakdown. One row per unique corpus
+// in the most recent N runs; timeline drives the stacked bar chart.
+export interface CorpusBreakdownEntry {
+  run_count: number;
+  latest_wer_pct: number;
+  best_wer_pct: number;
+  avg_wer_pct: number;
+  first_seen_ms: number;
+  latest_seen_ms: number;
+  passed: boolean;
+}
+
+export interface CorpusBreakdownTimelineEntry {
+  timestamp: string;
+  timestamp_ms: number;
+  wer_pct: number;
+  corpus_id: string; // "" (legacy) is bucketed as "unattributed" by the backend
+  asr_backend: string;
+}
+
+export interface CorpusBreakdownResponse {
+  by_corpus: Record<string, CorpusBreakdownEntry>;
+  timeline: CorpusBreakdownTimelineEntry[];
+  total_runs: number;
 }
 
 // Sprint 41 — voice config adds two restart-related fields.

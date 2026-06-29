@@ -35,6 +35,16 @@
  *      rows, a warning span surfaces the count + tooltip
  *      pointing at the validation skip.
  *
+ * Sprint 46 adds:
+ *   6. **Per-corpus breakdown chart** — fetches
+ *      GET /voice/eval-corpus-breakdown?limit=20 alongside the
+ *      existing eval-results. Renders a stacked bar chart
+ *      (one bar per run, coloured by corpus_id) below the
+ *      sparkline, plus a legend row showing one chip per
+ *      corpus with run count + average WER. Empty corpora /
+ *      legacy runs without a `corpus_id` bucket as
+ *      "unattributed" (grey).
+ *
  * Render states (Sprint 39, unchanged):
  *   - **loading**: initial fetch in flight.
  *   - **empty**: no trend JSONs yet.
@@ -48,9 +58,14 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { HudCard } from "@/components/gundam/HudCard";
+import { CorpusBreakdownChart } from "@/components/dashboard/CorpusBreakdownChart";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import type { EvalRunRow, SelfRecordCorpusSummary } from "@/types/api";
+import type {
+  CorpusBreakdownResponse,
+  EvalRunRow,
+  SelfRecordCorpusSummary,
+} from "@/types/api";
 import {
   getActiveEvalJob,
   startTracking,
@@ -124,6 +139,8 @@ export function HeldOutEvalCard() {
   // Sprint 45: latest self-record corpus summary (drives the
   // "Will fine-tune on: ..." hint above the buttons).
   const [latestCorpus, setLatestCorpus] = useState<SelfRecordCorpusSummary | null>(null);
+  // Sprint 46: per-corpus WER breakdown for the stacked chart.
+  const [corpusBreakdown, setCorpusBreakdown] = useState<CorpusBreakdownResponse | null>(null);
 
   // Subscribe to active-job transitions (driven by halo-eval-jobs).
   useEffect(() => {
@@ -141,6 +158,19 @@ export function HeldOutEvalCard() {
     } catch (e) {
       console.warn("[HeldOutEvalCard] failed to list corpora:", e);
       setLatestCorpus(null);
+    }
+  }, []);
+
+  // Sprint 46: per-corpus breakdown for the stacked chart.
+  // Cheap call (just reads existing trend JSONs), polled at the
+  // same cadence as eval-results.
+  const fetchCorpusBreakdown = useCallback(async () => {
+    try {
+      const res = await api.getEvalCorpusBreakdown(20);
+      setCorpusBreakdown(res);
+    } catch (e) {
+      console.warn("[HeldOutEvalCard] failed to fetch corpus breakdown:", e);
+      setCorpusBreakdown(null);
     }
   }, []);
 
@@ -172,9 +202,13 @@ export function HeldOutEvalCard() {
   useEffect(() => {
     void fetchResults();
     void fetchLatestCorpus();
-    const id = setInterval(fetchResults, POLL_INTERVAL_MS);
+    void fetchCorpusBreakdown();
+    const id = setInterval(() => {
+      void fetchResults();
+      void fetchCorpusBreakdown();
+    }, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [fetchResults, fetchLatestCorpus]);
+  }, [fetchResults, fetchLatestCorpus, fetchCorpusBreakdown]);
 
   // When an active fine-tune finishes, refresh corpora list
   // (the user may record more between runs).
@@ -188,8 +222,9 @@ export function HeldOutEvalCard() {
   useEffect(() => {
     if (activeJob?.job.status === "succeeded" && activeJob.job.kind === "held-out-eval") {
       void fetchResults();
+      void fetchCorpusBreakdown();
     }
-  }, [activeJob, fetchResults]);
+  }, [activeJob, fetchResults, fetchCorpusBreakdown]);
 
   // ---- Async handlers ----
 
@@ -433,6 +468,15 @@ export function HeldOutEvalCard() {
               strokeLinecap="round"
             />
           </svg>
+        )}
+
+        {/* Sprint 46 — per-corpus breakdown (stacked bars + legend). */}
+        {corpusBreakdown && corpusBreakdown.timeline.length > 1 && (
+          <CorpusBreakdownChart
+            timeline={corpusBreakdown.timeline}
+            byCorpus={corpusBreakdown.by_corpus}
+            threshold={threshold}
+          />
         )}
 
         {/* Active job indicator — Sprint 40. */}

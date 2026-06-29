@@ -160,6 +160,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--corpus-id",
+        type=str,
+        default="",
+        help=(
+            "Sprint 46: optional tag identifying which corpus the eval WAV "
+            "came from. Format convention: 'self:<date>' (self-record), "
+            "'common-voice-yue:<version>' (Common Voice), "
+            "'synthetic:<name>' (test fixtures). Empty string = "
+            "unattributed (legacy runs)."
+        ),
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true", help="Verbose logging"
     )
     args = parser.parse_args(argv)
@@ -195,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
             passed=False,
             asr_backend=args.backend or "(from config)",
             notes="--dry-run; no inference performed",
+            # Sprint 46: forward corpus-id even in dry-run.
+            corpus_id=args.corpus_id,
         )
         print(f"DRY RUN — no inference performed")
         print(f"  WAV:        {wav}")
@@ -235,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
         passed=passed,
         duration_s=duration_s,
         asr_backend=args.backend or "(from config)",
+        # Sprint 46: forward the corpus tag (empty = unattributed).
+        corpus_id=args.corpus_id,
     )
 
     # 7. Print.

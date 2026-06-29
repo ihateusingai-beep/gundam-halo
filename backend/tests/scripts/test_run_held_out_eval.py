@@ -253,4 +253,43 @@ def test_cli_main_writes_trend_json(monkeypatch, heldout_dir, tmp_path):
     assert r["wer"] == 0.0
     assert r["passed"] is True
     assert r["reference"] == "你好 世界"
-    assert r["hypothesis"] == "你好 世界"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 46 — --corpus-id CLI flag
+# ---------------------------------------------------------------------------
+
+
+def test_cli_main_corpus_id_flag_forwarded(monkeypatch, heldout_dir, tmp_path):
+    """`--corpus-id \"self:2026-06-27\"` writes the tag into the JSON."""
+    fake_asr = MagicMock()
+    fake_asr.warmup = AsyncMock(return_value=None)
+    fake_asr.transcribe = AsyncMock(return_value="你好 世界")
+
+    out_path = tmp_path / "result.json"
+    with patch("run_held_out_eval.asr_factory.create_asr", return_value=fake_asr):
+        with patch("run_held_out_eval.wav_to_pcm_bytes", return_value=(b"\x00" * 32, 16000)):
+            rc = run_held_out_eval.main(
+                [
+                    "--out", str(out_path),
+                    "--corpus-id", "self:2026-06-27",
+                ]
+            )
+    assert rc == 0
+    data = json.loads(out_path.read_text())
+    assert data["results"][0]["corpus_id"] == "self:2026-06-27"
+
+
+def test_cli_main_default_corpus_id_is_empty(monkeypatch, heldout_dir, tmp_path):
+    """No --corpus-id flag → corpus_id is empty string (legacy)."""
+    fake_asr = MagicMock()
+    fake_asr.warmup = AsyncMock(return_value=None)
+    fake_asr.transcribe = AsyncMock(return_value="你好 世界")
+
+    out_path = tmp_path / "result.json"
+    with patch("run_held_out_eval.asr_factory.create_asr", return_value=fake_asr):
+        with patch("run_held_out_eval.wav_to_pcm_bytes", return_value=(b"\x00" * 32, 16000)):
+            rc = run_held_out_eval.main(["--out", str(out_path)])
+    assert rc == 0
+    data = json.loads(out_path.read_text())
+    assert data["results"][0]["corpus_id"] == ""

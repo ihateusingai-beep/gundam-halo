@@ -329,7 +329,17 @@ def next_heldout_path(date_str: str, ext: str = "wav") -> Path:
 
 @dataclass
 class EvalResult:
-    """One held-out eval run. JSON-serialisable for trend tracking."""
+    """One held-out eval run. JSON-serialisable for trend tracking.
+
+    Sprint 46: adds optional `corpus_id` so the dashboard can
+    break down WER per training corpus. Existing JSONs (without
+    the field) parse fine — the dataclass uses
+    `corpus_id: str = ""` as the default. Convention:
+      - "self:<YYYY-MM-DD>"  — self-record corpus
+      - "common-voice-yue"  — Common Voice Cantonese test set
+      - "synthetic:<name>"  — pytest fixtures / dry-runs
+      - ""  — unattributed (legacy runs)
+    """
 
     timestamp: str
     wav_path: str
@@ -342,6 +352,7 @@ class EvalResult:
     duration_s: float = 0.0
     asr_backend: str = ""
     notes: str = ""
+    corpus_id: str = ""
 
     @classmethod
     def now(cls, **kwargs) -> "EvalResult":
@@ -449,6 +460,10 @@ def _parse_summary(path: Path) -> EvalRunSummary | None:
                         duration_s=float(r.get("duration_s", 0.0)),
                         asr_backend=str(r.get("asr_backend", "")),
                         notes=str(r.get("notes", "")),
+                        # Sprint 46: optional corpus tag. Missing in
+                        # legacy JSONs → empty string (bucketed as
+                        # "unattributed" by the breakdown endpoint).
+                        corpus_id=str(r.get("corpus_id", "")),
                     )
                 )
             except (TypeError, ValueError):
@@ -536,6 +551,9 @@ def load_eval_history(
                     sum(r.duration_s for r in summary.results), 2
                 ),
                 "source_path": str(p),
+                # Sprint 46: per-corpus tagging. Empty string
+                # for legacy runs (Sprint 38-45).
+                "corpus_id": head.corpus_id if head else "",
             }
         )
 

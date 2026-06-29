@@ -123,6 +123,99 @@ where `--base_model_path` defaulted to a nonexistent directory.
   - `test_hides the hint when no corpora exist`.
   - `test_warns on rejected manifest lines`.
 
+### Sprint 46 — Per-corpus WER breakdown + corpus-tagged eval history
+
+Adds the corpus dimension to the WER trend. Today (post-Sprint 45)
+the HeldOutEvalCard sparkline shows one number per eval run —
+Sprint 46 breaks it down per training corpus so the pilot can
+answer "is the model actually learning *my* voice, or is the test
+set easier?".
+
+#### Added — `EvalResult.corpus_id` schema field
+
+- **backend**: `app/voice/held_out_eval.py::EvalResult` — new
+  optional `corpus_id: str = ""` field. Backwards compatible
+  (legacy JSONs without the field parse with `corpus_id=""`).
+- **backend**: `_parse_summary` uses `r.get("corpus_id", "")`
+  for the new field.
+- **backend**: `load_eval_history` exposes `corpus_id` in the
+  dashboard dict shape.
+
+#### Added — `--corpus-id` CLI flag + orchestrator auto-derive
+
+- **backend**: `scripts/run_held_out_eval.py` — adds
+  `--corpus-id` flag. Convention:
+  - `self:<date>` — self-record (auto-derived from
+    `yue-self-YYYY-MM-DD/`)
+  - `common-voice-yue` or `common-voice-yue:<version>`
+  - `synthetic:<name>` — test fixtures
+  - empty — unattributed (legacy runs)
+- **backend**: `scripts/run_held_out_pipeline.py` —
+  `_corpus_id_from_train_dir()` derives the tag from
+  `--train-corpus-dir` automatically. `_cmd_eval` forwards it
+  to the eval subprocess as `--corpus-id`.
+
+#### Added — `GET /voice/eval-corpus-breakdown` endpoint
+
+- **backend**: `app/api/voice_config_api.py` — new endpoint
+  returning per-corpus stats:
+  ```json
+  {
+    "by_corpus": {
+      "<corpus_id>": {
+        "run_count", "latest_wer_pct", "best_wer_pct",
+        "avg_wer_pct", "first_seen_ms", "latest_seen_ms", "passed"
+      }
+    },
+    "timeline": [{ "timestamp", "timestamp_ms", "wer_pct",
+                   "corpus_id", "asr_backend" }],
+    "total_runs": int
+  }
+  ```
+  Empty strings bucket as `"unattributed"`. Returns 200 with
+  empty payload when no runs exist (no 404).
+
+#### Added — HeldOutEvalCard stacked bar chart
+
+- **frontend**: `CorpusBreakdownChart.tsx` NEW (~140 LoC) —
+  per-corpus coloured bars (deterministic hash → CSS var
+  palette) + legend chips with run count + avg WER. SVG-based
+  (not Recharts) for tight cockpit spacing.
+- **frontend**: `HeldOutEvalCard.tsx` — fetches
+  `/voice/eval-corpus-breakdown?limit=20` alongside the
+  existing eval-results poll. Renders the chart below the
+  sparkline when `timeline.length > 1`.
+- **frontend**: `lib/api.ts` — adds `getEvalCorpusBreakdown()`.
+- **frontend**: `types/api.ts` — adds `CorpusBreakdownResponse`
+  + `CorpusBreakdownEntry` + `CorpusBreakdownTimelineEntry`
+  interfaces; adds `corpus_id?: string` to `EvalRunRow`.
+
+#### Tests
+
+- **backend**: `tests/voice/test_held_out_eval.py` extended
+  (+3 tests):
+  - `test_corpus_id_round_trips_through_json`.
+  - `test_corpus_id_defaults_to_empty_string` (legacy
+    backwards-compat).
+  - `test_load_eval_history_includes_corpus_id`.
+- **backend**: `tests/scripts/test_run_held_out_eval.py`
+  extended (+2 tests):
+  - `test_cli_main_corpus_id_flag_forwarded`.
+  - `test_cli_main_default_corpus_id_is_empty`.
+- **backend**: `tests/scripts/test_run_held_out_pipeline.py`
+  extended (+4 tests):
+  - `test_corpus_id_derived_from_yue_self_dir`.
+  - `test_corpus_id_fallback_for_unusual_dir_name`.
+  - `test_empty_train_corpus_dir_yields_empty_corpus_id`.
+  - `test_orchestrator_passes_corpus_id_to_eval_subprocess`.
+- **backend**: `tests/api/test_voice_corpus_breakdown.py`
+  NEW (+4 tests): empty results dir, single corpus, multi
+  corpus stats isolation, unattributed bucketing.
+- **frontend**: `CorpusBreakdownChart.test.tsx` NEW (+3 tests):
+  - `test renders one bar per timeline entry`.
+  - `test renders legend chips with run count and avg WER`.
+  - `test corpusColor() is stable — same id → same colour`.
+
 ### Sprint 18 — cockpit audio-reactive HUD + ASR switcher (read-only → editable)
 
 Sprint 18 closes two open follow-ups from Sprint 16 + 17b:

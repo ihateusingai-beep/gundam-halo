@@ -329,4 +329,98 @@ to `~/.gundam-halo/recordings/models/whisper-base/` (does not exist).
 Sprint 45 fixes the default to
 `~/.gundam-halo/models/whisper-yue-base` and adds it as an explicit
 flag.
+
+## Sprint 46 — Per-corpus WER breakdown
+
+The HeldOutEvalCard now breaks WER down per training corpus so the
+pilot can answer "is the model actually learning *my* voice?".
+
+### `corpus_id` convention
+
+Every `EvalResult` carries an optional `corpus_id` string. Convention:
+
+| Corpus                | Tag format                          | Example                      |
+|-----------------------|--------------------------------------|------------------------------|
+| Self-record (Tauri)   | `self:<YYYY-MM-DD>`                 | `self:2026-06-27`            |
+| Common Voice yue      | `common-voice-yue` or `<version>`  | `common-voice-yue`, `common-voice-yue:v11.0` |
+| Synthetic (tests)     | `synthetic:<name>`                  | `synthetic:pytest-fixture`   |
+| Unattributed (legacy) | empty string (`""`)                | (bucketed as `"unattributed"` in the breakdown) |
+
+The orchestrator auto-derives `--corpus-id` from
+`--train-corpus-dir`:
+- `.../yue-self-2026-06-27/` → `self:2026-06-27`
+- `.../common-voice-yue*/`   → pass-through basename
+- any other path             → `self:<basename>`
+
+Override with the `--corpus-id` flag for tests or unusual corpora:
+
+```bash
+.venv/bin/python scripts/run_held_out_eval.py \
+    --wav /path/to/held.wav \
+    --corpus-id "synthetic:my-test-fixture"
+```
+
+### `GET /voice/eval-corpus-breakdown?limit=20`
+
+```json
+{
+  "by_corpus": {
+    "self:2026-06-27": {
+      "run_count": 3,
+      "latest_wer_pct": 6.0,
+      "best_wer_pct": 6.0,
+      "avg_wer_pct": 7.0,
+      "first_seen_ms": 1782408000000,
+      "latest_seen_ms": 1782415200000,
+      "passed": true
+    }
+  },
+  "timeline": [
+    {
+      "timestamp": "2026-06-27T10:00:00+00:00",
+      "timestamp_ms": 1782408000000,
+      "wer_pct": 6.0,
+      "corpus_id": "self:2026-06-27",
+      "asr_backend": "whisper_hf"
+    }
+  ],
+  "total_runs": 3
+}
+```
+
+- `by_corpus` — one entry per unique corpus_id in the last `limit` runs.
+  Stats computed per-corpus (averages, best, run_count).
+- `timeline` — every run oldest-first with its corpus_id. Drives the
+  stacked bar chart.
+- `total_runs` — total across all corpora (≤ `limit`).
+
+### HeldOutEvalCard stacked chart
+
+Below the existing WER sparkline, a new stacked bar chart shows
+each run as a vertical bar coloured by corpus. Hovering shows
+`{corpus_id}: {wer_pct}% WER ({backend})`. Below the chart, a
+legend row renders one chip per corpus with run count + avg WER.
+
+Stable colour mapping via `corpusColor(corpus_id)` — same id always
+gets the same colour across refreshes. The `unattributed` bucket
+is always grey (`var(--text-muted)`).
+
+### Schema migration
+
+`EvalResult.corpus_id` is `str = ""` by default. Legacy JSONs from
+Sprint 38-45 (without the field) parse fine — `_parse_summary` uses
+`r.get("corpus_id", "")` and the breakdown endpoint buckets them
+under `"unattributed"`. **No migration required**.
+
+### What it tells the pilot
+
+- "Which corpus am I improving on?" → per-corpus `avg_wer_pct`
+  in the legend.
+- "Is the personalised model actually learning MY voice?" →
+  compare `self:<date>` WER vs `common-voice-yue` WER across the
+  same time window. Improvement on `self` only = true personalisation.
+  Improvement on both = broad model retraining (probably CV-yue
+  data leak through the new checkpoint).
+- "Which corpus has the most headroom?" → sort by `avg_wer_pct`
+  descending.
   recipe.

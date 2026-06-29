@@ -48,6 +48,7 @@ a zero-dep implementation. The WER math is identical
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import wave
@@ -351,5 +352,128 @@ def test_held_out_eval_wer_below_threshold(monkeypatch):
     assert wer < threshold, (
         f"Held-out WER {wer:.1%} exceeds threshold "
         f"{threshold:.1%} (hypothesis={hypothesis!r}, "
-        f"reference={transcript!r})"
+        f"reference={transcript!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 46 — corpus_id field round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_id_round_trips_through_json():
+    """Sprint 46: EvalResult.corpus_id round-trips through to_json /
+    _parse_summary without loss. The dashboard reads it back via
+    load_eval_history().
+    """
+    from dataclasses import asdict
+    from app.voice.held_out_eval import EvalResult
+
+    original = EvalResult(
+        timestamp="2026-06-27T10:00:00+00:00",
+        wav_path="/tmp/yue-self-2026-06-27/chunk-000.wav",
+        transcript_path="/tmp/yue-self-2026-06-27/chunk-000.txt",
+        reference="今日天氣好好",
+        hypothesis="今日天氣好好",
+        wer=0.05,
+        threshold=0.15,
+        passed=True,
+        duration_s=30.0,
+        asr_backend="whisper_hf",
+        notes="personalised eval",
+        corpus_id="self:2026-06-27",
+    )
+
+    # Round-trip: wrap the EvalResult in an EvalRunSummary-shaped
+    # dict (the same shape the CLI writes via EvalRunSummary.to_json()).
+    summary_dict = {
+        "timestamp": original.timestamp,
+        "results": [asdict(original)],
+    }
+    raw = json.dumps(summary_dict)
+    parsed = _parse_summary_string(raw)
+    assert parsed is not None
+    assert len(parsed.results) == 1
+    assert parsed.results[0].corpus_id == "self:2026-06-27"
+
+
+def test_corpus_id_defaults_to_empty_string():
+    """Legacy JSON without corpus_id parses with corpus_id=\"\"."""
+    from app.voice.held_out_eval import _parse_summary
+
+    legacy_json = json.dumps({
+        "timestamp": "2026-06-25T10:00:00+00:00",
+        "results": [
+            {
+                "timestamp": "2026-06-25T10:00:00+00:00",
+                "wav_path": "/tmp/held-out.wav",
+                "transcript_path": "/tmp/held-out.txt",
+                "reference": "你好世界",
+                "hypothesis": "你好世界",
+                "wer": 0.12,
+                "threshold": 0.15,
+                "passed": True,
+                "duration_s": 30.0,
+                "asr_backend": "whisper_local",
+                "notes": "",
+                # NOTE: no corpus_id field (Sprint 38-45 schema).
+            }
+        ],
+    })
+    parsed = _parse_summary_string(legacy_json)
+    assert parsed is not None
+    assert parsed.results[0].corpus_id == ""
+
+
+def test_load_eval_history_includes_corpus_id(tmp_path: Path):
+    """Sprint 46: load_eval_history exposes corpus_id in the dict
+    shape returned to the dashboard.
+    """
+    from app.voice.held_out_eval import load_eval_history
+
+    results_dir = tmp_path / "held_out_results"
+    results_dir.mkdir()
+    trend = results_dir / "2026-06-27T10-00-00.json"
+    trend.write_text(json.dumps({
+        "timestamp": "2026-06-27T10:00:00+00:00",
+        "results": [
+            {
+                "timestamp": "2026-06-27T10:00:00+00:00",
+                "wav_path": "/tmp/x.wav",
+                "transcript_path": "/tmp/x.txt",
+                "reference": "你好",
+                "hypothesis": "你好",
+                "wer": 0.0,
+                "threshold": 0.15,
+                "passed": True,
+                "duration_s": 30.0,
+                "asr_backend": "whisper_hf",
+                "notes": "",
+                "corpus_id": "self:2026-06-27",
+            }
+        ],
+    }), encoding="utf-8")
+
+    rows = load_eval_history(results_dir, limit=5)
+    assert len(rows) == 1
+    assert rows[0]["corpus_id"] == "self:2026-06-27"
+
+
+def _parse_summary_string(raw: str):
+    """Helper: parse a JSON string into an EvalRunSummary.
+
+    The internal `_parse_summary` takes a Path; this is a thin
+    wrapper for the round-trip tests above.
+    """
+    from app.voice.held_out_eval import _parse_summary
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(raw)
+        path = Path(f.name)
+    try:
+        return _parse_summary(path)
+    finally:
+        path.unlink()

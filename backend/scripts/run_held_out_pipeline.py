@@ -224,18 +224,58 @@ def _cmd_record(args: argparse.Namespace, halo_home: Path, log_path: Path | None
     )
 
 
+# Sprint 46: derive a corpus_id from a training-corpus path. The
+# convention is documented in `docs/HELD-OUT-EVAL.md` (Sprint 46
+# section) and `FEATURE-SPEC-SPRINT46-PER-CORPUS-WER.md`.
+_CORPUS_DIR_SELF_PREFIX = "yue-self-"
+
+
+def _corpus_id_from_train_dir(train_dir: Path | None) -> str:
+    """Derive a corpus_id from the `--train-corpus-dir` path.
+
+    Convention:
+      - `.../yue-self-YYYY-MM-DD/`  → "self:YYYY-MM-DD"
+      - `.../common-voice-yue*/`    → pass-through basename
+      - any other path              → "self:<basename>" (fallback)
+      - empty/None                  → "" (orchestrator will skip
+                                            the --corpus-id flag)
+
+    Returns the corpus_id string (possibly empty). Caller decides
+    whether to forward it as `--corpus-id` to the eval subprocess.
+    """
+    if train_dir is None:
+        return ""
+    name = Path(train_dir).name
+    if not name:
+        return ""
+    if name.startswith(_CORPUS_DIR_SELF_PREFIX):
+        date_part = name[len(_CORPUS_DIR_SELF_PREFIX):]
+        return f"self:{date_part}"
+    if name.startswith("common-voice-yue"):
+        return name
+    # Fallback: tag as self with the basename. Avoids the corpus
+    # silently being bucketed as "unattributed".
+    return f"self:{name}"
+
+
 def _cmd_eval(args: argparse.Namespace, halo_home: Path, log_path: Path | None) -> int:
     script = SCRIPTS_DIR / "run_held_out_eval.py"
     if not script.exists():
         print(f"[orchestrator] missing script: {script}", file=sys.stderr)
         return 2
+    cmd = [
+        "python",
+        str(script),
+        "--threshold",
+        str(args.threshold),
+    ]
+    # Sprint 46: auto-derive --corpus-id from --train-corpus-dir
+    # (the orchestrator always knows which corpus it ran against).
+    corpus_id = _corpus_id_from_train_dir(args.train_corpus_dir)
+    if corpus_id:
+        cmd += ["--corpus-id", corpus_id]
     return _run_subprocess(
-        [
-            "python",
-            str(script),
-            "--threshold",
-            str(args.threshold),
-        ],
+        cmd,
         cwd=BACKEND_DIR,
         log_path=log_path,
         dry_run=args.dry_run,

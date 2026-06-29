@@ -44,6 +44,10 @@ from app.core.eval_jobs import (
     get_store,
 )
 from app.core.toml_doc import read_doc, update_section_key, write_doc
+# Sprint 46: module-level import so tests can monkeypatch the
+# results-dir resolver (held_out_results_dir returns a hardcoded
+# path under the repo; tests redirect to tmp_path).
+from app.voice.held_out_eval import held_out_results_dir
 
 logger = logging.getLogger(__name__)
 
@@ -828,6 +832,148 @@ async def list_eval_jobs(limit: int = 10) -> dict[str, Any]:
     return {"jobs": [j.to_dict() for j in jobs]}
 
 
+# ---------------------------------------------------------------------------
+# Sprint 46 — per-corpus WER breakdown for the stacked chart
+# ---------------------------------------------------------------------------
+
+
+UNATTRIBUTED_KEY = "unattributed"
+
+
+@router.get("/voice/eval-corpus-breakdown")
+async def get_eval_corpus_breakdown(limit: int = 20) -> dict[str, Any]:
+    """Per-corpus WER breakdown for the HeldOutEvalCard stacked chart.
+
+    Returns:
+        {
+          "by_corpus": {
+            "<corpus_id>": {
+              "run_count": int,
+              "latest_wer_pct": float,
+              "best_wer_pct": float,
+              "avg_wer_pct": float,
+              "first_seen_ms": int,
+              "latest_seen_ms": int,
+              "passed": bool   # all runs in this corpus passed?
+            }
+          },
+          "timeline": [
+            {
+              "timestamp": str,
+              "timestamp_ms": int,
+              "wer_pct": float,
+              "corpus_id": str,  # bucketed as "unattributed" if empty
+              "asr_backend": str
+            }
+          ],
+          "total_runs": int
+        }
+
+    - `by_corpus`: one entry per unique corpus_id seen in the last
+      `limit` runs. Stats computed across only THAT corpus's runs.
+      Sorted by `latest_seen_ms` descending (most recently active
+      corpus first).
+    - `timeline`: every run in chronological order (oldest first)
+      with its corpus_id. Drives the stacked bar chart.
+    - Empty strings (legacy unattributed runs) are bucketed under
+      the synthetic key `"unattributed"` so they don't disappear.
+
+    Graceful: missing results dir → `{by_corpus: {}, timeline: [],
+    total_runs: 0}`. Malformed JSONs skipped (counted only by
+    `load_eval_history` itself, which already handles that).
+    """
+    # held_out_results_dir is imported at module level so tests
+    # can monkeypatch it (Sprint 46).
+    from app.voice.held_out_eval import load_eval_history
+
+    # load_eval_history returns newest-first; we want both:
+    # - by_corpus sorted by latest_seen_ms desc (newest activity wins)
+    # - timeline sorted by timestamp_ms asc (left-to-right chart)
+    rows_newest_first = load_eval_history(held_out_results_dir(), limit=limit)
+
+    by_corpus: dict[str, dict[str, Any]] = {}
+    timeline: list[dict[str, Any]] = []
+
+    # `rows_newest_first` is what load_eval_history returns — newest
+    # first by timestamp_ms. We track the latest WER per corpus at
+    # insertion time (the FIRST hit for a corpus IS the latest
+    # because we iterate newest-first). Earlier in the loop = newer.
+    for row in rows_newest_first:
+        raw_corpus = str(row.get("corpus_id") or "")
+        # Sprint 46: empty string → "unattributed" bucket.
+        corpus_key = raw_corpus if raw_corpus else UNATTRIBUTED_KEY
+
+        ts_ms = int(row.get("timestamp_ms", 0))
+        wer_pct = float(row.get("wer_pct", 0.0))
+
+        # Timeline (one entry per run).
+        timeline.append({
+            "timestamp": str(row.get("timestamp", "")),
+            "timestamp_ms": ts_ms,
+            "wer_pct": wer_pct,
+            "corpus_id": corpus_key,
+            "asr_backend": str(row.get("asr_backend", "")),
+        })
+
+        # Per-corpus accumulator.
+        entry = by_corpus.get(corpus_key)
+        if entry is None:
+            # First time seeing this corpus in this loop iteration =
+            # the latest entry (since rows are newest-first).
+            entry = {
+                "run_count": 0,
+                "_wer_sum": 0.0,
+                "_wer_min": float("inf"),
+                "_latest_wer_pct": wer_pct,
+                "first_seen_ms": ts_ms,
+                "latest_seen_ms": ts_ms,
+                "_all_passed": True,
+            }
+            by_corpus[corpus_key] = entry
+        entry["run_count"] += 1
+        entry["_wer_sum"] += wer_pct
+        if wer_pct < entry["_wer_min"]:
+            entry["_wer_min"] = wer_pct
+        if ts_ms < entry["first_seen_ms"]:
+            entry["first_seen_ms"] = ts_ms
+        if ts_ms > entry["latest_seen_ms"]:
+            entry["latest_seen_ms"] = ts_ms
+        if not row.get("passed", False):
+            entry["_all_passed"] = False
+
+    # Project internal accumulators → public shape.
+    by_corpus_public: dict[str, dict[str, Any]] = {}
+    for corpus_key, entry in by_corpus.items():
+        n = entry["run_count"]
+        by_corpus_public[corpus_key] = {
+            "run_count": n,
+            "latest_wer_pct": round(entry["_latest_wer_pct"], 2),
+            "best_wer_pct": round(entry["_wer_min"], 2),
+            "avg_wer_pct": round(entry["_wer_sum"] / n, 2) if n else 0.0,
+            "first_seen_ms": entry["first_seen_ms"],
+            "latest_seen_ms": entry["latest_seen_ms"],
+            "passed": entry["_all_passed"],
+        }
+
+    # Sort by_corpus by latest_seen_ms desc (most recently active first).
+    by_corpus_sorted = dict(
+        sorted(
+            by_corpus_public.items(),
+            key=lambda kv: kv[1]["latest_seen_ms"],
+            reverse=True,
+        )
+    )
+
+    # Sort timeline by timestamp_ms asc (oldest first → left-to-right).
+    timeline.sort(key=lambda r: r["timestamp_ms"])
+
+    return {
+        "by_corpus": by_corpus_sorted,
+        "timeline": timeline,
+        "total_runs": len(timeline),
+    }
+
+
 __all__ = [
     "voice_status",
     "get_voice_config",
@@ -837,6 +983,7 @@ __all__ = [
     "post_run_finetune",
     "list_eval_jobs",
     "list_self_record_corpora",
+    "get_eval_corpus_breakdown",
     "_resolve_train_corpus_dir",
     "_resolve_base_model_path",
     "_preflight_validate_manifest",
