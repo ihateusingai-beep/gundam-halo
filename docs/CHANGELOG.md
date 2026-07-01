@@ -509,6 +509,129 @@ this release cycle. Sprint 52 ships under that same 0.1.23 tag
 - Audit script improvements (filter by file extension, exclude
   test files explicitly) → Sprint 54 if needed.
 
+### Sprint 53 — AvatarCard extraction + Live2D dead-code cleanup
+
+Pure-housekeeping sprint per user redirect on 2026-07-02
+("avatar 嘅 sprite sheet + idle video loop 已經係 live 2D 效果").
+The original Sprint 53 spec planned to wire a real Cubism Live2D
+model into the avatar slot. With no model licensed (Hiyori MIT
+license acquisition is the blocker) and the existing CSSAvatar
+(88-frame sprite) + ImageSetAvatar (9 PNGs + idle video) already
+providing animation-driven "live 2D"-feel, the sprint was
+re-scoped to extraction + cleanup only.
+
+#### Frontend additions
+
+- **frontend**: `components/live2d/AvatarCard.tsx` NEW (~150 LoC).
+  Pure refactor extraction from `CockpitLayout.tsx` (was inline).
+  Wraps `<HudCard>` with mode toggle (SPRITE / IMG-SET) +
+  200px stage + EMO / EXPR / MOTION readouts. Reads live emotion
+  state from `useHaloLive2D()`; no new behaviour.
+- **frontend**: `components/live2d/AvatarCard.test.tsx` NEW (+4
+  tests):
+  - `test_renders_default_mode_with_toggle_and_stage`.
+  - `test_clicking_IMG-SET_button_switches_mode_to_imgset`.
+  - `test_legacy_localStorage_image-set_is_migrated_to_imgset`.
+  - `test_mode_changes_persist_to_localStorage`.
+
+#### Frontend edits
+
+- **frontend**: `components/layout/CockpitLayout.tsx` — removes
+  64 LoC of inline avatar markup (replaced by `<AvatarCard />`);
+  drops the `useAvatarMode` hook + the `useHaloLive2D` call
+  (AvatarCard owns it now).
+- **frontend**: `routes/settings/ThemesTab.tsx` — unchanged.
+- **frontend**: `lib/ws.ts` — unchanged.
+
+#### AvatarMode migration (one-shot, no-render-loop)
+
+AvatarCard's `useState` initialiser runs `readAndMigrateLegacyMode()`,
+which reads `localStorage["gundam-halo.avatarMode"]`, and on the
+legacy value `"image-set"` writes back `"imgset"` AND returns the
+migrated value. Combined init+write avoids the stale-closure trap
+where the migration effect fires AFTER the initial render (the
+old pattern rendered sprite-mode by default for one frame before
+the migration completed).
+
+#### Live2D dead-code cleanup (3 files, ~730 LoC removed)
+
+- **frontend**: `components/live2d/Live2DCanvas.tsx` DELETED
+  (47 LoC). Was imported by CockpitLayout.tsx but never rendered
+  (per 2026-07-01 audit). Live2D wiring is explicitly out of
+  scope for Sprint 53 — the file system was cleaned of plumbing
+  for a Cubism pipeline that nothing currently consumes.
+- **frontend**: `hooks/canvas/use-live2d-model.ts` DELETED
+  (472 LoC). Was used only by `Live2DCanvas`; orphan after the
+  component deletion.
+- **frontend**: `hooks/canvas/use-live2d-resize.ts` DELETED
+  (213 LoC). Same — only used by `Live2DCanvas`.
+- **frontend**: `services/halo-live2d-bridge.ts` — drops the
+  `triggerLive2D(expression, motion)` function (~17 LoC) that
+  called `window.getLAppAdapter()` / `model.startMotion()` (these
+  are part of the Open-LLM-VTuber Cubism runtime, also no longer
+  consumed). Removes `triggerLive2D` from the `__haloLive2D`
+  console debug export + updates help text. Net ~30 LoC.
+- **frontend**: `context/live2d-bridge-context.tsx` — drops the
+  `trigger()` method from `HaloLive2DContextValue` (the only
+  consumer was the deleted bridge function). Documents Sprint 53
+  in the file header.
+
+#### Net effect on avatar UX
+
+**Identical to before.** No user-visible change: cockpit avatar
+slot still renders `<CSSAvatar />` or `<ImageSetAvatar />` based
+on the same toggle, persisted across reload, with the same
+emotion-driven animations. The only difference: legacy
+`"image-set"` localStorage values get auto-migrated to
+`"imgset"` on first visit (no silent mode reset).
+
+#### Audit-orphans now clean
+
+After Live2DCanvas deletion, `pnpm audit:orphans` reports
+**0 orphans**. Previously reported 2 (closePalette + Live2DCanvas);
+both are now resolved — closePalette is only listed in JSDoc
+references inside the file itself (correctly skipped by the JSDoc
+filter) and Live2DCanvas itself was removed.
+
+#### Tests (4 new)
+
+Already listed above (`AvatarCard.test.tsx`).
+
+Total after Sprint 53: frontend vitest **149 passed** (was 141 →
++4 AvatarCard, all green); backend unchanged at 1367.
+tsc: 4 pre-existing `auth-bootstrap.test.ts` errors only.
+
+#### Version bump
+
+`__version__` 0.1.23 → **0.1.24** (PATCH — pure refactor +
+cleanup, no new user capability). 4 surfaces synced
+(`backend/app/__init__.py`, `frontend/package.json`,
+`frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/tauri.conf.json`).
+
+#### Profile memory updates
+
+Adds two new entries to `/Users/kencheng/.mavis/agents/mavis/memory/MEMORY.md`:
+- "Gundam Halo — Live2D scope lock (2026-07-02)" — affirms the
+  tray icon does NOT use the Live2D pipeline (it's animated
+  PNG frames at 67ms/frame); Sprint 16 set up `Live2DCanvas` +
+  hooks + WebSDK vendoring; Sprint 53 deleted those dead
+  components; real Cubism pipeline is gated on license.
+- "Gundam Halo — AvatarMode migration (2026-07-02)" — records
+  that AvatarMode was renamed `image-set → imgset`; legacy
+  localStorage value auto-migrates on first visit via
+  `readAndMigrateLegacyMode()`.
+
+#### Out-of-scope locked (per spec)
+
+- Real Live2D model wiring → blocked on license (Hiyori MIT
+  acquisition or equivalent). Reopens in a future sprint once
+  legal paperwork clears.
+- MP3 → WAV lip-sync → Sprint 54+ candidate (combined with model
+  acquisition).
+- Component gallery (`/styleguide` route) → Sprint 54 per the
+  Sprint 52 spec's deferral note (tsc parser-state bug).
+- Per-theme font overrides → Sprint 54+ candidate.
+
 ### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
 
 Closes the 3 long-standing "no auth yet" notes (Sprint 13/43/44

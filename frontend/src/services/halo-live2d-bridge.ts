@@ -360,24 +360,6 @@ export function getLive2DState(): Live2DState {
   };
 }
 
-export function triggerLive2D(expression: string, motion: string) {
-  const adapter = (window as any).getLAppAdapter?.();
-  if (!adapter) {
-    console.warn("[HaloLive2D] LAppAdapter not available");
-    return;
-  }
-  const model = adapter.getModel?.();
-  if (!model) {
-    console.warn("[HaloLive2D] Model not loaded");
-    return;
-  }
-  try { adapter.setExpression?.(expression); } catch {}
-  const [group, idxStr] = motion.split(":");
-  if (group) {
-    try { model.startMotion?.(group, parseInt(idxStr || "0", 10), 3); } catch {}
-  }
-}
-
 // Auto-connect on first import (browser only)
 if (typeof window !== "undefined") {
   if (document.readyState === "complete") {
@@ -394,17 +376,21 @@ if (typeof window !== "undefined") {
   (window as any).__haloLive2D = {
     subscribeToVoice,
     getLive2DState,
-    triggerLive2D,
     help: () => {
       console.log(`
 Halo Live2D Bridge — Console Debug API
   __haloLive2D.getLive2DState()  → current state snapshot
-  __haloLive2D.triggerLive2D(expression, motion)  → trigger directly
   __haloLive2D.subscribeToVoice("*", handler)  → subscribe to all events
 
 Sources:
   - /ws/voice: live2d.trigger (emotion from LLM)
   - /ws:       live2d_tool_trigger (mapped from tool calls)
+
+Note: Sprint 53 removed the triggerLive2D() helper and the
+Live2DCanvas component (Cubism pipeline). When the webhook supplies
+emotion data, the bridge pushes it through state.lastEmotion which
+AvatarCard feeds to CSSAvatar / ImageSetAvatar; real Cubism model
+support is deferred (license blocker).
       `);
     },
   };

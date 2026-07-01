@@ -11,6 +11,7 @@ import { MaybeBackendOutdatedBanner } from "@/components/gundam/BackendOutdatedB
 import { BackendHealthBanner } from "@/components/gundam/BackendHealthBanner";
 import { RestartNudgeBanner } from "@/components/gundam/RestartNudgeBanner";
 import { SignalCard } from "@/components/gundam/SignalCard";
+import { AvatarCard } from "@/components/live2d/AvatarCard";
 import { useBackendVersion } from "@/hooks/use-backend-version";
 import { useProjectsStore } from "@/stores/projects";
 import { useSystemStore } from "@/stores/system";
@@ -23,26 +24,7 @@ import {
   voiceEnd,
   voiceSendAudio,
 } from "@/services/halo-voice-ws";
-import { CSSAvatar } from "@/components/live2d/CSSAvatar";
-import { ImageSetAvatar } from "@/components/live2d/ImageSetAvatar";
 import { VoicePanel } from "@/components/gundam/VoicePanel";
-import { useHaloLive2D } from "@/context/live2d-bridge-context";
-
-type AvatarMode = "sprite" | "image-set";
-const AVATAR_MODE_KEY = "gundam-halo.avatarMode";
-
-function useAvatarMode(): [AvatarMode, (m: AvatarMode) => void] {
-  const [mode, setMode] = useState<AvatarMode>(() => {
-    if (typeof window === "undefined") return "sprite";
-    const saved = window.localStorage.getItem(AVATAR_MODE_KEY);
-    return saved === "image-set" ? "image-set" : "sprite";
-  });
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(AVATAR_MODE_KEY, mode);
-  }, [mode]);
-  return [mode, setMode];
-}
 
 interface CockpitLayoutProps {
   children: ReactNode;
@@ -85,8 +67,6 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   const { connected } = useWsStatus();
   const { mode, projectName } = useCockpitMode();
   const location = useLocation();
-  const { state: live2dState } = useHaloLive2D();
-  const [avatarMode, setAvatarMode] = useAvatarMode();
   const { backend, outdated, missingFeatures } = useBackendVersion();
 
   // Sprint 19c: read the always_on_mic config so the
@@ -382,70 +362,7 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
             <SignalCard mic={mic} />
           </HudCard>
 
-          <HudCard>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
-                Avatar
-              </h2>
-              {live2dState.lastEmotion && (
-                <span className="text-[9px] font-mono text-[var(--accent)] opacity-70">
-                  EMO: {live2dState.lastEmotion.toUpperCase()}
-                </span>
-              )}
-            </div>
-            {/* Mode toggle — sprite (88-frame animation) vs image-set (9 PNGs + idle video) */}
-            <div className="flex items-center gap-1 mb-2 text-[9px] font-mono">
-              <button
-                type="button"
-                onClick={() => setAvatarMode("sprite")}
-                className={`px-2 py-0.5 border rounded uppercase tracking-widest transition-colors ${
-                  avatarMode === "sprite"
-                    ? "border-[var(--accent)] text-[var(--accent)]"
-                    : "border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)]/50"
-                }`}
-                title="88-frame sprite sheet, continuous breathing animation"
-              >
-                SPRITE
-              </button>
-              <button
-                type="button"
-                onClick={() => setAvatarMode("image-set")}
-                className={`px-2 py-0.5 border rounded uppercase tracking-widest transition-colors ${
-                  avatarMode === "image-set"
-                    ? "border-[var(--accent)] text-[var(--accent)]"
-                    : "border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)]/50"
-                }`}
-                title="9 pre-rendered emotion PNGs, instant swap + 6s idle video loop"
-              >
-                IMG-SET
-              </button>
-            </div>
-            {/* CSS Avatar — auto-responds to live2d.trigger WS events */}
-            <div
-              className="w-full rounded overflow-hidden border border-[var(--border-color)]"
-              style={{ height: "200px" }}
-            >
-              {avatarMode === "sprite" ? (
-                <CSSAvatar emotion={live2dState.lastEmotion ?? undefined} />
-              ) : (
-                <ImageSetAvatar
-                  emotion={live2dState.lastEmotion ?? undefined}
-                  enableVideoLoop
-                />
-              )}
-            </div>
-            {/* Show live2d trigger state */}
-            {live2dState.lastTrigger && (
-              <div className="mt-2 space-y-1">
-                <div className="text-[9px] font-mono text-[var(--text-muted)] truncate">
-                  EXPR: {live2dState.lastTrigger.expression}
-                </div>
-                <div className="text-[9px] font-mono text-[var(--text-muted)] truncate">
-                  MOTION: {live2dState.lastTrigger.motion}
-                </div>
-              </div>
-            )}
-          </HudCard>
+          <AvatarCard />
 
           <HudCard>
             <VoicePanel

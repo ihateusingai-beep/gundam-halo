@@ -1,6 +1,12 @@
 /**
  * Live2D Bridge context — exposes voice WS state to React components.
  * Wraps the module-level singleton in halo-live2d-bridge.ts.
+ *
+ * Sprint 53 reduced the context surface: the `trigger` method
+ * (which invoked the now-removed `triggerLive2D` from the bridge)
+ * is gone. Callers only need `state` (lastEmotion / lastTrigger
+ * for AvatarCard) — the bridge still subscribes to /ws/voice +
+ * /ws so `lastEmotion` updates automatically.
  */
 import {
   createContext,
@@ -18,8 +24,6 @@ import {
 
 interface HaloLive2DContextValue {
   state: Live2DState;
-  /** Manually trigger a Live2D expression + motion (for testing / tool calls). */
-  trigger: (expression: string, motion: string) => void;
   /** Subscribe to voice WS events. Returns unsubscribe fn. */
   onVoiceEvent: (type: string | "*", handler: (e: VoiceWSEvent) => void) => () => void;
 }
@@ -39,12 +43,6 @@ export function HaloLive2DProvider({ children }: { children: ReactNode }) {
 
   const value: HaloLive2DContextValue = {
     state,
-    trigger: (expression: string, motion: string) => {
-      // Dynamic import to avoid circular deps
-      import("@/services/halo-live2d-bridge").then(
-        ({ triggerLive2D }) => triggerLive2D(expression, motion)
-      );
-    },
     onVoiceEvent: (type, handler) => subscribeToVoice(type, handler),
   };
 
