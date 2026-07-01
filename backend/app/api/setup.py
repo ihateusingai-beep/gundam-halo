@@ -45,7 +45,9 @@ from typing import Any
 
 import httpx
 import tomlkit
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from app.core.auth import require_auth
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import (
@@ -552,7 +554,7 @@ async def get_setup_state() -> dict[str, Any]:
     }
 
 
-@router.post("/start", response_model=dict[str, Any])
+@router.post("/start", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_start() -> dict[str, Any]:
     """POST /api/setup/start — begin the wizard, set started_at."""
     home = _get_halo_home()
@@ -567,7 +569,7 @@ async def post_setup_start() -> dict[str, Any]:
     return _step_payload(state)
 
 
-@router.post("/llm", response_model=dict[str, Any])
+@router.post("/llm", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_llm(payload: LLMSetupRequest) -> dict[str, Any]:
     """POST /api/setup/llm — save LLM config, test connection.
 
@@ -676,7 +678,7 @@ def _llm_error_message(err_code: str | None) -> str:
     return f"Test failed: {err_code}"
 
 
-@router.post("/llm/validate", response_model=dict[str, Any])
+@router.post("/llm/validate", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_llm_validate(payload: LLMSetupRequest) -> dict[str, Any]:
     """Sprint 44 — inline API-key validation before the user clicks Next.
 
@@ -716,7 +718,7 @@ async def post_setup_llm_validate(payload: LLMSetupRequest) -> dict[str, Any]:
     }
 
 
-@router.post("/voice-asr", response_model=dict[str, Any])
+@router.post("/voice-asr", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_voice_asr(payload: VoiceASRRequest) -> dict[str, Any]:
     """POST /api/setup/voice-asr — save ASR config, validate model."""
     ok, err = _validate_asr_model_path(payload.model_path, payload.model_size)
@@ -750,7 +752,7 @@ async def post_setup_voice_asr(payload: VoiceASRRequest) -> dict[str, Any]:
     return _step_payload(state)
 
 
-@router.post("/voice-tts", response_model=dict[str, Any])
+@router.post("/voice-tts", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_voice_tts(payload: VoiceTTSRequest) -> dict[str, Any]:
     """POST /api/setup/voice-tts — save TTS config."""
     ok, err = _validate_tts_voice(payload.voice)
@@ -800,7 +802,7 @@ class TTSPreviewRequest(BaseModel):
         return v
 
 
-@router.post("/tts/preview", response_model=dict[str, Any])
+@router.post("/tts/preview", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_tts_preview(payload: TTSPreviewRequest) -> dict[str, Any]:
     """Sprint 44 — render a 1-sentence TTS preview for the wizard.
 
@@ -868,7 +870,7 @@ async def post_setup_tts_preview(payload: TTSPreviewRequest) -> dict[str, Any]:
         }
 
 
-@router.post("/theme", response_model=dict[str, Any])
+@router.post("/theme", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_theme(payload: ThemeRequest) -> dict[str, Any]:
     """POST /api/setup/theme — save theme pick.
 
@@ -894,7 +896,7 @@ async def post_setup_theme(payload: ThemeRequest) -> dict[str, Any]:
     return _step_payload(state)
 
 
-@router.post("/tailscale", response_model=dict[str, Any])
+@router.post("/tailscale", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_tailscale(payload: TailscaleRequest) -> dict[str, Any]:
     """POST /api/setup/tailscale — save hostname, test reachability.
 
@@ -927,7 +929,7 @@ async def post_setup_tailscale(payload: TailscaleRequest) -> dict[str, Any]:
     return out
 
 
-@router.post("/smoke", response_model=dict[str, Any])
+@router.post("/smoke", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_smoke() -> dict[str, Any]:
     """POST /api/setup/smoke — run end-to-end smoke test.
 
@@ -983,7 +985,7 @@ async def post_setup_smoke() -> dict[str, Any]:
     }
 
 
-@router.post("/finish", response_model=dict[str, Any])
+@router.post("/finish", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_finish() -> dict[str, Any]:
     """POST /api/setup/finish — mark the wizard finished.
 
@@ -1022,7 +1024,7 @@ async def post_setup_finish() -> dict[str, Any]:
     }
 
 
-@router.post("/skip", response_model=dict[str, Any])
+@router.post("/skip", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_skip() -> dict[str, Any]:
     """POST /api/setup/skip — mark the wizard skipped (advanced).
 
@@ -1078,7 +1080,7 @@ async def post_setup_skip() -> dict[str, Any]:
     }
 
 
-@router.post("/reset", response_model=dict[str, Any])
+@router.post("/reset", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
 async def post_setup_reset() -> dict[str, Any]:
     """POST /api/setup/reset — wipe state, restart at step 1.
 

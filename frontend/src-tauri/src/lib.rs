@@ -9,6 +9,7 @@
 mod commands; // Sprint 33 / Track 31-B — Personalised Fine-tune IPC commands.
 mod recording; // Sprint 33 — recording pipeline stub (real impl deferred).
 mod watchdog; // Sprint 43 — Self-Healing Backend (health probe + crash-loop guard).
+mod auth; // Sprint 48 — Auth layer (bearer token bootstrap + IPC).
 
 use std::path::Path;
 use std::process::Command;
@@ -333,6 +334,15 @@ pub fn run() {
             Some(vec!["--minimized"]),
         ))
         .setup(move |app| {
+            // Sprint 48: bootstrap the auth layer FIRST so the
+            // webview's window.__haloApiToken global is set before
+            // any frontend JS runs. Failures are logged + non-fatal
+            // (the protected endpoints will 503 if the token is
+            // missing, but the Tauri shell still launches).
+            if let Err(e) = auth::bootstrap_auth(app) {
+                eprintln!("[Sprint 48 auth] bootstrap failed: {e}");
+            }
+
             // ---- Tray menu ----
             // Order: Show → Hide → ─── → New Chat → Settings → ─── → Quit
             let show = MenuItem::with_id(app, "show", "Open Dashboard", true, None::<&str>)?;
@@ -486,6 +496,13 @@ pub fn run() {
             commands::start_train,
             commands::get_train_progress,
             commands::activate_model,
+            // Sprint 48 — returns the bearer token from
+            // $HALO_HOME/.env to the webview. The frontend's
+            // auth-bootstrap.ts stores it on window.__haloApiToken
+            // and api.ts's authedRequest() wrapper adds the
+            // Authorization header to every privileged fetch.
+            // See docs/FEATURE-SPEC-SPRINT48-AUTH-LAYER.md.
+            auth::get_api_token,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -539,7 +556,10 @@ struct BackendHealth {
 async fn get_backend_health() -> BackendHealth {
     use std::time::SystemTime;
 
-    let body = watchdog::curl_get("http://localhost:8765/api/system/health-detailed");
+    let body = watchdog::curl_with_bearer(
+        "http://localhost:8765/api/system/health-detailed",
+        "GET",
+    );
 
     let (crash_count_60m, last_crash_at, respawn_disabled, installed, pid) =
         match body.as_deref() {
@@ -621,26 +641,12 @@ async fn install_launchd_supervisor(repo_dir: Option<String>) -> Result<String, 
 /// & retry" button. Returns the cleared event count.
 #[tauri::command]
 async fn clear_crash_log() -> Result<u32, String> {
-    let output = Command::new("curl")
-        .args([
-            "-sf",
-            "-X",
-            "POST",
-            "--max-time",
-            "5",
-            "http://localhost:8765/api/system/clear-crash-log",
-        ])
-        .output()
-        .map_err(|e| format!("curl failed: {}", e))?;
+    let body = watchdog::curl_with_bearer(
+        "http://localhost:8765/api/system/clear-crash-log",
+        "POST",
+    )
+    .ok_or_else(|| "clear-crash-log failed (auth or backend unreachable)".to_string())?;
 
-    if !output.status.success() {
-        return Err(format!(
-            "clear-crash-log returned non-2xx: {:?}",
-            output.status.code()
-        ));
-    }
-
-    let body = String::from_utf8_lossy(&output.stdout);
     let v: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| format!("invalid response JSON: {} (body: {})", e, body))?;
     Ok(v.get("cleared").and_then(|x| x.as_u64()).unwrap_or(0) as u32)
@@ -654,26 +660,12 @@ async fn clear_crash_log() -> Result<u32, String> {
 /// no-op (returns `{cancelled: false}`).
 #[tauri::command]
 async fn cancel_restart() -> Result<bool, String> {
-    let output = Command::new("curl")
-        .args([
-            "-sf",
-            "-X",
-            "POST",
-            "--max-time",
-            "5",
-            "http://localhost:8765/api/system/cancel-restart",
-        ])
-        .output()
-        .map_err(|e| format!("curl failed: {}", e))?;
+    let body = watchdog::curl_with_bearer(
+        "http://localhost:8765/api/system/cancel-restart",
+        "POST",
+    )
+    .ok_or_else(|| "cancel-restart failed (auth or backend unreachable)".to_string())?;
 
-    if !output.status.success() {
-        return Err(format!(
-            "cancel-restart returned non-2xx: {:?}",
-            output.status.code()
-        ));
-    }
-
-    let body = String::from_utf8_lossy(&output.stdout);
     let v: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| format!("invalid response JSON: {} (body: {})", e, body))?;
     Ok(v.get("cancelled").and_then(|x| x.as_bool()).unwrap_or(false))

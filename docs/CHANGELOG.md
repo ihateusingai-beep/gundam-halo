@@ -216,6 +216,113 @@ set easier?".
   - `test renders legend chips with run count and avg WER`.
   - `test corpusColor() is stable — same id → same colour`.
 
+### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
+
+Closes the 3 long-standing "no auth yet" notes (Sprint 13/43/44
+TODOs). Belt + braces: bearer token (hard requirement, fail-closed)
++ Tailscale identity (defence-in-depth, optional enhance).
+
+#### Backend additions
+
+- **backend**: `app/core/auth.py` NEW (~290 LoC) — `require_auth`
+  FastAPI dependency + `AuthContext` dataclass + Tailscale probe
+  (cached 60s) + JWT decode + audit-on-failure helper.
+- **backend**: `app/core/security.py` NEW (~130 LoC) — JSONL audit
+  log at `~/.gundam-halo/logs/audit.log` with thread-safe append +
+  1 MB rotation. Implements the Sprint 13 TODO.
+- **backend**: `app/core/config.py` — adds `SecurityAuthConfig` with
+  `tailscale_allowed_tags` + `tailscale_check_disabled`; nested
+  `SecurityConfig.auth`.
+- **backend**: `app/core/config_loader.py::_load_security_config`
+  reads `[security.auth]` from `config.toml`.
+- **backend**: `app/api/system.py` — adds
+  `dependencies=[Depends(require_auth)]` to 3 endpoints:
+  - `GET /api/system/health-detailed`
+  - `POST /api/system/clear-crash-log`
+  - `POST /api/system/cancel-restart`
+- **backend**: `app/api/voice_config_api.py` — adds auth to:
+  - `POST /voice/run-held-out-eval`
+  - `POST /voice/run-finetune`
+- **backend**: `app/api/setup.py` — adds auth to all 11 POST
+  endpoints. `GET /api/setup/state` stays unprotected (first-run).
+
+#### Tauri additions
+
+- **frontend**: `src-tauri/src/auth.rs` NEW (~130 LoC) —
+  `AuthState::load_from_env()` + `bootstrap_auth()` (eval init script)
+  + `get_api_token` IPC command.
+- **frontend**: `src-tauri/src/lib.rs` — wires `auth::bootstrap_auth(app)`
+  into `.setup()` + adds `auth::get_api_token` to `invoke_handler`.
+- **frontend**: `src-tauri/src/watchdog.rs` — adds
+  `curl_with_bearer(url, method)` helper. All 3 Tauri→backend
+  curl call sites (`get_backend_health`, `clear_crash_log`,
+  `cancel_restart`, watchdog poll) now use it.
+
+#### Frontend additions
+
+- **frontend**: `lib/api.ts` — adds `authedRequest()` wrapper that
+  auto-injects `Authorization: Bearer <token>` from
+  `window.__haloApiToken`. Switches `startHeldOutEval` +
+  `startFinetune` to use it.
+- **frontend**: `lib/setup-api.ts` — same wrapper; switches all
+  11 POST setup endpoints. `getState()` stays on bare `request()`.
+- **frontend**: `lib/auth-bootstrap.ts` NEW — side-effect module
+  imported from `main.tsx`. Logs token presence at startup.
+
+#### Scripts
+
+- **backend**: `scripts/generate-auth-token.sh` NEW (~50 LoC bash)
+  — creates `$HALO_HOME/.env` (mode 600) with 32-byte URL-safe
+  base64 token; rotates existing if present.
+- **backend**: `scripts/rotate-auth-token.sh` NEW (~30 LoC bash)
+  — replaces the existing token. Requires `.env` to exist.
+
+#### Tests
+
+- **backend**: `tests/core/test_auth.py` NEW (+7 tests):
+  - `test_require_auth_503s_when_token_not_configured` (fail-closed).
+  - `test_require_auth_401s_with_missing_header`.
+  - `test_require_auth_401s_with_wrong_token` (timing-safe compare).
+  - `test_require_auth_passes_with_valid_bearer` (bearer-only).
+  - `test_verify_tailscale_identity_returns_none_for_missing_header`.
+  - `test_verify_tailscale_identity_returns_none_for_malformed_jwt`.
+  - `test_verify_tailscale_identity_enforces_tag_allowlist`.
+- **backend**: `tests/core/test_security.py` NEW (+4 tests):
+  audit log write / rotation / newest-first / malformed-line skip.
+- **backend**: `tests/api/test_endpoint_auth.py` NEW (+9 tests):
+  3 system endpoints require auth + 1 unprotected, 1 voice
+  endpoint requires auth + 1 unprotected, 1 setup endpoint
+  requires auth + 1 unprotected.
+- **backend**: `tests/scripts/test_auth_token_scripts.py` NEW
+  (+4 tests): generate + rotate + create + chmod 600.
+- **frontend**: `lib/auth-bootstrap.test.ts` NEW (+2 tests):
+  warning on missing token, success log on present token.
+
+#### Docs
+
+- **docs**: `FEATURE-SPEC-SPRINT48-AUTH-LAYER.md` NEW (~280 LoC).
+- **docs**: `SECURITY-HARDENING.md` — adds Sprint 48 section
+  with threat model table + protected endpoints + bootstrap /
+  rotation + Tauri integration + Tailscale identity + audit log.
+- **config**: `config.toml.example` — adds `[security.auth]`
+  block with `tailscale_allowed_tags` + `tailscale_check_disabled`.
+
+#### Version bump
+
+`__version__` 0.1.19 → **0.1.20** (MINOR per Mavis memory rule —
+new security contract; first auth-protected endpoints land here,
+a meaningful capability boundary, not just a bug fix).
+4 surfaces synced.
+
+#### Out-of-scope locked
+
+- Token expiry / short-lived JWTs (complexity vs gain).
+- Per-user RBAC.
+- Rate limiting (YAGNI at single-user scale).
+- mTLS (cert-management overhead).
+- Per-endpoint scopes.
+- Audit log remote sink.
+
 ### Sprint 18 — cockpit audio-reactive HUD + ASR switcher (read-only → editable)
 
 Sprint 18 closes two open follow-ups from Sprint 16 + 17b:

@@ -275,15 +275,28 @@ def _load_telegram_config(toml_data: dict) -> "TelegramConfig":
 
 
 def _load_security_config(toml_data: dict) -> "SecurityConfig":
-    from app.core.config import SecurityConfig
+    from app.core.config import SecurityAuthConfig, SecurityConfig
     d = toml_data.get("security", {})
     defaults = SecurityConfig()
+    auth_d = d.get("auth", {}) or {}
+    auth_defaults = SecurityAuthConfig()
     return SecurityConfig(
         audit_log=d.get("audit_log", defaults.audit_log),
         audit_max_size_mb=d.get("audit_max_size_mb", defaults.audit_max_size_mb),
         injection_scan=d.get("injection_scan", defaults.injection_scan),
         require_confirm_for=d.get(
             "require_confirm_for", defaults.require_confirm_for
+        ),
+        # Sprint 48: nested auth config. Empty list = no tag filter.
+        auth=SecurityAuthConfig(
+            tailscale_allowed_tags=auth_d.get(
+                "tailscale_allowed_tags",
+                auth_defaults.tailscale_allowed_tags,
+            ),
+            tailscale_check_disabled=auth_d.get(
+                "tailscale_check_disabled",
+                auth_defaults.tailscale_check_disabled,
+            ),
         ),
     )
 

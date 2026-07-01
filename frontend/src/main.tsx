@@ -9,6 +9,10 @@ import "./services/halo-live2d-bridge";
 import "./services/halo-tray-controls";
 import "./services/halo-voice-ws";
 import "./services/halo-watchdog-events";
+// Sprint 48: auth-bootstrap side-effect — logs presence of the
+// bearer token at startup. The actual injection (init_script) is
+// done by the Tauri Rust shell before any frontend JS runs.
+import "./lib/auth-bootstrap";
 import "./styles/gundam.css";
 import "./index.css";
 

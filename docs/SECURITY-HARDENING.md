@@ -186,6 +186,93 @@ and rely on Tailscale for any remote access. Do not expose port
 8765 to the public internet; per the project memory rule "NO
 public internet exposure", the backend is **Tailscale-only**.
 
+## Sprint 48 — Auth layer (belt + braces)
+
+Sprint 48 closes the "Sprint 45 will add auth" note. Two checks
+protect every privileged endpoint:
+
+1. **Bearer token** (`Authorization: Bearer <token>`) — hard
+   requirement, fail-closed. Stored in `~/.gundam-halo/.env`
+   (mode 600) as `HALO_API_TOKEN`.
+2. **Tailscale identity** (`Tailscale-Identity` header) —
+   defence-in-depth, optional enhance. Enforced when
+   `tailscaled` is reachable; skipped (with WARNING) when not.
+
+### Threat model
+
+| Threat | Bearer alone | Tailscale alone | Both |
+|---|---|---|---|
+| Random Tailscale peer on the tailnet | ✅ rejected | ❌ passes | **✅ rejected** |
+| Leaked token used from non-Tailscale device | ❌ passes | ✅ rejected | **✅ rejected** |
+| Localhost curl with leaked token | ❌ passes | ✅ rejected | **✅ rejected** |
+| Both leaked to a fully-trusted Tailscale peer | — | — | ❌ passes (residual; mitigated by rotation) |
+
+### Protected endpoints (16 total)
+
+| Endpoint | Why protected |
+|---|---|
+| `POST /api/system/clear-crash-log` | wipes watchdog history |
+| `POST /api/system/cancel-restart` | aborts self-restart |
+| `GET /api/system/health-detailed` | reads crash log |
+| `POST /voice/run-finetune` | spawns 30-60 min LoRA |
+| `POST /voice/run-held-out-eval` | spawns eval job |
+| `POST /api/setup/*` (11 endpoints) | writes config.toml |
+
+Read-side stays open: `/voice/config`, `/voice/status`,
+`/voice/eval-results`, `/voice/eval-corpus-breakdown`,
+`/voice/list-jobs`, `/voice/self-record-corpora`,
+`/api/system/gauges`, `/api/system/info`, `/api/health`,
+`/api/setup/state`. Tailscale-locality + `127.0.0.1` binding
+provides practical security for the read side.
+
+### Bootstrap + rotation
+
+```bash
+# First-time setup — creates ~/.gundam-halo/.env with a fresh
+# 32-byte URL-safe base64 token (mode 600).
+./scripts/generate-auth-token.sh
+
+# Rotation — replaces the existing token. The backend rejects
+# the old token immediately on restart.
+./scripts/rotate-auth-token.sh
+```
+
+Both scripts honour `$HALO_HOME`, preserve other env vars,
+defensive `chmod 600` after edit, and print the new token
+ONE TIME.
+
+### Tauri integration
+
+`frontend/src-tauri/src/auth.rs` reads `~/.gundam-halo/.env`
+at startup and injects the token into the webview via an init
+script (`window.__haloApiToken = "<token>"`). The frontend's
+`lib/api.ts::authedRequest()` wrapper reads this global on
+every fetch and adds `Authorization: Bearer <token>`.
+
+The watchdog's curl helpers (`watchdog::curl_with_bearer`) do
+the same for the Tauri IPC commands that shell out to the
+backend (`get_backend_health`, `clear_crash_log`,
+`cancel_restart`).
+
+### Tailscale identity check
+
+When `tailscaled` is reachable (local API on
+`localhost:41112` macOS / unix socket Linux), the auth
+dependency reads `Tailscale-Identity` (JWT), decodes the
+payload, and enforces `[security.auth].tailscale_allowed_tags`
+(empty = no filter). Unreachable tailscaled = skip with WARNING
+(bearer-only mode for dev).
+
+### Audit log
+
+`~/.gundam-halo/logs/audit.log` (JSONL, 1 MB rotation):
+```json
+{"ts": 1782732509.123, "event": "auth_failure", "reason":
+ "missing-bearer", "method": "POST", "path":
+ "/api/system/clear-crash-log", "src_ip": "100.100.100.42"}
+```
+Implements the Sprint 13 TODO.
+
   enforced.
 - **`HALO_REQUIRE_TAILSCALE=true`** env var — equivalent to
   setting `server.require_tailscale = true` in config.toml;

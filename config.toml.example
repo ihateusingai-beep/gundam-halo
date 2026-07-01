@@ -260,3 +260,19 @@ typing_delay_s = 0.05
 audit_log = "~/.gundam-halo/logs/audit.log"
 audit_max_size_mb = 100
 injection_scan = true                 # scan inbound text for prompt injection
+
+# Sprint 48 — auth layer config. The bearer token lives in
+# ~/.gundam-halo/.env (mode 600) as HALO_API_TOKEN. Run
+# scripts/generate-auth-token.sh on first setup and
+# scripts/rotate-auth-token.sh to rotate.
+[security.auth]
+# tailscale_allowed_tags: empty list = any authenticated Tailscale
+# peer passes the identity check. Non-empty = the peer's
+# Tailscale-Identity JWT must carry at least one of these tags.
+# Example: ["tag:admin"] for stricter control.
+tailscale_allowed_tags = []
+
+# tailscale_check_disabled: when true, skip the Tailscale identity
+# check entirely (useful for dev / CI where tailscaled isn't
+# running). Default false = probe + enforce if reachable.
+tailscale_check_disabled = false

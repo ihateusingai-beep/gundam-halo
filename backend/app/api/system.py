@@ -7,12 +7,13 @@ import os
 import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 import psutil
 
 from app import __version__
+from app.core.auth import require_auth
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -109,7 +110,7 @@ async def get_info() -> dict:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/health-detailed")
+@router.get("/health-detailed", dependencies=[Depends(require_auth)])
 async def get_health_detailed() -> dict:
     """Extended health payload for the watchdog (Sprint 43).
 
@@ -155,7 +156,7 @@ async def get_health_detailed() -> dict:
     }
 
 
-@router.post("/clear-crash-log")
+@router.post("/clear-crash-log", dependencies=[Depends(require_auth)])
 async def post_clear_crash_log() -> dict:
     """Sprint 43 — wipe the crash log (admin action).
 
@@ -178,7 +179,7 @@ async def post_clear_crash_log() -> dict:
     return {"ok": True, "cleared": cleared}
 
 
-@router.post("/cancel-restart")
+@router.post("/cancel-restart", dependencies=[Depends(require_auth)])
 async def post_cancel_restart() -> dict[str, Any]:
     """Sprint 41 — cancel a pending self-restart.
 

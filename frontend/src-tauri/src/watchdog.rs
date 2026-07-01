@@ -190,6 +190,58 @@ pub fn curl_get(url: &str) -> Option<String> {
         })
 }
 
+/// Sprint 48 — same as `curl_get` but injects the bearer token from
+/// `$HALO_HOME/.env` (via the same `AuthState::load_from_env` parser).
+///
+/// Returns None if the token isn't found — the caller surfaces a
+/// 503-equivalent error to the UI. The auth-protected endpoints
+/// (`/api/system/health-detailed`, `/api/system/clear-crash-log`,
+/// `/api/system/cancel-restart`) require this header.
+pub fn curl_with_bearer(url: &str, method: &str) -> Option<String> {
+    let home = resolve_halo_home();
+    let token = crate::auth::AuthState::load_from_env(&home).unwrap_or_default();
+    if token.is_empty() {
+        eprintln!(
+            "[Sprint 48 watchdog] cannot call protected endpoint {url} \
+             without HALO_API_TOKEN. Run scripts/generate-auth-token.sh."
+        );
+        return None;
+    }
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sf",
+        "-X", method,
+        "--max-time", &CURL_TIMEOUT_SEC.to_string(),
+        "-H", "Accept: application/json",
+        "-H", &format!("Authorization: Bearer {token}"),
+        url,
+    ]);
+    cmd.output().ok().and_then(|out| {
+        if out.status.success() {
+            String::from_utf8(out.stdout).ok()
+        } else {
+            eprintln!(
+                "[Sprint 48 watchdog] {method} {url} returned status {:?}",
+                out.status.code()
+            );
+            None
+        }
+    })
+}
+
+/// Resolve $HALO_HOME — used by the watchdog's curl helpers so
+/// we don't need a Tauri `App` reference (watchdog runs on a
+/// dedicated thread, not in a tauri command).
+fn resolve_halo_home() -> std::path::PathBuf {
+    if let Ok(env_val) = std::env::var("HALO_HOME") {
+        return std::path::PathBuf::from(env_val);
+    }
+    if let Some(home_dir) = std::env::var_os("HOME") {
+        return std::path::PathBuf::from(home_dir).join(".gundam-halo");
+    }
+    std::path::PathBuf::from(".gundam-halo")
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

@@ -53,6 +53,36 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * Sprint 48 — wrap `request` with bearer-token injection.
+ *
+ * Reads `window.__haloApiToken` (set by Tauri at startup) and adds
+ * `Authorization: Bearer <token>` to every outgoing fetch. If the
+ * token is missing (no Tauri shell, dev mode without bootstrap),
+ * falls through silently — the read-side endpoints don't require
+ * auth, and the write-side endpoints will 401 which the caller
+ * will surface as an error.
+ *
+ * The wrapper preserves `init.headers` so callers can still set
+ * their own headers (e.g. `Content-Type` overrides); the bearer
+ * is added last so it doesn't get clobbered.
+ */
+async function authedRequest<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const token = (window as unknown as { __haloApiToken?: string })
+    .__haloApiToken;
+  const baseHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init.headers as Record<string, string> | undefined),
+  };
+  if (token && token.length > 0) {
+    baseHeaders["Authorization"] = `Bearer ${token}`;
+  }
+  return request<T>(path, { ...init, headers: baseHeaders });
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -123,14 +153,17 @@ export const api = {
     model_size?: "tiny" | "base" | "small" | "medium";
     halo_home?: string;
   }) =>
-    request<{ job_id: string; status: string }>("/voice/run-held-out-eval", {
-      method: "POST",
-      body: JSON.stringify({
-        threshold: params?.threshold ?? 0.15,
-        model_size: params?.model_size ?? "base",
-        halo_home: params?.halo_home,
-      }),
-    }),
+    authedRequest<{ job_id: string; status: string }>(
+      "/voice/run-held-out-eval",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          threshold: params?.threshold ?? 0.15,
+          model_size: params?.model_size ?? "base",
+          halo_home: params?.halo_home,
+        }),
+      },
+    ),
 
   getHeldOutEvalJob: (jobId: string) =>
     request<EvalJob>(
@@ -143,7 +176,7 @@ export const api = {
     output_model_dir?: string;
     halo_home?: string;
   }) =>
-    request<{
+    authedRequest<{
       job_id: string;
       status: string;
       // Sprint 45: server-side auto-detection echoes back the

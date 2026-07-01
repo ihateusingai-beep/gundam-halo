@@ -28,7 +28,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.restart_handler import (
@@ -43,6 +43,7 @@ from app.core.eval_jobs import (
     JOB_KIND_HELD_OUT_EVAL,
     get_store,
 )
+from app.core.auth import require_auth
 from app.core.toml_doc import read_doc, update_section_key, write_doc
 # Sprint 46: module-level import so tests can monkeypatch the
 # results-dir resolver (held_out_results_dir returns a hardcoded
@@ -707,7 +708,7 @@ def _run_orchestrator_thread(
         logger.error(f"could not mark job {job_id} complete: {e}")
 
 
-@router.post("/voice/run-held-out-eval")
+@router.post("/voice/run-held-out-eval", dependencies=[Depends(require_auth)])
 async def post_run_held_out_eval(payload: RunEvalRequest) -> dict[str, Any]:
     """Sprint 40 — kick off a held-out eval in a background thread.
 
@@ -757,7 +758,7 @@ async def get_run_held_out_eval(job_id: str) -> dict[str, Any]:
     return job.to_dict()
 
 
-@router.post("/voice/run-finetune")
+@router.post("/voice/run-finetune", dependencies=[Depends(require_auth)])
 async def post_run_finetune(payload: RunFinetuneRequest) -> dict[str, Any]:
     """Sprint 40 + 45 — kick off a LoRA fine-tune in a background thread.
 

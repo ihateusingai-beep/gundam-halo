@@ -23,6 +23,14 @@ def default_test_config(monkeypatch, tmp_path):
     """
     monkeypatch.setenv("HALO_HOME", str(tmp_path))
     monkeypatch.setenv("MINIMAX_API_KEY", "test-fake-key-not-real")
+    # Sprint 48: enable test auth bypass so the auth dependency
+    # returns a synthetic AuthContext without checking anything.
+    # Production code never sets this env var (all-caps + TEST
+    # prefix). Tests that specifically assert the auth 401/503
+    # paths (test_endpoint_auth.py) override via their own
+    # monkeypatch.
+    monkeypatch.setenv("HALO_TEST_AUTH_BYPASS", "true")
+    monkeypatch.setenv("HALO_API_TOKEN", "test-bearer-token-shared-fixture")
     _config_module.reset_config()
     # Load via get_config() so the singleton is updated
     _config_module.get_config(home=tmp_path)

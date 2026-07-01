@@ -37,6 +37,26 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * Sprint 48 — wrap `request` with bearer-token injection.
+ * See `frontend/src/lib/api.ts` for the full design notes.
+ */
+async function authedRequest<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const token = (window as unknown as { __haloApiToken?: string })
+    .__haloApiToken;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init.headers as Record<string, string> | undefined),
+  };
+  if (token && token.length > 0) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return request<T>(path, { ...init, headers });
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...(init.headers || {}) },
@@ -76,23 +96,23 @@ export const setupApi = {
   getState: () => request<SetupState>("/api/setup/state"),
 
   start: () =>
-    request<SetupStepPayload>("/api/setup/start", { method: "POST" }),
+    authedRequest<SetupStepPayload>("/api/setup/start", { method: "POST" }),
 
   submitLLM: (cfg: LLMConfig) =>
-    request<SetupStepPayload>("/api/setup/llm", {
+    authedRequest<SetupStepPayload>("/api/setup/llm", {
       method: "POST",
       body: JSON.stringify(llmPayload(cfg)),
     }),
 
   /** Sprint 44 — inline API-key validation. Never persists. */
   validateLLM: (cfg: LLMConfig) =>
-    request<LLMValidateResponse>("/api/setup/llm/validate", {
+    authedRequest<LLMValidateResponse>("/api/setup/llm/validate", {
       method: "POST",
       body: JSON.stringify(llmPayload(cfg)),
     }),
 
   submitASR: (cfg: VoiceASRConfig) =>
-    request<SetupStepPayload>("/api/setup/voice-asr", {
+    authedRequest<SetupStepPayload>("/api/setup/voice-asr", {
       method: "POST",
       body: JSON.stringify({
         backend: cfg.backend,
@@ -103,14 +123,14 @@ export const setupApi = {
     }),
 
   submitTTS: (cfg: VoiceTTSConfig) =>
-    request<SetupStepPayload>("/api/setup/voice-tts", {
+    authedRequest<SetupStepPayload>("/api/setup/voice-tts", {
       method: "POST",
       body: JSON.stringify(cfg),
     }),
 
   /** Sprint 44 — render a 1-sentence TTS preview. Returns base64 WAV. */
   previewTTS: (cfg: { backend: string; voice: string; text?: string }) =>
-    request<TTSPreviewResponse>("/api/setup/tts/preview", {
+    authedRequest<TTSPreviewResponse>("/api/setup/tts/preview", {
       method: "POST",
       body: JSON.stringify({
         backend: cfg.backend,
@@ -120,13 +140,13 @@ export const setupApi = {
     }),
 
   submitTheme: (cfg: ThemeConfig) =>
-    request<SetupStepPayload>("/api/setup/theme", {
+    authedRequest<SetupStepPayload>("/api/setup/theme", {
       method: "POST",
       body: JSON.stringify({ theme: cfg.themeId }),
     }),
 
   submitTailscale: (cfg: TailscaleConfig) =>
-    request<SetupStepPayload>("/api/setup/tailscale", {
+    authedRequest<SetupStepPayload>("/api/setup/tailscale", {
       method: "POST",
       body: JSON.stringify({
         enabled: cfg.enabled,
@@ -135,14 +155,14 @@ export const setupApi = {
     }),
 
   runSmoke: () =>
-    request<SetupStepPayload>("/api/setup/smoke", { method: "POST" }),
+    authedRequest<SetupStepPayload>("/api/setup/smoke", { method: "POST" }),
 
   finish: () =>
-    request<SetupStepPayload>("/api/setup/finish", { method: "POST" }),
+    authedRequest<SetupStepPayload>("/api/setup/finish", { method: "POST" }),
 
   skip: () =>
-    request<SetupStepPayload>("/api/setup/skip", { method: "POST" }),
+    authedRequest<SetupStepPayload>("/api/setup/skip", { method: "POST" }),
 
   reset: () =>
-    request<SetupStepPayload>("/api/setup/reset", { method: "POST" }),
+    authedRequest<SetupStepPayload>("/api/setup/reset", { method: "POST" }),
 };

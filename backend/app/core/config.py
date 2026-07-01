@@ -164,6 +164,31 @@ class TelegramConfig:
 
 
 @dataclass
+class SecurityAuthConfig:
+    """Sprint 48 — auth layer configuration.
+
+    The bearer token itself lives in `$HALO_HOME/.env` (read by
+    `app.core.config_loader._load_dotenv()` into `os.environ`).
+    This block configures the *defence-in-depth* Tailscale check
+    that runs alongside the bearer check.
+
+    `tailscale_allowed_tags`:
+      - Empty list (default) = no tag filter; any authenticated
+        Tailscale peer passes the identity check.
+      - Non-empty = the peer's `Tailscale-Identity` JWT must
+        carry at least one of these tags.
+
+    `tailscale_check_disabled`:
+      - True = skip the Tailscale identity check entirely.
+        Useful for dev / CI where `tailscaled` isn't running.
+      - False (default) = probe the local API and enforce if
+        reachable; log a warning + skip if not.
+    """
+    tailscale_allowed_tags: List[str] = field(default_factory=list)
+    tailscale_check_disabled: bool = False
+
+
+@dataclass
 class SecurityConfig:
     audit_log: str = "~/.gundam-halo/logs/audit.log"
     audit_max_size_mb: int = 100
@@ -176,6 +201,8 @@ class SecurityConfig:
             "mac.a11y",
         ]
     )
+    # Sprint 48: nested auth block. Empty list = no tag filter.
+    auth: SecurityAuthConfig = field(default_factory=SecurityAuthConfig)
 
 
 @dataclass
