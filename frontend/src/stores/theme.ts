@@ -12,6 +12,18 @@ interface ThemeState {
   theme: GundamTheme;
   setTheme: (t: GundamTheme) => void;
 
+  /**
+   * Sprint 50: live preview theme (not persisted). Set by the
+   * ThemeHoverCard when the user hovers a swatch — the DOM
+   * `data-theme` attribute is updated so the cockpit renders the
+   * previewed theme immediately. When the hover ends, the
+   * ThemeHoverCard calls `clearHoverTheme()` to revert to the
+   * committed theme. The hover value is intentionally NOT saved
+   * to localStorage — only explicit clicks commit.
+   */
+  hoverTheme: GundamTheme | null;
+  setHoverTheme: (t: GundamTheme | null) => void;
+
   background: CockpitBackground;
   setBackground: (b: CockpitBackground) => void;
 }
@@ -25,7 +37,7 @@ function applyBackground(b: CockpitBackground) {
   localStorage.setItem("gundam-halo-bg", b);
 }
 
-export const useThemeStore = create<ThemeState>((set) => ({
+export const useThemeStore = create<ThemeState>((set, get) => ({
   theme: (localStorage.getItem("gundam-halo-theme") as GundamTheme) || "gundam-ntd",
   setTheme: (t) => {
     if (t) {
@@ -36,6 +48,22 @@ export const useThemeStore = create<ThemeState>((set) => ({
       localStorage.removeItem("gundam-halo-theme");
     }
     set({ theme: t });
+  },
+
+  hoverTheme: null,
+  setHoverTheme: (t) => {
+    if (t) {
+      document.documentElement.setAttribute("data-theme", t);
+    } else {
+      // Revert to the committed theme (or remove if committed is null).
+      const committed = get().theme;
+      if (committed) {
+        document.documentElement.setAttribute("data-theme", committed);
+      } else {
+        document.documentElement.removeAttribute("data-theme");
+      }
+    }
+    set({ hoverTheme: t });
   },
 
   background:

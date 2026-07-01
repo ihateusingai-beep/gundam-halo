@@ -11,11 +11,12 @@ import { MacTab } from "./MacTab";
 import { MemoryTab } from "./MemoryTab";
 import { SecretsTab } from "./SecretsTab";
 import { SecurityTab } from "./SecurityTab";
-import { SETTINGS_TABS, type SettingsTab } from "./constants";
+import { SettingsSidebar } from "./SettingsSidebar";
+import type { SettingsTab } from "./constants";
 import { ThemesTab } from "./ThemesTab";
 import { VoiceTab } from "./VoiceTab";
 
-/** Settings page — 7 tabs: General / Mac / Channels / Themes / Security / Secrets / Memory. */
+/** Settings page — 8 tabs grouped into Personalisation + System (Sprint 50). */
 export function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -56,36 +57,28 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="space-y-3">
-      {/* Tab nav */}
-      <HudCard className="!p-0">
-        <div className="flex overflow-x-auto">
-          {SETTINGS_TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id)}
-              className={`flex-1 min-w-[120px] px-4 py-3 text-sm font-[Rajdhani] uppercase tracking-wider transition-colors border-b-2 ${
-                activeTab === t.id
-                  ? "text-[var(--accent)] border-[var(--accent)] bg-[var(--bg-elevated)]"
-                  : "text-[var(--text-muted)] border-transparent hover:text-[var(--accent)] hover:border-[var(--border-color)]"
-              }`}
-            >
-              <span className="mr-2 opacity-70">{t.icon}</span>
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </HudCard>
+    <div
+      className="flex h-full"
+      data-testid="settings-page"
+    >
+      {/* Sprint 50: vertical sidebar nav replaces the horizontal
+          8-tab bar. Saves horizontal space + handles overflow at
+          1024px viewports (where "Security" + "Voice" tabs were
+          getting clipped). */}
+      <SettingsSidebar active={activeTab} onChange={setActiveTab} />
 
-      {/* Tab content */}
-      {activeTab === "general" && <GeneralTab settings={settings} />}
-      {activeTab === "mac" && <MacTab settings={settings} />}
-      {activeTab === "channels" && <ChannelsTab settings={settings} />}
-      {activeTab === "themes" && <ThemesTab />}
-      {activeTab === "security" && <SecurityTab />}
-      {activeTab === "secrets" && <SecretsTab />}
-      {activeTab === "memory" && <MemoryTab />}
-      {activeTab === "voice" && <VoiceTab />}
+      {/* Tab content. flex-1 so the sidebar eats 240px (or 48px
+          collapsed) and the content fills the rest. */}
+      <div className="flex-1 p-4 space-y-3 overflow-y-auto">
+        {activeTab === "general" && <GeneralTab settings={settings} />}
+        {activeTab === "mac" && <MacTab settings={settings} />}
+        {activeTab === "channels" && <ChannelsTab settings={settings} />}
+        {activeTab === "themes" && <ThemesTab />}
+        {activeTab === "security" && <SecurityTab />}
+        {activeTab === "secrets" && <SecretsTab />}
+        {activeTab === "memory" && <MemoryTab />}
+        {activeTab === "voice" && <VoiceTab />}
+      </div>
     </div>
   );
 }

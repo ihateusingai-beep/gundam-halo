@@ -230,6 +230,12 @@ Same cockpit layout, but the **center is now the active project's chat** + agent
 
 ### 4.5 `/settings` — Settings
 
+- **Sidebar nav (Sprint 50)** — vertical 240px sidebar with 8 tabs
+  grouped into Personalisation (General · Voice · Themes · User Memory)
+  and System (Security · Mac Control · Secrets · Channels).
+  Active tab gets a 3px cyan left border. Collapse toggle (48px
+  icon-only rail) persists to `localStorage`. Keyboard: `j`/`k`
+  or arrow keys to navigate, click to switch.
 - Tabs: General · Mac Control · Channels · Themes · Security
 - General: default project preset, agent type, MiniMax model
 - Mac Control: file path policy, shell allowlist, Accessibility API permission

@@ -216,6 +216,87 @@ set easier?".
   - `test renders legend chips with run count and avg WER`.
   - `test corpusColor() is stable — same id → same colour`.
 
+### Sprint 50 — Theme hover-preview + Settings sidebar nav
+
+Two scoped items from the 2026-07-01 UI review, in one sprint
+because both are pure presentation-layer changes with the
+same low risk profile.
+
+#### Added — Theme hover-preview (review item #7)
+
+- **frontend**: `stores/theme.ts` — adds `hoverTheme: GundamTheme | null`
+  + `setHoverTheme()`. The hover value updates
+  `document.documentElement.dataset.theme` IMMEDIATELY (so the
+  cockpit re-renders in real time) but is NOT persisted to
+  `localStorage` — only explicit clicks commit. When the hover
+  ends, the store reverts the DOM to the committed theme.
+- **frontend**: `components/gundam/ThemeHoverCard.tsx` NEW
+  (~180 LoC) — 2×4 grid of theme swatches; 100ms hover debounce
+  + 200ms leave debounce for smooth UX without flicker.
+  Keyboard nav: arrow keys move focus, Enter commits, Escape
+  closes without committing. Click outside closes. Header label
+  shows "Preview: <NAME>" live.
+- **frontend**: `components/gundam/HoverPreviewSwatch.tsx` NEW
+  (~40 LoC) — single swatch component with `data-committed` +
+  `data-hovered` markers for testing. Committed theme gets a
+  cyan border + checkmark overlay.
+- **frontend**: `components/gundam/ThemeSwitcher.tsx` — refactor:
+  button shrinks 72×72 → 56×56; subtitle now shows the committed
+  theme's name (e.g. "DESTINY") instead of the generic "MS MODE"
+  string. Opens `ThemeHoverCard` on hover/focus (was: Radix
+  DropdownMenu on click).
+
+#### Added — Settings sidebar nav (review item #9)
+
+- **frontend**: `routes/settings/SettingsSidebar.tsx` NEW (~140
+  LoC) — vertical 240px sidebar with the 8 tabs grouped into
+  Personalisation (General / Voice / Themes / User Memory) and
+  System (Security / Mac Control / Secrets / Channels).
+  Active tab gets a 3px cyan left border + bg-elevated.
+  Keyboard nav: `j`/`k` (or arrow keys) move down/up, click
+  activates. Collapse toggle persists to
+  `localStorage["gundam-halo-settings-sidebar-collapsed"]` —
+  collapsed state renders as 48px icon-only rail.
+- **frontend**: `routes/settings/index.tsx` — replaces the
+  horizontal 8-tab bar (which overflowed at ≤1024px viewports)
+  with `<SettingsSidebar>` + flex-1 content area.
+
+#### Tests
+
+- **frontend**: `ThemeHoverCard.test.tsx` NEW (+5 tests):
+  - `test_hovering_swatch_updates_document_data_theme`.
+  - `test_leaving_card_reverts_to_committed_theme_after_delay`.
+  - `test_clicking_swatch_commits_and_closes_card`.
+  - `test_escape_key_closes_card_without_committing`.
+  - `test_committed_swatch_has_cyan_border_and_checkmark`.
+- **frontend**: `SettingsSidebar.test.tsx` NEW (+4 tests):
+  - `test_renders_8_tabs_in_2_groups_personalisation_and_system`.
+  - `test_clicking_tab_calls_onChange_with_correct_id`.
+  - `test_active_tab_has_data_active_true_marker`.
+  - `test_collapse_toggle_persists_to_localStorage`.
+- **frontend**: `ThemeSwitcher.test.tsx` NEW (+3 tests):
+  - `test_button_aria_label_mentions_hover_preview`.
+  - `test_hovering_over_button_opens_ThemeHoverCard`.
+  - `test_committed_theme_reflected_in_button_subtitle`.
+
+#### Version bump
+
+`__version__` 0.1.20 → **0.1.22** (PATCH per Mavis memory rule —
+pure presentation polish, no new functional capability).
+Skipped 0.1.21 (Sprint 49 was drafted but never committed; bumping
+straight to 0.1.22 keeps the git history honest).
+4 surfaces synced.
+
+#### Out-of-scope locked (per spec)
+
+- Theme accent-color picker → Sprint 51+
+- Per-theme font overrides → Sprint 52+
+- Settings sidebar `⌘K` search → Sprint 51
+- Vim-style mnemonics (`g s`) → Sprint 51
+- Settings tab `1`-`8` shortcuts → Sprint 51
+- Mobile sidebar drawer (≥768px bottom-sheet) → Sprint 51
+- Theme-preview 5s delay persistence mode → out (YAGNI)
+
 ### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
 
 Closes the 3 long-standing "no auth yet" notes (Sprint 13/43/44
