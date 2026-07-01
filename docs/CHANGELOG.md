@@ -421,6 +421,94 @@ single-release strategy in Sprint 52 spec §6). 4 surfaces synced
   to ~67 total after audit (Sprint 52 includes gundam + dashboard
   + wizard + layout + live2d + ui).
 
+### Sprint 52 — Orphan audit + cleanup
+
+Cleanup-focused sprint: removes 4 dead React components, removes a
+dead import in CockpitLayout, and ships an `audit-orphans` script
+that future sprints can run to catch new orphans. The component
+gallery (`/styleguide` route) was attempted but hit TypeScript
+parser-state corruption on multi-line showcase entries — refiled
+for Sprint 54 with a simpler implementation.
+
+#### Deleted (4 dead components)
+
+- **frontend**: `components/gundam/EnergyBar.tsx` DELETED (29 LoC).
+  Audit verified 0 importers; ProjectCard uses the
+  `gundam-energy-bar` CSS class directly, not via the React
+  component.
+- **frontend**: `components/gundam/HoloPanel.tsx` DELETED (48 LoC).
+  Fully orphan; superseded by `HudCard`.
+- **frontend**: `components/gundam/RingProgress.tsx` DELETED
+  (89 LoC). Fully orphan; never wired into `/projects/new`.
+- **frontend**: `components/gundam/GundamAvatar.tsx` DELETED
+  (104 LoC). Fully orphan; `CSSAvatar` (216 LoC, superset)
+  replaced it in Sprint 41.
+- CSS classes `gundam-energy-bar` + `gundam-holo` are still
+  referenced by `ProjectCard.tsx` + `CommandInput.tsx`; their CSS
+  rules stay in `gundam.css`. Only `gundam-ring-progress` had no
+  CSS rules to clean.
+
+#### Edit (1 dead import)
+
+- **frontend**: `components/layout/CockpitLayout.tsx` — removes
+  `import { Live2DCanvas } from "@/components/live2d/Live2DCanvas"`
+  (was imported but never rendered). Sprint 53 will wire
+  Live2DCanvas via the new `AvatarCard` extraction.
+
+#### Edit (1 stale JSDoc)
+
+- **frontend**: `components/gundam/CyberWaveform.tsx` — JSDoc
+  mention of `GundamAvatar` → `CSSAvatar` (the actual replacement
+  since Sprint 41).
+
+#### New (1 audit script)
+
+- **frontend**: `scripts/audit-orphans.cjs` NEW (~80 LoC) — walks
+  `frontend/src/components/`, greps each file's exports, then
+  ripgrep-based search across `frontend/src/` for usage counts.
+  Skips JSDoc comment lines (so doc-block mentions don't count
+  as imports). Prints a list of 0-import exports; exits 0 if no
+  orphans, 1 otherwise (CI-friendly).
+- **frontend**: `package.json` — adds `"audit:orphans": "node
+  scripts/audit-orphans.cjs"` script. Run with `pnpm
+  audit:orphans` from `frontend/`.
+- Current script run reports 2 intentional orphans:
+  `closePalette` (palette API surface, never called) and
+  `Live2DCanvas` (Sprint 53 will wire it). Both flagged for
+  follow-up.
+
+#### Tests (3 new)
+
+- **frontend**: `src/scripts/OrphanAudit.test.ts` NEW (+3 tests):
+  - `test_the_4_deleted_orphan_files_no_longer_exist` — confirms
+    the deletions persisted.
+  - `test_script_runs_and_exits_0_or_1` — invokes the cjs script
+    and verifies the exit-code contract (0 = clean, 1 = orphans
+    found).
+  - `test_audit_orphans_script_file_exists` — guards against the
+    script being accidentally deleted.
+
+#### Version bump
+
+No version bump — Sprint 51 already moved 0.1.22 → 0.1.23 for
+this release cycle. Sprint 52 ships under that same 0.1.23 tag
+(per the single-release strategy in Sprint 52 spec §6).
+
+#### Out-of-scope locked (per spec)
+
+- Component gallery (`/styleguide` route) — deferred to Sprint 54
+  due to TypeScript parser-state corruption on multi-line
+  showcase entries. The data file + gallery component were
+  written, deleted, and rewritten multiple times without
+  resolving the parser issue. Sprint 54 will use a code-gen
+  approach (script writes a single-line JSON manifest, then a
+  loader reads it) to bypass the JSX-in-object-literal parser
+  trap.
+- Per-theme font overrides → Sprint 54+ candidate.
+- Live2D hydration in avatar card → Sprint 53.
+- Audit script improvements (filter by file extension, exclude
+  test files explicitly) → Sprint 54 if needed.
+
 ### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
 
 Closes the 3 long-standing "no auth yet" notes (Sprint 13/43/44

@@ -23,7 +23,6 @@ import {
   voiceEnd,
   voiceSendAudio,
 } from "@/services/halo-voice-ws";
-import { Live2DCanvas } from "@/components/live2d/Live2DCanvas";
 import { CSSAvatar } from "@/components/live2d/CSSAvatar";
 import { ImageSetAvatar } from "@/components/live2d/ImageSetAvatar";
 import { VoicePanel } from "@/components/gundam/VoicePanel";

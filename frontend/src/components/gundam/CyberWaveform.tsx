@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 
 /**
  * CyberWaveform — layered sine-wave oscilloscope driven by a shared
- * amplitude. Multiple CyberWaveform + GundamAvatar instances on the
+ * amplitude. Multiple CyberWaveform + CSSAvatar instances on the
  * same page all subscribe to the same amplitude source so they pulse
  * together ("talking gundam robot" feel).
  */
