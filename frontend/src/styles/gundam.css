@@ -92,6 +92,39 @@
   --border-color: #E8D0E0;
 }
 
+/* === Sprint 51 — CUSTOM ACCENT OVERRIDE ===
+ * IMPORTANT: this rule MUST be declared AFTER all [data-theme="..."]
+ * rules above (it already is, because it sits at line ~94). The
+ * cascade order is what makes custom-accent win over per-theme
+ * --accent: when [data-custom-accent] is present on <html>, the
+ * inline --custom-accent variable is set by the theme store and
+ * this rule cascades --accent from it. When absent, the per-theme
+ * rule above wins (so hover-preview of a theme swatch still shows
+ * that theme's preset accent).
+ */
+[data-custom-accent] {
+  --accent: var(--custom-accent);
+}
+
+/* === Sprint 51 — DRAWER ANIMATIONS ===
+ * Used by SettingsDrawer on mobile (<768px). Slide-up + fade-in
+ * keyframes; animations are 200ms ease-out per the spec.
+ */
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.animate-slide-up {
+  animation: slide-up 0.2s ease-out;
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
 /* === KEYFRAMES === */
 @keyframes psychoframePulse {
   0%, 100% { box-shadow: 0 0 10px rgba(255,105,180,0.3), 0 0 20px rgba(255,105,180,0.2); }

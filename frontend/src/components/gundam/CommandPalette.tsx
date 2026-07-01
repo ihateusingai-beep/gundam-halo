@@ -68,7 +68,8 @@ export type CommandCategory =
   | "Projects"
   | "Themes"
   | "Mac Control"
-  | "System";
+  | "System"
+  | "Settings";
 
 export interface Command {
   id: string;
@@ -318,6 +319,82 @@ function useCommands(): Command[] {
           }
         },
       },
+
+      // ---- Settings (Sprint 51) — deep-link to /settings?tab=<id> so
+      //  the SettingsPage URL-sync mounts the right tab content. Without
+      //  the query param the user lands on "general" by default.
+      {
+        id: "settings.general",
+        title: "Settings: General",
+        subtitle: "User · LLM · Server paths",
+        category: "Settings",
+        keywords: ["config", "preferences", "user", "llm", "server"],
+        icon: "◈",
+        perform: () => navigate("/settings?tab=general"),
+      },
+      {
+        id: "settings.voice",
+        title: "Settings: Voice",
+        subtitle: "Wake phrases · ASR · Corrector · Finetune",
+        category: "Settings",
+        keywords: ["asr", "tts", "wake", "fine", "tune", "microphone"],
+        icon: "◍",
+        perform: () => navigate("/settings?tab=voice"),
+      },
+      {
+        id: "settings.themes",
+        title: "Settings: Themes",
+        subtitle: "Theme + accent color",
+        category: "Settings",
+        keywords: ["color", "style", "ui", "accent"],
+        icon: "◐",
+        perform: () => navigate("/settings?tab=themes"),
+      },
+      {
+        id: "settings.memory",
+        title: "Settings: User Memory",
+        subtitle: "Per-user memory entries",
+        category: "Settings",
+        keywords: ["memory", "remember", "notes", "annotations"],
+        icon: "▣",
+        perform: () => navigate("/settings?tab=memory"),
+      },
+      {
+        id: "settings.security",
+        title: "Settings: Security",
+        subtitle: "Auth · Audit log · Token",
+        category: "Settings",
+        keywords: ["auth", "token", "audit", "security"],
+        icon: "⛨",
+        perform: () => navigate("/settings?tab=security"),
+      },
+      {
+        id: "settings.mac",
+        title: "Settings: Mac Control",
+        subtitle: "File paths · Shell · Accessibility",
+        category: "Settings",
+        keywords: ["mac", "control", "shell", "file", "system"],
+        icon: "⚙",
+        perform: () => navigate("/settings?tab=mac"),
+      },
+      {
+        id: "settings.secrets",
+        title: "Settings: Secrets",
+        subtitle: "API keys & tokens",
+        category: "Settings",
+        keywords: ["secrets", "api", "keys", "tokens", "credentials"],
+        icon: "⚿",
+        perform: () => navigate("/settings?tab=secrets"),
+      },
+      {
+        id: "settings.channels",
+        title: "Settings: Channels",
+        subtitle: "Telegram · Signal · Tailscale",
+        category: "Settings",
+        keywords: ["telegram", "signal", "tailscale", "channels", "phone"],
+        icon: "◉",
+        perform: () => navigate("/settings?tab=channels"),
+      },
     ];
 
     return cmds;
@@ -361,6 +438,7 @@ const CATEGORY_CYCLE: (CommandCategory | null)[] = [
   "Themes",
   "Mac Control",
   "System",
+  "Settings",
 ];
 
 export function CommandPalette() {

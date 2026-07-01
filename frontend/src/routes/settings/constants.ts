@@ -21,6 +21,39 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; icon: string
   { id: "voice", label: "Voice", icon: "◍" },
 ];
 
+/**
+ * Sprint 51 — sidebar entries grouped for the desktop Settings sidebar
+ * and the mobile SettingsDrawer. Source of truth for both surfaces.
+ * Order matters: rendered top-to-bottom in each group.
+ */
+export interface SidebarEntry {
+  id: SettingsTab;
+  label: string;
+  icon: string;
+  group: "personalisation" | "system";
+}
+
+export const SIDEBAR_ENTRIES: SidebarEntry[] = [
+  // Personalisation
+  { id: "general", label: "General", icon: "◈", group: "personalisation" },
+  { id: "voice", label: "Voice", icon: "◍", group: "personalisation" },
+  { id: "themes", label: "Themes", icon: "◐", group: "personalisation" },
+  { id: "memory", label: "User Memory", icon: "▣", group: "personalisation" },
+  // System
+  { id: "security", label: "Security", icon: "⛨", group: "system" },
+  { id: "mac", label: "Mac Control", icon: "⚙", group: "system" },
+  { id: "secrets", label: "Secrets", icon: "⚿", group: "system" },
+  { id: "channels", label: "Channels", icon: "◉", group: "system" },
+];
+
+/**
+ * Sprint 51 — validator for SettingsTab strings from URL params, localStorage,
+ * or any other untrusted source. Used by SettingsPage and MobileLayout.
+ */
+export function isValidSettingsTab(s: string | null | undefined): s is SettingsTab {
+  return !!s && SIDEBAR_ENTRIES.some(e => e.id === s);
+}
+
 export interface BgOption {
   id: CockpitBackground;
   label: string;

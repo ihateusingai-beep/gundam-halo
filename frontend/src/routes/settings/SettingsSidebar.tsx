@@ -19,34 +19,12 @@
 import { useEffect, useState } from "react";
 
 import { cn } from "@/lib/utils";
-import type { SettingsTab } from "./constants";
+import { SIDEBAR_ENTRIES, type SidebarEntry, type SettingsTab } from "./constants";
 
 interface SettingsSidebarProps {
   active: SettingsTab;
   onChange: (tab: SettingsTab) => void;
 }
-
-interface SidebarEntry {
-  id: SettingsTab;
-  label: string;
-  icon: string;
-  group: "personalisation" | "system";
-}
-
-// Sprint 50: group the 8 tabs into 2 sections per the UI review
-// (#9: Settings tab bar overflows; suggestion was to group).
-const SIDEBAR_ENTRIES: SidebarEntry[] = [
-  // Personalisation (user-facing knobs)
-  { id: "general", label: "General", icon: "◈", group: "personalisation" },
-  { id: "voice", label: "Voice", icon: "◍", group: "personalisation" },
-  { id: "themes", label: "Themes", icon: "◐", group: "personalisation" },
-  { id: "memory", label: "User Memory", icon: "▣", group: "personalisation" },
-  // System (privileged / infrastructure)
-  { id: "security", label: "Security", icon: "⛨", group: "system" },
-  { id: "mac", label: "Mac Control", icon: "⚙", group: "system" },
-  { id: "secrets", label: "Secrets", icon: "⚿", group: "system" },
-  { id: "channels", label: "Channels", icon: "◉", group: "system" },
-];
 
 const COLLAPSE_STORAGE_KEY = "gundam-halo-settings-sidebar-collapsed";
 

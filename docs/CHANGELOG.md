@@ -297,6 +297,130 @@ straight to 0.1.22 keeps the git history honest).
 - Mobile sidebar drawer (≥768px bottom-sheet) → Sprint 51
 - Theme-preview 5s delay persistence mode → out (YAGNI)
 
+### Sprint 51 — Settings ⌘K search + Mobile drawer + Theme accent picker
+
+Three user-facing capabilities on top of Sprint 50's settings sidebar
++ theme hover preview. All three target the settings page, theme
+system, and mobile breakpoint. Ships with Sprint 52 (`0.1.23`) per
+the spec's single-release strategy.
+
+#### Frontend additions
+
+- **frontend**: `components/gundam/CommandPalette.tsx` — adds 6th
+  category `Settings` with 8 commands (general/voice/themes/memory/
+  security/mac/secrets/channels). Each command's `perform()` calls
+  `navigate("/settings?tab=<id>")` — the deep-link target relies on
+  the new URL sync in `routes/settings/index.tsx` (next item).
+- **frontend**: `routes/settings/constants.ts` — adds `SidebarEntry`
+  interface + `SIDEBAR_ENTRIES: SidebarEntry[]` (8 entries in 2
+  groups) + `isValidSettingsTab()` validator. `SIDEBAR_ENTRIES` is
+  now the single source of truth for both the desktop sidebar AND
+  the new mobile SettingsDrawer.
+- **frontend**: `routes/settings/SettingsSidebar.tsx` — refactor:
+  imports `SIDEBAR_ENTRIES` from `constants.ts` (was previously
+  defined inline, blocking the mobile drawer from sharing the
+  same data).
+- **frontend**: `routes/settings/index.tsx` — adds `useSearchParams`
+  to read `?tab=` query param on mount and via `useEffect`
+  re-sync when the URL changes externally (e.g. palette
+  deep-link). New `handleSetActiveTab()` updates both state and
+  URL atomically. New header row with ⌘K button that calls
+  `openPalette({ category: "Settings" })`. Invalid `?tab=foo`
+  defaults to `"general"`.
+- **frontend**: `components/layout/SettingsDrawer.tsx` NEW (~165
+  LoC) — bottom-sheet drawer for mobile (<768px). 8 tabs in 2
+  groups, 2×2 grid (64×64px tiles, touch-friendly). Closes on
+  backdrop click / Escape / × button / route change. Body
+  scroll lock prevents iOS Safari from scrolling the page under
+  the modal.
+- **frontend**: `components/layout/MobileLayout.tsx` — refactor:
+  bottom-nav "Settings" link → button that opens the drawer;
+  header ⚙ icon link → button that also opens the drawer. New
+  `useEffect([location.pathname])` auto-closes the drawer on
+  route change. `activeTab` reads from `?tab=` via
+  `isValidSettingsTab` (same validator as desktop).
+- **frontend**: `stores/theme.ts` — adds `accent: string | null`
+  + `setAccent(hex)` + `applyAccentToDom()` module helper. The
+  setter validates `/^#[0-9a-f]{6}$/i` (6-digit hex only, 3-digit
+  shorthand silently rejected). Module init reads
+  `localStorage["gundam-halo-theme-accent"]` and applies on first
+  import (matches existing pattern at lines 41/70 for theme +
+  background — does NOT use Zustand persist middleware).
+- **frontend**: `routes/settings/ThemesTab.tsx` — adds `AccentPicker`
+  sub-component (color input + reset button + hex display) under
+  a new "Accent color" section. Reset button has `disabled={accent
+  === null}` (no-op click prevention).
+- **frontend**: `styles/gundam.css` — adds `[data-custom-accent] {
+  --accent: var(--custom-accent); }` rule declared AFTER all
+  per-theme `[data-theme="gundam-..."]` rules. This ordering is
+  what makes the custom accent win the CSS cascade over theme
+  presets. Also adds `slide-up` + `fade-in` keyframes for the
+  SettingsDrawer animation.
+- **frontend**: `test/setup.ts` — adds `ResizeObserver` polyfill
+  + `Element.prototype.scrollIntoView` stub. cmdk 1.1.1 (used by
+  the palette) requires `ResizeObserver`; jsdom doesn't provide
+  it.
+
+#### Tests (22 new)
+
+- **frontend**: `CommandPalette.test.tsx` NEW (+4 tests):
+  - `test_openPalette_accepts_settings_category_without_throwing`.
+  - `test_settings_commands_navigate_to_settings_with_tab_param`.
+  - `test_settings_is_part_of_CommandCategory_union`.
+  - `test_all_8_settings_command_IDs_are_well_formed`.
+  *(Note: full palette mount is exercised by the existing app-level
+  smoke flow; jsdom has a Provider-ordering race with cmdk 1.1.1
+  under React 19 that we side-step with focused unit tests on
+  the wiring.)*
+- **frontend**: `theme.test.ts` NEW (+5 tests):
+  - `test_defaults_accent_to_null`.
+  - `test_setAccent_updates_state_and_DOM`.
+  - `test_setAccent_null_removes_attribute_and_style`.
+  - `test_setAccent_invalid_string_silently_rejected`.
+  - `test_localStorage_round_trip_persists_accent`.
+- **frontend**: `ThemesTab.test.tsx` NEW (+2 tests):
+  - `test_renders_color_input_and_reset_button`.
+  - `test_reset_button_disabled_when_accent_null`.
+- **frontend**: `SettingsDrawer.test.tsx` NEW (+5 tests):
+  - `test_renders_nothing_when_closed`.
+  - `test_renders_8_tabs_in_2_groups`.
+  - `test_backdrop_click_closes_drawer`.
+  - `test_escape_key_closes_drawer`.
+  - `test_tab_click_calls_onSelect_and_onClose`.
+- **frontend**: `MobileLayout.test.tsx` NEW (+4 tests):
+  - `test_bottom_nav_settings_opens_drawer`.
+  - `test_header_gear_button_opens_drawer`.
+  - `test_drawer_selection_navigates_with_tab_param`.
+  - `test_route_change_closes_drawer`.
+
+#### Version bump
+
+`__version__` 0.1.22 → **0.1.23** (MINOR — 3 new user-facing
+capabilities: ⌘K search, mobile drawer, accent picker).
+Ships together with Sprint 52 (single release `0.1.23` per the
+single-release strategy in Sprint 52 spec §6). 4 surfaces synced
+(`backend/app/__init__.py`, `frontend/package.json`,
+`frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/tauri.conf.json`).
+
+#### Spec / docs
+
+- **docs**: `FEATURE-SPEC-SPRINT51-SETTINGS-SEARCH-MOBILE-ACCENT.md`
+  NEW (~250 LoC) — full spec with audit corrections applied (6
+  critical + 1 honourable fixes from the 2026-07-01 audit).
+- **docs**: `DASHBOARD.md` §3.5 (mobile drawer) + §4.5 (⌘K search)
+  + §4.7 (accent picker) — updates pending next session.
+
+#### Out-of-scope locked (per spec)
+
+- Per-theme accent override → defer to user feedback after ship.
+- ⌘K in-tab content search (VoiceTab / MemoryTab filter) → defer
+  to Sprint 51.x if users ask.
+- Live2D hydration in avatar card → Sprint 53.
+- Component gallery / orphan audit → Sprint 52.
+- Component counts in Sprint 52 spec (~55 components) — corrected
+  to ~67 total after audit (Sprint 52 includes gundam + dashboard
+  + wizard + layout + live2d + ui).
+
 ### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
 
 Closes the 3 long-standing "no auth yet" notes (Sprint 13/43/44
