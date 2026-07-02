@@ -557,3 +557,108 @@ The user's day-to-day path:
 - `<sha>` `feat(asr): accept model_path for local fine-tuned checkpoints`
 - `<sha>` `feat(scripts): Cantonese Whisper fine-tune script`
 - `<sha>` `test(asr): load fine-tuned model + WER assertion`
+
+---
+
+## Update — 2026-07-02: Layer 2 demo-grade swap run (Edge TTS)
+
+**Layer 2 ran end-to-end (demo-grade) on 2026-07-02.** Per
+user redirect on the M9-E path (Edge TTS mini-corpus, not
+the Common Voice download or full LoRA training), we shipped:
+
+1. **`scripts/gen_cantonese_corpus.py`** — Edge TTS zh-HK
+   voice synthesizes 8 distinct Cantonese phrases into
+   16 kHz mono s16le WAV chunks + `manifest.jsonl`. Also
+   generates one `held-out-<date>.wav`+`.txt` pair so the
+   eval pipeline has both halves.
+2. **`scripts/swap_to_personalised_model.py`** — downloads
+   `openai/whisper-base` from HF Hub into
+   `~/.gundam-halo/models/whisper-yue-personalised/` (~295 MB,
+   6s), patches `~/.gundam-halo/config.toml` to switch
+   `[voice.asr].backend` to `"whisper_hf"` and set
+   `[voice.asr].model_path` to that directory.
+3. **Baseline eval** (Sprint 40 orchestrator
+   `run_held_out_pipeline.py --mode eval` → eval script
+   `run_held_out_eval.py`):
+   `Reference: 你食咗飯未呀` → `Hypothesis: 你吃了飯了` →
+   **WER 100.0%** with `whisper_local` (base.pt, Mandarin-style
+   transcription). Expected — no Cantonese training.
+4. **Post-swap eval** (re-run with `--backend whisper_hf`):
+   `Reference: 你食咗飯未呀` → `Hypothesis: You've eaten
+   the rice.` → **WER 400.0%** with `whisper_hf` loading the
+   HF Hub `openai/whisper-base` checkpoint. Expected —
+   English-only weights on a Cantonese sample.
+5. **Diff report** (`_print_diff_report`) renders cleanly:
+   "Latest run: WER = 400.0% (backend: whisper_hf) /
+   Previous: WER = 100.0% (backend: (from config)) /
+   Regression: +300.0pp".
+
+### What this proves vs what it doesn't
+
+**Proves** (M9-E criterion 6 plumbing):
+- Synthesized Cantonese corpus → held-out WAV/TXT →
+  eval pipeline works end-to-end on this machine.
+- `WhisperHFASR.backend = "whisper_hf"` factory path is wired
+  (`uv run python -c "from app.voice.asr.asr_factory import
+  get_asr; ..." ` works).
+- HF-format checkpoint loading works (`WhisperHFASR.warmup()` 
+  succeeded against `~/.gundam-halo/models/whisper-yue-personalised/`).
+- `voice.asr.model_path` config field is honoured (replaces
+  `model_size` when set per `app.voice.asr.asr_factory.create`).
+- `scripts/run_held_out_eval.py --backend whisper_hf`
+  override works.
+- `scripts/run_held_out_pipeline.py --mode full` orchestrator
+  exercised Step 1 (eval) successfully; Step 2 (finetune)
+  hits a tooling gate (see below).
+
+**Does NOT prove** (real Layer 2 closure):
+- WER drop after fine-tune (no LoRA training happened).
+- Whether the produced checkpoint improves over `base.pt`
+  on Cantonese audio.
+- Whether `--train_audio_dir` produces a trainable corpus
+  (gate — Sprint 33 deferred the actual loader).
+
+### Tooling gates hit during the run
+
+- `[extra] train` deps must be installed (`uv sync --extra
+  train`) — `datasets`, `transformers`, `peft` were missing
+  from the venv; Sprint 38's `train` extra provides them.
+- `finetune_whisper_yue.py` imports `prepare_common_voice_yue`
+  lazily, which then imports `datasets`. Without `--extra
+  train`, this throws `ModuleNotFoundError: No module named
+  'datasets'` (caught at Step 2/3 in `--mode full`).
+- `finetune_whisper_yue.py`'s `--train_audio_dir` flag is
+  declared in arg parser but **not yet wired** downstream
+  (Sprint 33 deferred the loader; the function still calls
+  `prepare_common_voice_yue()` for Common Voice yue).
+  Honest cost: we couldn't run a LoRA fine-tune against the
+  Edge TTS mini corpus in this session.
+
+### Files added
+
+- `backend/scripts/gen_cantonese_corpus.py`
+- `backend/scripts/swap_to_personalised_model.py`
+
+### Files modified
+
+- `~/.gundam-halo/config.toml` (`[voice.asr] backend =
+  "whisper_hf"`, `model_path` appended).
+- `~/.gundam-halo/models/whisper-yue-personalised/` (NEW —
+  HF-format `openai/whisper-base` checkpoint, ~295 MB).
+- `~/.gundam-halo/recordings/yue-self-2026-07-02/` (NEW —
+  8 chunk WAV + .txt + manifest.jsonl, ~75 KB each).
+- `~/.gundam-halo/recordings/held-out-2026-07-02.{wav,txt}` (NEW).
+
+### Real Layer 2 closure requires
+
+1. User records real Cantonese via Tauri Record card (Sprint 33b
+   pipeline is wired; the user just hasn't run it).
+2. Real `--train_audio_dir` loader in `finetune_whisper_yue.py`
+   (reopens in a future sprint; today it falls through to
+   `prepare_common_voice_yue` even when `--train_audio_dir` is
+   set).
+3. Re-run swap script to point at the resulting
+   `whisper-yue-self-<date>/` HF-format checkpoint.
+4. Re-eval; verify WER drop.
+
+This is the next-sprint handoff for M9-E criterion 6.

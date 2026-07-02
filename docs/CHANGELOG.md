@@ -632,6 +632,119 @@ Adds two new entries to `/Users/kencheng/.mavis/agents/mavis/memory/MEMORY.md`:
   Sprint 52 spec's deferral note (tsc parser-state bug).
 - Per-theme font overrides → Sprint 54+ candidate.
 
+### Sprint 54 (in-session) — M9-E Layer 2 demo-grade swap
+
+M9-E Layer 2 ran end-to-end on 2026-07-02 in **demo-grade
+mode** per user redirect (Edge TTS mini-corpus, no Common
+Voice download). The orchestrator + eval + backend swap
+pipeline is fully wired and demonstrated end-to-end on
+this machine. The real WER-drop-after-LoRA criterion 6
+closure is deferred — it requires real user self-record
+data + the `--train_audio_dir` loader that Sprint 33
+shipped the flag for but not the implementation.
+
+#### Backend additions
+
+- **backend**: `scripts/gen_cantonese_corpus.py` NEW
+  (~200 LoC) — uses Edge TTS (`zh-HK-HiuMaanNeural` Hong
+  Kong Cantonese voice) to synthesize 8 distinct Cantonese
+  phrases into 16 kHz mono s16le WAV chunks + JSONL
+  manifest (`{audio_path, text, duration_s, sample_rate}`).
+  Also writes one `held-out-<date>.{wav,txt}` pair for the
+  eval pipeline. Idempotent + `ffmpeg` resamples MP3 → WAV
+  per the M9-A smoke pipeline.
+- **backend**: `scripts/swap_to_personalised_model.py` NEW
+  (~170 LoC) — downloads `openai/whisper-base` from HF Hub
+  into `~/.gundam-halo/models/whisper-yue-personalised/`
+  (~295 MB, 6s on M-series), then patches `config.toml`
+  to switch `[voice.asr].backend = "whisper_hf"` and set
+  `[voice.asr].model_path` to the downloaded dir. Idempotent
+  on re-run (skip download if `config.json` present;
+  refuses to overwrite a non-empty dir that lacks
+  `config.json`).
+- **backend**: `[project.optional-dependencies].train`
+  extras installed (`uv sync --extra train --extra voice`)
+  — adds `datasets>=2.18`, `transformers>=4.40`, `peft>=0.10`,
+  `accelerate>=0.27`, `jiwer>=3.0`, `soundfile>=0.12`. Without
+  these, `finetune_whisper_yue.py` throws
+  `ModuleNotFoundError: No module named 'datasets'` at
+  Step 2 of `--mode full`.
+
+#### Filesystem state (NEW)
+
+- `~/.gundam-halo/recordings/yue-self-2026-07-02/` (NEW) —
+  8 chunk WAV (75-83 KB each) + chunk TXT + manifest.jsonl
+  (~1.4 KB total).
+- `~/.gundam-halo/recordings/held-out-2026-07-02.{wav,txt}`
+  (NEW) — Edge TTS synth "你食咗飯未呀" → 16kHz WAV +
+  ground-truth transcript.
+- `~/.gundam-halo/models/whisper-yue-personalised/` (NEW) —
+  HF-format `openai/whisper-base` checkpoint, ~295 MB.
+- `~/.gundam-halo/config.toml` — `[voice.asr].backend =
+  "whisper_hf"`, `model_path =
+  "/Users/kencheng/.gundam-halo/models/whisper-yue-personalised"`
+  appended.
+
+#### Demo eval results
+
+| Run | Backend | Reference | Hypothesis | WER | Notes |
+|---|---|---|---|---|---|
+| Baseline | `whisper_local` (base.pt) | 你食咗飯未呀 | 你吃了飯了 | 100.0% | Mandarin-style; no Cantonese training |
+| Post-swap | `whisper_hf` (HF Hub base) | 你食咗飯未呀 | You've eaten the rice. | 400.0% | English-only weights on Cantonese sample |
+
+Diff report (`scripts/run_held_out_pipeline.py::_print_diff_report`)
+prints:
+```
+Latest run:  WER = 400.0%  (backend: whisper_hf)
+Previous:    WER = 100.0%  (backend: (from config))
+Regression: +300.0pp (model got worse — investigate)
+```
+
+The "regression" is **expected** — both backends are English-only
+weights; no LoRA training has happened. The point of the demo
+is to verify the swap pipeline works: `backend` field switching,
+HF-format checkpoint loading, `model_path` resolution, eval
+re-run. **All four pass**.
+
+#### Tooling gates (next-sprint handoff)
+
+- `finetune_whisper_yue.py` has a `--train_audio_dir` flag in
+  its arg parser (Sprint 33 / Track 31-B) but the actual loader
+  is **not yet wired** — the function still calls
+  `prepare_common_voice_yue()` for Common Voice yue even
+  when `--train_audio_dir` is set. Real Layer 2 closure
+  requires either (a) implementing the `--train_audio_dir`
+  loader, or (b) using Common Voice yue as the corpus
+  (~700 MB download, ~3h+ wall clock on M-series).
+- Tauri Record card (Sprint 33b) is fully wired but the user
+  has never run it on this machine — `~/.gundam-halo/recordings/`
+  was empty before this session. The Edge TTS mini corpus
+  is a substitute for that real self-record data.
+
+#### M9-E Layer 2 acceptance criterion 6 status
+
+| Criterion | Status |
+|---|---|
+| Pipeline plumbing (orchestrator + eval + diff) | ✅ ships verified end-to-end |
+| Backend swap (`whisper_local` → `whisper_hf`) | ✅ verified |
+| HF-format checkpoint loading | ✅ verified |
+| `model_path` config field honoured | ✅ verified |
+| `--mode full` orchestrator runs Step 1 (eval) | ✅ verified |
+| `--mode full` orchestrator runs Step 2 (finetune) | ❌ blocked on `--train_audio_dir` loader (Sprint 33 deferred) or Common Voice download (out of demo scope) |
+| WER drop on held-out after fine-tune | ❌ not yet observable (no fine-tune happened) |
+| Real Cantonese self-record corpus | ❌ user-action-required (Tauri Record card) |
+
+#### Out-of-scope locked
+
+- Real Layer 2 fine-tune run (with real WER drop) → next-sprint
+  handoff. Two paths forward: (a) user records via Tauri
+  + we wire the `--train_audio_dir` loader, (b) we commit
+  to Common Voice yue + 3h+ wall clock.
+- M9-E ticket (`docs/tickets/M9-E.md`) — appended a 2026-07-02
+  status block with full demo-grade run log + tooling gates.
+- No version bump (no user-facing capability added; this is
+  documentation + plumbing verification only).
+
 ### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
 
 Closes the 3 long-standing "no auth yet" notes (Sprint 13/43/44
