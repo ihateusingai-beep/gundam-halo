@@ -138,6 +138,54 @@ DEFAULT_CV_VERSION = "13.0"
 
 
 # ---------------------------------------------------------------------------
+# Data collator (Sprint 55)
+# ---------------------------------------------------------------------------
+
+
+class WhisperSpeechCollator:
+    """Pad labels with -100, stack input_features.
+
+    Sprint 55: DataCollatorForSeq2Seq is the wrong collator for
+    Whisper — it calls `tokenizer.pad()` on whatever it sees and
+    chokes on raw audio dicts. This collator:
+      - stacks `input_features` (already fixed-shape 80×3000
+        log-mel spectrograms from the WhisperProcessor)
+      - pads `labels` (variable-length token lists) with -100
+        so the cross-entropy loss ignores them.
+
+    Defined at module top-level (not inside
+    `build_model_and_processor`) because PyTorch DataLoader
+    workers need to pickle the collator — local classes can't
+    be pickled.
+    """
+
+    def __init__(self, processor):
+        self.processor = processor
+        self.label_pad_token_id = -100
+
+    def __call__(self, features):
+        import torch
+        input_features = [
+            torch.as_tensor(f["input_features"], dtype=torch.float32)
+            for f in features
+        ]
+        input_features = torch.stack(input_features, dim=0)
+        label_features = [
+            torch.as_tensor(f["labels"], dtype=torch.long)
+            for f in features
+        ]
+        labels_padded = torch.nn.utils.rnn.pad_sequence(
+            label_features,
+            batch_first=True,
+            padding_value=self.label_pad_token_id,
+        )
+        return {
+            "input_features": input_features,
+            "labels": labels_padded,
+        }
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -547,6 +595,182 @@ def prepare_common_voice_yue(
     return save_splits_as_parquet(splits, cache_dir)
 
 
+def prepare_self_record_dir(
+    train_audio_dir: Path,
+    val_split: float = 0.1,
+    seed: int = 42,
+) -> tuple[Path, Path, Path | None]:
+    """Load a self-record manifest.jsonl into a Whisper-compatible
+    HF Dataset.
+
+    Sprint 55 (in-session, 2026-07-03): the loader for the
+    `--train_audio_dir` flag that Sprint 33 declared but deferred.
+    Reads `train_audio_dir/manifest.jsonl` (or any .jsonl under
+    `train_audio_dir/`) where each line is::
+
+        {"audio_path": "...", "text": "...", "duration_s": 5.2, "sample_rate": 16000}
+
+    Returns a 3-tuple of (train_dataset_path, val_dataset_path,
+    test_dataset_path). Test path is None if no test.jsonl is
+    found; the caller can then use the held-out pair for eval.
+
+    The dataset is materialised as a HF Dataset of rows with the
+    schema expected by `Seq2SeqTrainer`:
+        - audio_path: str (WAV path)
+        - sentence:   str (training transcript)
+        - duration_s: float
+    Audio is loaded lazily by the trainer via the WhisperProcessor
+    (which calls `datasets.Audio(sampling_rate=16000)` on the
+    `audio` column — added in `_add_audio_column` below).
+    """
+    import json
+    from datasets import Dataset
+
+    if not train_audio_dir.exists():
+        raise FileNotFoundError(
+            f"--train_audio_dir not found: {train_audio_dir}"
+        )
+
+    # Find a manifest.jsonl inside train_audio_dir. Accept either
+    # `manifest.jsonl` directly under the dir or any `*.jsonl`
+    # inside a `train/` subdir (the fsicoli prep script layout).
+    manifest_path = train_audio_dir / "manifest.jsonl"
+    if not manifest_path.exists():
+        candidate = train_audio_dir / "train" / "manifest.jsonl"
+        if candidate.exists():
+            manifest_path = candidate
+        else:
+            raise FileNotFoundError(
+                f"No manifest.jsonl found at {train_audio_dir} "
+                f"or {train_audio_dir}/train/"
+            )
+    # Look for a sibling test/manifest.jsonl for the eval split.
+    # If absent, return None and let the trainer skip the eval
+    # step (caller passes --skip_eval or the held-out test pair).
+    test_path: Path | None = train_audio_dir / "test" / "manifest.jsonl"
+    if not test_path.exists():
+        test_path = train_audio_dir.parent / "test" / "manifest.jsonl"
+    if not test_path.exists():
+        test_path = None
+
+    logger.info(
+        f"prepare_self_record_dir: reading manifest from {manifest_path}"
+    )
+
+    # Parse manifest.jsonl → list of dicts
+    rows: list[dict] = []
+    with open(manifest_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    logger.info(
+        f"prepare_self_record_dir: {len(rows)} manifest rows"
+    )
+
+    # Schema: manifest uses `text` per Sprint 45 self-record
+    # contract; trainer expects `sentence` per Common Voice
+    # convention. Map once here so the trainer doesn't have to
+    # branch.
+    for r in rows:
+        if "text" in r and "sentence" not in r:
+            r["sentence"] = r["text"]
+
+    # Drop rows whose audio file is missing — saves the trainer
+    # from raising on a missing file at iteration time.
+    rows = [r for r in rows if Path(r["audio_path"]).exists()]
+    logger.info(
+        f"prepare_self_record_dir: {len(rows)} rows with audio present"
+    )
+
+    # Load audio bytes via soundfile. WhisperProcessor expects
+    # `sample["audio"]["array"]` (a numpy float array) and
+    # `sample["audio"]["sampling_rate"]`. We pre-load here so the
+    # trainer doesn't have to import soundfile / decode MP3→PCM at
+    # iteration time (which would dominate training wall clock).
+    import soundfile as sf
+    import numpy as np
+
+    def _load_audio(row: dict) -> dict:
+        audio, sr = sf.read(row["audio_path"], dtype="float32")
+        # WhisperProcessor handles stereo → mono internally via
+        # its feature_extractor, but to be safe we mono-ize here.
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        # Resample to 16 kHz if needed (soundfile gives native sr).
+        if sr != 16000:
+            # Naive linear resample. Good enough for fine-tune;
+            # Whisper's feature_extractor will also normalise.
+            target_len = int(len(audio) * 16000 / sr)
+            audio = np.interp(
+                np.linspace(0, len(audio), target_len, endpoint=False),
+                np.arange(len(audio)),
+                audio,
+            ).astype("float32")
+            sr = 16000
+        row["audio"] = {"array": audio, "sampling_rate": sr}
+        return row
+
+    # 90/10 train/val split (deterministic via seed)
+    import random
+    rng = random.Random(seed)
+    indices = list(range(len(rows)))
+    rng.shuffle(indices)
+    n_val = max(1, int(len(rows) * val_split))
+    val_indices = set(indices[:n_val])
+    train_rows = [rows[i] for i in range(len(rows)) if i not in val_indices]
+    val_rows = [rows[i] for i in range(len(rows)) if i in val_indices]
+    logger.info(
+        f"prepare_self_record_dir: split {len(train_rows)} train / "
+        f"{len(val_rows)} val (val_split={val_split})"
+    )
+
+    # Materialise as HF Datasets and save to disk so the caller
+    # can use the same `load_from_disk(str(paths.train))` pattern
+    # the Common Voice path uses. We write into a sibling
+    # `_dataset/` subdir next to the manifest.
+    output_root = train_audio_dir / "_dataset"
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    train_dir = output_root / "train"
+    val_dir = output_root / "validation"
+    # Pre-load audio bytes so the trainer doesn't decode at iter time.
+    logger.info("prepare_self_record_dir: pre-loading train audio…")
+    train_rows = [_load_audio(r) for r in train_rows]
+    logger.info("prepare_self_record_dir: pre-loading val audio…")
+    val_rows = [_load_audio(r) for r in val_rows]
+    Dataset.from_list(train_rows).save_to_disk(str(train_dir))
+    Dataset.from_list(val_rows).save_to_disk(str(val_dir))
+    logger.info(
+        f"prepare_self_record_dir: saved train={train_dir}, val={val_dir}"
+    )
+
+    test_dir: Path | None = None
+    if test_path is not None:
+        test_rows: list[dict] = []
+        with open(test_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                if "text" in row and "sentence" not in row:
+                    row["sentence"] = row["text"]
+                test_rows.append(row)
+        test_rows = [r for r in test_rows if Path(r["audio_path"]).exists()]
+        logger.info("prepare_self_record_dir: pre-loading test audio…")
+        test_rows = [_load_audio(r) for r in test_rows]
+        test_dir = output_root / "test"
+        Dataset.from_list(test_rows).save_to_disk(str(test_dir))
+        logger.info(
+            f"prepare_self_record_dir: saved test={test_dir} "
+            f"({len(test_rows)} rows)"
+        )
+
+    return train_dir, val_dir, test_dir
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
@@ -597,12 +821,12 @@ def build_model_and_processor(base_model: str, lora_r: int, lora_alpha: int):
     # Data collator: pads audio features to the longest in the batch
     # and pads label tokens to max length, replacing padding token ids
     # with -100 so they're ignored by the loss.
-    from transformers import DataCollatorForSeq2Seq
-
-    data_collator = DataCollatorForSeq2Seq(
-        processor=processor,
-        label_pad_token_id=-100,
-    )
+    # Sprint 55: DataCollatorForSeq2Seq is the wrong collator for
+    # Whisper (it's a text padder that calls tokenizer.pad() on
+    # whatever it sees — fails on raw audio). Use the
+    # WhisperSpeechCollator defined at module top-level (must be
+    # picklable for DataLoader workers).
+    data_collator = WhisperSpeechCollator(processor)
 
     return model, processor, data_collator
 
@@ -699,6 +923,74 @@ def evaluate_wer(model, processor, test_ds, wer_threshold: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Dataset preprocessing (Sprint 55)
+# ---------------------------------------------------------------------------
+
+
+def _preprocess_dataset(dataset, processor):
+    """Pre-extract Whisper `input_features` (audio → log-mel
+    spectrogram) and `labels` (text → token ids) for every row.
+
+    The Common Voice path (Sprint 21) used the HF datasets
+    `Audio(sampling_rate=16000)` helper plus an in-trainer
+    preprocessing hook that baked the WhisperProcessor into the
+    DataCollator. The self-record path stores raw numpy audio
+    arrays in `sample["audio"]["array"]` (no HF Audio helper),
+    so the trainer's data collator — which is a `DataCollator
+    ForSeq2Seq` that only pads text — would try to
+    `tokenizer.pad()` the raw audio and crash with::
+
+        ValueError: You should supply an encoding or a list of
+        encodings to this method that includes input_ids, but
+        you provided ['audio_path', 'text', 'duration_s',
+        'sample_rate', 'sentence', 'audio']
+
+    This function maps the dataset once at startup so every
+    row has the columns the collator + model expect:
+        - input_features: np.ndarray (80 × 3000 log-mel)
+        - labels: list[int] (tokenized sentence)
+    The collator then pads `labels` to max-length, replacing
+    pad token ids with -100.
+
+    Returns a `datasets.Dataset` with the new columns.
+    """
+    def _extract_features(batch):
+        # Whisper feature extractor: 30s fixed window, 16kHz
+        # mono audio → 80-mel spectrogram
+        audio_arrays = [
+            sample["array"] for sample in batch["audio"]
+        ]
+        features = processor.feature_extractor(
+            audio_arrays,
+            sampling_rate=16000,
+            return_tensors="np",
+        )
+        # Tokenize the sentence transcripts (Cantonese-aware
+        # because `processor` was built with
+        # `language="cantonese", task="transcribe"` in
+        # build_model_and_processor — well, that's on the
+        # model side; the tokenizer itself is language-agnostic)
+        labels = processor.tokenizer(
+            batch["sentence"],
+            padding=False,
+            truncation=True,
+            max_length=128,
+        ).input_ids
+        return {
+            "input_features": features.input_features,
+            "labels": labels,
+        }
+
+    return dataset.map(
+        _extract_features,
+        batched=True,
+        batch_size=8,
+        remove_columns=dataset.column_names,
+        desc="Pre-extract Whisper features + tokens",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -735,13 +1027,37 @@ def main() -> int:
         )
         return 1
 
-    # 1. Prepare dataset (stubbed in v0.1.3; the next chunk of work).
-    cache_dir = Path(os.path.expanduser("~/.gundam-halo/cache/cv-yue/"))
-    paths = prepare_common_voice_yue(
-        cv_version=args.dataset_version,
-        cache_dir=cache_dir,
-        max_train_hours=args.max_train_hours,
-    )
+    # 1. Prepare dataset.
+    # Sprint 55: dispatch on --train_audio_dir (self-record / fsicoli
+    # mirror path) vs the default Common Voice path. The self-record
+    # path does NOT need CV-yue on HF Hub — it just needs a
+    # manifest.jsonl + WAV files under the supplied dir (same schema
+    # `gen_cantonese_corpus.py` produces for Tauri record output).
+    if args.train_audio_dir:
+        logger.info(
+            f"Using --train_audio_dir: {args.train_audio_dir} "
+            "(self-record / fsicoli CV mirror path; "
+            "skipping Common Voice download)"
+        )
+        train_dir, val_dir, test_dir = prepare_self_record_dir(
+            train_audio_dir=Path(args.train_audio_dir),
+        )
+        # Wrap as DatasetPaths-like object so the rest of main()
+        # can use `paths.train/validation/test` uniformly.
+        from dataclasses import dataclass
+        @dataclass
+        class _LocalPaths:
+            train: Path
+            validation: Path
+            test: Path | None
+        paths = _LocalPaths(train=train_dir, validation=val_dir, test=test_dir)
+    else:
+        cache_dir = Path(os.path.expanduser("~/.gundam-halo/cache/cv-yue/"))
+        paths = prepare_common_voice_yue(
+            cv_version=args.dataset_version,
+            cache_dir=cache_dir,
+            max_train_hours=args.max_train_hours,
+        )
 
     # 2. Build model + LoRA. Sprint 33: when --base_model_path
     # is set, load the user-supplied HF-format checkpoint
@@ -766,6 +1082,17 @@ def main() -> int:
     from datasets import load_from_disk
     train_ds = load_from_disk(str(paths.train))
     val_ds = load_from_disk(str(paths.validation))
+    # Sprint 55: pre-extract input_features + labels so the
+    # Seq2SeqTrainer's DataCollatorForSeq2Seq (which only pads
+    # text) doesn't try to `tokenizer.pad()` the raw audio dict.
+    # The Common Voice path went through `ds.cast_column("audio",
+    # Audio(sampling_rate=16000))` + a built-in preprocessor —
+    # the self-record path needs the same pre-extraction
+    # explicitly because we don't use the HF datasets Audio
+    # helper.
+    logger.info("Pre-extracting input_features + labels…")
+    train_ds = _preprocess_dataset(train_ds, processor)
+    val_ds = _preprocess_dataset(val_ds, processor)
     trainer = build_trainer(
         model=model,
         processor=processor,
@@ -794,17 +1121,41 @@ def main() -> int:
 
     # 6. Eval.
     if not args.skip_eval:
-        test_ds = load_from_disk(str(paths.test))
-        score = evaluate_wer(
-            model=merged,
-            processor=processor,
-            test_ds=test_ds,
-            wer_threshold=args.wer_threshold,
-        )
+        # Sprint 55: paths.test may be None in the self-record
+        # path (no sibling test/manifest.jsonl). Skip eval in
+        # that case — the held-out test pair or --skip_eval
+        # handles the acceptance gate.
+        test_path = getattr(paths, "test", None)
+        if test_path is None or not Path(test_path).exists():
+            logger.warning(
+                "No test split available (paths.test is None or "
+                "missing on disk). Skipping eval — the held-out "
+                "test pair will be used by the orchestrator for "
+                "the post-train WER check."
+            )
+            score = float("nan")
+        else:
+            test_ds = load_from_disk(str(test_path))
+            score = evaluate_wer(
+                model=merged,
+                processor=processor,
+                test_ds=test_ds,
+                wer_threshold=args.wer_threshold,
+            )
         # Persist the WER alongside the model so the operator can
         # inspect it later without re-running the eval.
         with open(Path(args.output_dir) / "eval.json", "w") as f:
-            json.dump({"wer": score, "threshold": args.wer_threshold}, f)
+            json.dump(
+                {"wer": score, "threshold": args.wer_threshold},
+                f,
+            )
+        # Sprint 55: NaN score means "eval was skipped" (no test
+        # split available in self-record path). Return 0 to
+        # signal success — the orchestrator / swap step will run
+        # the held-out pair eval separately.
+        import math as _math
+        if _math.isnan(score):
+            return 0
         return 0 if score <= args.wer_threshold else 2
 
     return 0
@@ -820,6 +1171,7 @@ __all__ = [
     "DEFAULT_CV_VERSION",
     "parse_args",
     "prepare_common_voice_yue",
+    "prepare_self_record_dir",
     "build_model_and_processor",
     "build_trainer",
     "evaluate_wer",

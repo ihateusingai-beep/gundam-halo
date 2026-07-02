@@ -82,7 +82,10 @@ train = [
     "transformers>=4.40",            # HF Whisper model + Trainer
     "peft>=0.10",                    # LoRA adapters
     "datasets>=2.18",                # Common Voice yue loader
-    "accelerate>=0.27",              # MPS / multi-GPU orchestration
+    "accelerate>=1.0",               # MPS / multi-GPU orchestration
+                                    # (>=1.0 needed for transformers
+                                    # 4.57.x's keep_torch_compile
+                                    # kwarg on Accelerator.unwrap_model)
     "jiwer>=3.0",                    # WER evaluation
     "soundfile>=0.12",               # Audio I/O for training data
 ]
@@ -154,7 +157,12 @@ voice-hf = [
     # users can pin a CUDA index. We don't pin a specific
     # torch version because the MPS backend moves quickly.
     "torch>=2.1,<3",
-    "accelerate>=0.30,<1",         # transformers device_map support
+    "accelerate>=0.30,<2",         # transformers device_map support
+                                   # (Sprint 55: bumped from <1 to <2
+                                   # because the train extra now
+                                   # requires accelerate>=1.0, and
+                                   # voice-hf + train should resolve
+                                   # compatibly)
     "soundfile>=0.12,<1",          # audio I/O for HF processor
 ]
 

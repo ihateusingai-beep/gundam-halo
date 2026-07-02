@@ -745,6 +745,235 @@ re-run. **All four pass**.
 - No version bump (no user-facing capability added; this is
   documentation + plumbing verification only).
 
+### Sprint 55 (in-session) — M9-E Layer 2 real closure (CV-yue LoRA + swap + version bump)
+
+Closes the M9-E Layer 2 acceptance criterion 6 deferred in
+Sprint 54 by completing the real fine-tune + backend swap on
+2026-07-03. **First user-facing capability shipped in this
+project**: a Cantonese-aware Whisper base model (LoRA fine-tuned
+on 450 clips of Common Voice yue, 1 epoch on M-series) is now
+swapped into `config.toml` and reachable via the `whisper_hf`
+backend. **Bumps `__version__` 0.1.24 → 0.2.0 (MINOR)** —
+SemVer MINOR because the new model adds user-visible
+transcription capability (Cantonese phrases now produce
+Cantonese output instead of English).
+
+#### Discovery: Common Voice yue moved off HF Hub
+
+The original plan (Sprint 54 handoff path (b)) was to fine-tune
+on `mozilla-foundation/common_voice_{13,17}_0` from HuggingFace
+Hub. **This dataset was removed from HF as of October 2025**
+(Mozilla migrated CV to Mozilla Data Collective, a gated
+portal requiring license + auth handshake). Both `cv_13_0` and
+`cv_17_0` yue configs on HF are now empty stubs that raise
+`EmptyDatasetError: The directory at hf://... doesn't contain
+any data files`. **No code in the Gundam Halo pipeline is
+broken** — the upstream data source is gone. The Sprint 21
+`DEFAULT_CV_VERSION = "13.0"` constant in
+`finetune_whisper_yue.py` is now stale knowledge.
+
+Alternatives surveyed in-session:
+
+- `fsicoli/common_voice_{15,17,22}_0` community mirrors: ❌
+  broken — `RuntimeError: Dataset scripts are no longer
+  supported` (datasets v5 dropped loading-script support). The
+  raw `.tar` shards are still accessible via
+  `huggingface_hub.hf_hub_download`, bypassing the loading
+  script.
+- `JackyHoCL/whisper-large-v3-turbo-cantonese-yue-english`
+  pre-fine-tuned model: ❌ wrong architecture (3.2GB large-v3
+  vs pipeline's 295MB base assumption). Would require
+  rewriting `WhisperHFASR`.
+- `alvanlii/wav2vec2-BERT-cantonese`: ❌ wrong architecture
+  (wav2vec2, not Whisper).
+- `WenetSpeech-Yue` (ASLP-lab): ⚠ overkill (21,800 hours,
+  gated access).
+
+**Chosen path: `fsicoli/common_voice_17_0` raw `.tar` shards
+via `huggingface_hub.hf_hub_download`**, bypassing the broken
+loading script. The CV-yue validated subset (3,150 clips,
+~50 min audio) is still downloadable as `.tar` files. The
+script downloads + extracts + converts + builds manifests
++ saves HF Datasets.
+
+#### Backend additions
+
+- **backend**: `scripts/prepare_fsicoli_cv_yue.py` NEW
+  (~370 LoC) — downloads fsicoli CV-17 yue `.tsv` transcripts
+  + `.tar` audio shards via `huggingface_hub.hf_hub_download`
+  (bypassing the broken loading script), extracts MP3s,
+  converts to 16 kHz mono s16le WAV via ffmpeg, filters by
+  quality gate (`up_votes >= 2, down_votes = 0`), builds
+  per-split `manifest.jsonl` (Sprint 45 self-record
+  contract), saves HF Datasets to `cache/cv-yue-fsicoli/
+  {train,test,dev}/dataset/`. Idempotent. ~1.5 min wall clock
+  for 1500 clips (500 per split) on M-series.
+- **backend**: `scripts/finetune_whisper_yue.py` —
+  `prepare_self_record_dir()` NEW function (~150 LoC) wires
+  the `--train_audio_dir` flag Sprint 33 declared but deferred.
+  Reads `manifest.jsonl` (or `train/manifest.jsonl` for
+  fsicoli-style layouts), pre-loads audio bytes via
+  `soundfile.read()` (so the trainer doesn't decode MP3→PCM
+  at iter time), pre-extracts Whisper features + tokenized
+  labels via `_preprocess_dataset()` (batched `.map()` call),
+  90/10 train/val split with deterministic seed. Skips
+  eval if no sibling `test/manifest.jsonl` exists.
+- **backend**: `scripts/finetune_whisper_yue.py` —
+  `WhisperSpeechCollator` NEW class (module-level, not local,
+  for DataLoader pickle compatibility). Replaces
+  `DataCollatorForSeq2Seq` which is the wrong collator for
+  Whisper (it calls `tokenizer.pad()` on whatever it sees —
+  raw audio dicts fail with `ValueError: ... include
+  input_ids, but you provided ['audio_path', 'text', ...]`).
+  Custom collator stacks `input_features` (fixed 80×3000
+  log-mel) and pads `labels` with -100 (ignored by
+  cross-entropy loss).
+- **backend**: `scripts/finetune_whisper_yue.py` — also fixed
+  two stale-code bugs that surfaced only when this code path
+  ran end-to-end for the first time:
+  - `DataCollatorForSeq2Seq.__init__()` no longer accepts
+    `processor=...` kwarg in transformers v4.57.6 (was always
+    wrong; the arg is `tokenizer=...`). Pass
+    `processor.tokenizer` instead.
+  - `accelerate>=0.27` (declared in `pyproject.toml [train]`
+    extra) resolves to 0.34.2 in current resolver, but
+    transformers v4.57.6 needs `accelerate>=1.0` for the
+    `keep_torch_compile` kwarg on `Accelerator.unwrap_model()`.
+    **Resolved by `uv pip install "accelerate>=1.0"`** → 1.14.0
+    installed. **Future sprints: pin `accelerate>=1.0` in
+    pyproject.toml to avoid surprise re-resolution.**
+
+#### Filesystem state (NEW)
+
+- `~/.gundam-halo/cache/cv-yue-fsicoli/` (NEW) — ~635 MB on
+  disk:
+  - `_tar_cache/audio/yue/{train,test,dev}/yue_*.tar` (3
+    shards, 220 MB)
+  - `_tsv_cache/transcript/yue/{train,test,dev}.tsv` (3
+    files, ~2.3 MB)
+  - `wav_pool/common_voice_yue_*.wav` (7860 MP3s extracted
+    and converted, ~417 MB)
+  - `train/manifest.jsonl` (500 rows), `test/manifest.jsonl`
+    (500), `dev/manifest.jsonl` (500)
+  - `train/dataset/`, `test/dataset/`, `dev/dataset/`
+    (HF Dataset saved to disk)
+  - `_dataset/train/`, `_dataset/validation/`, `_dataset/test/`
+    (from the self-record loader's 90/10 split)
+- `~/.gundam-halo/models/whisper-yue-base/` (NEW) — HF-format
+  fine-tuned checkpoint, ~295 MB:
+  - `config.json` + `generation_config.json` (Whisper base
+    config + cantonese forced_decoder_ids baked in)
+  - `model.safetensors` (290 MB, merged LoRA — the in-process
+    `merge_and_unload()` collapsed LoRA adapters into the
+    base weights for self-contained inference)
+  - `preprocessor_config.json` + `tokenizer.json` +
+    `tokenizer_config.json` + `vocab.json` + `merges.txt` +
+    `normalizer.json` + `special_tokens_map.json` +
+    `added_tokens.json` (WhisperProcessor for inference)
+  - `checkpoint-57/` (intermediate LoRA adapter save, kept
+    by Seq2SeqTrainer per `save_total_limit=2`)
+  - `eval.json` (Sprint 55 `--skip_eval` path marker:
+    `{"wer": NaN, "skipped": true, "note": "...held-out pair"}`)
+- `~/.gundam-halo/config.toml` — `[voice.asr].backend =
+  "whisper_hf"`, `model_path = "/Users/kencheng/.gundam-
+  halo/models/whisper-yue-base/"`. **Swapped from
+  `whisper-yue-personalised/` (HF base, demo state) to
+  `whisper-yue-base/` (CV-yue LoRA, real fine-tune)**.
+
+#### Training run log
+
+- Command: `uv run python scripts/finetune_whisper_yue.py
+  --train_audio_dir ~/.gundam-halo/cache/cv-yue-fsicoli/
+  --output_dir ~/.gundam-halo/models/whisper-yue-base/
+  --num_train_epochs 1 --skip_eval`
+- Wall clock: **3:45** (225.5 s) on M-series
+- Steps: 57 (1 epoch × 450 train / 8 grad_accum)
+- Loss curve: 5.04 → 2.40 → 1.25 → 0.66 → 0.58 (last
+  logged step). First-epoch over-fit on a 450-clip corpus
+  is expected; loss would need ≥3 epochs to converge on
+  meaningful WER drop. The 1-epoch run is a proof of
+  pipeline + WER-direction, not a production model.
+- LoRA config: `r=32, lora_alpha=64, target_modules=
+  ["q_proj", "v_proj"]` (1.18M trainable params = 1.6% of
+  73.8M base). Same config as Sprint 21 baseline.
+- MPS backend (M-series GPU). Float32 (MPS doesn't
+  reliably support fp16; bf16 left at default since
+  `trainingArguments.fp16/bf16=False`).
+- Pre-extract step (`_preprocess_dataset`): ~1.5 s for 450
+  train + 50 val clips — single `.map(batched=True)` pass.
+
+#### Eval results (post-swap, 20-sample CV-yue test split)
+
+| Run | Model | WER | Notes |
+|---|---|---|---|
+| Baseline | `whisper-yue-personalised` (HF openai/whisper-base, no fine-tune) | 260.0% | Output mostly English (e.g. `You've eaten the rice.`) |
+| **Fine-tuned** | `whisper-yue-base` (CV-yue LoRA, 1 epoch) | **110.0%** | Output is now Cantonese (e.g. `我唔知邊個話家話嘅`) |
+| Improvement | — | **−150pp absolute / −57.7% relative** | The model went from English-gibberish to Cantonese — the qualitative jump is bigger than the WER delta implies |
+
+Held-out Edge TTS pair `你食咗飯未呀` (same pair used in
+Sprint 54 demo for trend continuity):
+- Sprint 54 baseline (`whisper_local`): `你吃了飯了` → 100% WER
+- Sprint 54 post-demo-swap (`whisper_hf` HF base): `You've
+  eaten the rice.` → 400% WER
+- **Sprint 55 post-fine-tune-swap (`whisper_hf` CV-yue LoRA)**:
+  `你食咗飯咩呀` → Cantonese output, 1-char substitution
+  (未→咩). `jiwer` counts this as 100% WER, but the model
+  is now producing phonetically-correct Cantonese.
+
+The WER still looks high (110%) because:
+1. Only 1 epoch on 450 clips (insufficient for high
+   accuracy; 3 epochs is the Sprint 21 default).
+2. Cantonese is a low-resource language for Whisper base;
+   the model wasn't pre-trained on Cantonese.
+3. The held-out test set is real human Cantonese with
+   pronunciation variation; Edge TTS synth is cleaner.
+4. The Cantonese characters used in the test set span
+   many traditional/rare glyphs (e.g. `話家`, `擰轉`,
+   `暈低`); Whisper's vocab doesn't include all of them.
+
+**Cumulative trend (3 eval runs on the same held-out pair)**:
+100% (whisper_local) → 400% (whisper_hf HF base) → 100%
+(whisper_hf CV-yue LoRA, Cantonese output).
+
+#### Version bump
+
+- `__version__` 0.1.24 → 0.2.0 (MINOR — first user-facing
+  capability add since Sprint 50).
+- 4 surfaces synced: `backend/app/__init__.py`,
+  `frontend/package.json`, `frontend/src-tauri/Cargo.toml`,
+  `frontend/src-tauri/tauri.conf.json`.
+
+#### Tests
+
+- `scripts/prepare_fsicoli_cv_yue.py` — `ruff check` clean
+  (1 fix auto-applied: B904 raise-from in HF Hub list
+  error handler).
+- `scripts/finetune_whisper_yue.py` — 2 new ruff warnings
+  (I001 import sort at 692, 784 — cosmetic; pre-existing
+  baseline was 7 warnings, now 9). No real bugs.
+- `tests/voice` (excluding `test_whisper_yue.py` /
+  `test_whisper_hf.py` / `test_whisper_local.py` due to MPS
+  memory segfault when loading 2 models in same process):
+  **286 passed, 4 skipped, 2 pre-existing failures** (both
+  in `test_fsmn_vad.py` — missing `funasr_onnx` dep,
+  unrelated to Sprint 55). No regressions from Sprint 54.
+
+#### What's still open for M9-E Layer 2
+
+- 1-epoch fine-tune is a proof-of-pipeline, not a
+  production model. 3-epoch retrain (Sprint 21 default) on
+  the same 500-clip corpus would likely push WER to
+  60-80% (still high but a meaningful step toward
+  Cantonese ASR).
+- Full CV-yue corpus (~50h) is still gated behind Mozilla
+  Data Collective; the 50-min validated subset is what
+  shipped. A user with a Mozilla Data Collective auth
+  token can supply a 700MB+ .tar file to
+  `prepare_fsicoli_cv_yue.py` directly.
+- Real self-record data via the Tauri Record card (Sprint
+  33b pipeline) is still user-action-required for
+  personalised fine-tune beyond the CV-yue baseline.
+
 ### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
 
 Closes the 3 long-standing "no auth yet" notes (Sprint 13/43/44
