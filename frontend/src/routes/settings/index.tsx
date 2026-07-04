@@ -7,20 +7,25 @@ import { openPalette } from "@/components/gundam/CommandPalette";
 import { api, ApiError } from "@/lib/api";
 import type { Settings } from "@/types/api";
 
-import { ChannelsTab } from "./ChannelsTab";
-import { GeneralTab } from "./GeneralTab";
-import { MacTab } from "./MacTab";
-import { MemoryTab } from "./MemoryTab";
-import { SecretsTab } from "./SecretsTab";
-import { SecurityTab } from "./SecurityTab";
+import { ChannelsTab } from "./tabs/ChannelsTab";
+import { GeneralTab } from "./tabs/GeneralTab";
+import { MacTab } from "./tabs/MacTab";
+import { MemoryTab } from "./tabs/MemoryTab";
+import { SecretsTab } from "./tabs/SecretsTab";
+import { SecurityTab } from "./tabs/SecurityTab";
 import { SettingsSidebar } from "./SettingsSidebar";
 import { isValidSettingsTab, type SettingsTab } from "./constants";
-import { ThemesTab } from "./ThemesTab";
-import { VoiceTab } from "./VoiceTab";
+import { ThemesTab } from "./tabs/ThemesTab";
+import { VoiceTab } from "./tabs/VoiceTab";
 
 /** Settings page — 8 tabs grouped into Personalisation + System (Sprint 50).
  *  Sprint 51: URL ?tab=<id> sync + ⌘K button to open CommandPalette pre-filtered
- *  to the Settings category. */
+ *  to the Settings category.
+ *  Sprint 56 R3: tab rendering uses a `TAB_PANELS` map instead of an
+ *  if/else chain — Sprint 56 audit flagged the 8-arm if/else chain as
+ *  boilerplate-with-no-single-source-of-truth. The map lives below
+ *  alongside the page so adding a 9th tab = adding an entry to
+ *  `SIDEBAR_ENTRIES`, `TAB_PANELS`, and `SettingsTab` type. */
 export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabFromUrl = searchParams.get("tab");
@@ -118,15 +123,47 @@ export function SettingsPage() {
             ⌘K
           </button>
         </div>
-        {activeTab === "general" && <GeneralTab settings={settings} />}
-        {activeTab === "mac" && <MacTab settings={settings} />}
-        {activeTab === "channels" && <ChannelsTab settings={settings} />}
-        {activeTab === "themes" && <ThemesTab />}
-        {activeTab === "security" && <SecurityTab />}
-        {activeTab === "secrets" && <SecretsTab />}
-        {activeTab === "memory" && <MemoryTab />}
-        {activeTab === "voice" && <VoiceTab />}
+        <ActiveTabPanel id={activeTab} settings={settings} />
       </div>
     </div>
   );
 }
+
+/** Sprint 56 R3: thin wrapper that picks the right panel from
+ * `TAB_PANELS`. Splits the if/else chain out of `SettingsPage`'s
+ * render block so future tabs only require a single `TAB_PANELS`
+ * entry + the panel file under `./tabs/`.
+ *
+ * Why not a lookup at the call site? Keeping the if/else hidden
+ * here (vs in `SettingsPage`'s render) lets the panel tree stay
+ * a single component for the React devtools tree, AND keeps
+ * `SettingsPage` declarative.
+ */
+function ActiveTabPanel({
+  id,
+  settings,
+}: {
+  id: SettingsTab;
+  settings: Settings;
+}) {
+  const Panel = TAB_PANELS[id];
+  return <Panel settings={settings} />;
+}
+
+/** Sprint 56 R3: single source of truth for "which panel renders
+ * which tab id". Adding a 9th tab = add entry here + entry in
+ * `SIDEBAR_ENTRIES` + entry in `SettingsTab` type union. The
+ * constants.ts file already has a TypeScript helper
+ * (`isValidSettingsTab`) that invalidates the URL ?tab=foo guard
+ * automatically once the tab is removed from `SIDEBAR_ENTRIES`.
+ */
+const TAB_PANELS: Record<SettingsTab, React.ComponentType<{ settings: Settings }>> = {
+  general: GeneralTab,
+  mac: MacTab,
+  channels: ChannelsTab,
+  themes: () => <ThemesTab />,
+  security: () => <SecurityTab />,
+  secrets: () => <SecretsTab />,
+  memory: () => <MemoryTab />,
+  voice: () => <VoiceTab />,
+};

@@ -51,13 +51,16 @@ _config: Optional["Config"] = None
 # ---------------------------------------------------------------------------
 # Default paths
 # ---------------------------------------------------------------------------
+# Sprint 56 R1: `app.core.config.DEFAULT_HOME` and `expand_home` are
+# now re-exports from `app.paths` — see that module for the canonical
+# implementation. Kept here verbatim so existing imports
+# (`from app.core.config import DEFAULT_HOME, expand_home`) continue
+# to work unchanged. Migration plan: new code should import from
+# `app.paths` directly (and use `halo_home()` for the env-var-aware
+# resolver).
 
-DEFAULT_HOME = Path.home() / ".gundam-halo"
-
-
-def expand_home(path: str | Path) -> Path:
-    """Expand ~ and resolve to absolute Path."""
-    return Path(os.path.expanduser(str(path))).resolve()
+from app.paths import DEFAULT_HALO_HOME as DEFAULT_HOME  # noqa: F401
+from app.paths import expand_home  # noqa: F401
 
 
 # `Config.home` uses `expand_home(DEFAULT_HOME)` for its default

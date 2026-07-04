@@ -49,11 +49,13 @@ from app.api.ws_protocol import (  # noqa: F401
     set_responder,
 )
 
-# Internal helper that some tests reach into — keep accessible
-# from the shim path so existing test imports don't break.
+# Internal helpers — re-exported so legacy imports keep working.
+# Sprint 56 R5: `_resolve_stream_iter` deleted (strict async contract
+# means callers no longer need a normaliser). If anything still
+# imports it, the test will raise ImportError loud — that's the
+# intended loud failure mode for the R5 refactor.
 from app.api.ws_protocol import (  # noqa: F401
     _build_responder,
-    _resolve_stream_iter,
     _send_json,
     _send_text_then_binary,
 )
@@ -77,8 +79,9 @@ __all__ = [
     "set_restart_required",
     "schedule_restart_if_needed",
     # Internal helpers — re-exported so legacy imports keep working.
+    # Sprint 56 R5: `_resolve_stream_iter` removed (strict async
+    # contract — callers no longer need a normaliser).
     "_build_responder",
-    "_resolve_stream_iter",
     "_send_json",
     "_send_text_then_binary",
 ]

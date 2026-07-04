@@ -49,8 +49,9 @@ def audit_log_path(home: Path | None = None) -> Path:
     The directory is created lazily on first write.
     """
     if home is None:
-        env = os.environ.get("HALO_HOME")
-        home = Path(env).expanduser().resolve() if env else (Path.home() / ".gundam-halo")
+        # Sprint 56 R1: canonical env-var resolution via app.paths.
+        from app.paths import logs_dir
+        return logs_dir() / _LOG_FILENAME
     return home / "logs" / _LOG_FILENAME
 
 

@@ -43,7 +43,9 @@ logger = logging.getLogger(__name__)
 # override via `SendMessageConfig.yolo_model_path`. The
 # model is downloaded on first use via
 # `scripts/download_yolo_model.py`.
-DEFAULT_YOLO_MODEL_PATH = Path.home() / ".gundam-halo" / "models" / "yolov8n-messaging.onnx"
+# Sprint 56 R1: route through `app.paths.models_dir()`.
+from app.paths import models_dir
+DEFAULT_YOLO_MODEL_PATH = models_dir() / "yolov8n-messaging.onnx"
 
 # YOLO class names (4 classes, per spec §4.1).
 # Index = class ID, value = human-readable name.

@@ -60,6 +60,11 @@ from pathlib import Path
 
 logger = logging.getLogger("finetune_monitor")
 
+# Sprint 56 R1: import the canonical halo_home + models_dir so the
+# monitor's default --output_dir tracks $HALO_HOME consistently.
+from _script_lib import resolve_halo_home  # noqa: F401  (back-compat)
+from app.paths import models_dir as _MODELS_DIR
+
 
 # Polling interval (seconds). 5 min is a reasonable
 # default — fast enough to catch an OOM before the
@@ -97,11 +102,11 @@ def parse_args() -> argparse.Namespace:
         "process is still alive (no psutil dep).",
     )
     p.add_argument(
+        # Sprint 56 R1: route through `app.paths.models_dir()` so
+        # the monitor's default tracks $HALO_HOME consistently.
         "--output_dir",
         type=Path,
-        default=Path(
-            os.path.expanduser("~/.gundam-halo/models/whisper-yue-base/")
-        ),
+        default=_MODELS_DIR() / "whisper-yue-base/",
         help="Training output dir. The monitor waits "
         "for eval.json to appear here as the success "
         "marker.",

@@ -78,7 +78,6 @@ import csv
 import json
 import logging
 import os
-import subprocess
 import sys
 import tarfile
 from dataclasses import dataclass
@@ -98,7 +97,12 @@ DEFAULT_SPLITS = ("train", "test", "dev")
 # (matches `app.voice.held_out_eval.SAMPLE_RATE = 16_000`).
 SAMPLE_RATE = 16_000
 
-DEFAULT_CACHE_DIR = Path.home() / ".gundam-halo" / "cache" / "cv-yue-fsicoli"
+# Sprint 56 R1: route through `app.paths.cache_dir()` so $HALO_HOME
+# env var override cascades (test isolation + future non-default
+# homes).
+from app.paths import cache_dir as _halo_cache_dir
+
+DEFAULT_CACHE_DIR = _halo_cache_dir() / "cv-yue-fsicoli"
 
 
 @dataclass
@@ -237,43 +241,17 @@ def _extract_mp3_from_tar(tar_path: Path, target_dir: Path) -> int:
 def _ffmpeg_mp3_to_wav(mp3_path: Path, wav_path: Path) -> tuple[float, int]:
     """Convert .mp3 → 16 kHz mono s16le .wav via ffmpeg.
 
-    Returns (duration_seconds, sample_rate).
-
-    ffmpeg arguments:
-      -y             overwrite output
-      -nostdin       never read from stdin (defensive — protects
-                     against accidental stdin reads in CI)
-      -loglevel err  only log errors to stderr (keeps stdout clean
-                     for piped capture)
-      -i             input file
-      -ar 16000      resample to 16 kHz (matches Whisper training)
-      -ac 1          mono (matches Whisper training)
-      -f wav         WAV container
-      -acodec pcm_s16le  16-bit signed PCM (Whisper expected format)
+    Sprint 56 R2: thin shim over the canonical
+    `app.voice.audio_io.ffmpeg_to_wav`. Kept the same signature
+    so call-sites in this script don't change. Probing the WAV
+    duration uses soundfile (handles ffmpeg's LIST metadata
+    chunk insertion that broke the original `wave.open()` probe
+    in Sprint 54 — see `app.voice.audio_io.wav_duration_seconds`).
     """
-    wav_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "ffmpeg",
-        "-nostdin",
-        "-loglevel", "error",
-        "-y",
-        "-i", str(mp3_path),
-        "-ar", str(SAMPLE_RATE),
-        "-ac", "1",
-        "-f", "wav",
-        "-acodec", "pcm_s16le",
-        str(wav_path),
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg failed for {mp3_path.name}: {res.stderr[:200]}"
-        )
-    # Probe duration via soundfile (handles ffmpeg's LIST chunks).
-    import soundfile as sf
-    info = sf.info(str(wav_path))
-    duration_s = float(info.frames) / float(info.samplerate)
-    return duration_s, SAMPLE_RATE
+    # Lazy import keeps the top of this file light + prevents an
+    # import cycle during script bootstrap.
+    from app.voice.audio_io import ffmpeg_to_wav as _ffmpeg_canonical
+    return _ffmpeg_canonical(mp3_path, wav_path)
 
 
 def _filter_clips(

@@ -42,11 +42,16 @@ import time
 import tomllib
 from pathlib import Path
 
-DEFAULT_HALO_HOME = Path.home() / ".gundam-halo"
-DEFAULT_MODEL_DIR = DEFAULT_HALO_HOME / "models" / "whisper-yue-personalised"
+# Sprint 56 R1: DEFAULT_HALO_HOME + sub-dirs route through `app.paths`
+# so $HALO_HOME env var overrides every script consistently.
+from _script_lib import resolve_halo_home as _resolve_halo_home  # noqa: F401
+from app.paths import halo_home as _halo_home_default, models_dir, config_path as _halo_config, recordings_dir
+
+DEFAULT_HALO_HOME = _halo_home_default()
+DEFAULT_MODEL_DIR = models_dir() / "whisper-yue-personalised"
 DEFAULT_HF_REPO = "openai/whisper-base"
-DEFAULT_CONFIG_PATH = DEFAULT_HALO_HOME / "config.toml"
-DEFAULT_HELDOUT_TEXT_FILE = DEFAULT_HALO_HOME / "recordings" / "held-out-latest.txt"
+DEFAULT_CONFIG_PATH = _halo_config()
+DEFAULT_HELDOUT_TEXT_FILE = recordings_dir() / "held-out-latest.txt"
 
 # Tokens written by setup_to_post_2026_tokenized.py that the
 # script should verify exist after the swap (sanity gate).
@@ -226,7 +231,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    halo_home = args.halo_home.expanduser() if args.halo_home else DEFAULT_HALO_HOME
+    halo_home = _resolve_halo_home(args)
     if not halo_home.exists():
         raise SystemExit(f"halo_home does not exist: {halo_home}")
     model_dir = (args.model_dir or DEFAULT_MODEL_DIR).expanduser()

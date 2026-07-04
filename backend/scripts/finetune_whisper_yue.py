@@ -126,9 +126,11 @@ logger = logging.getLogger("finetune_whisper_yue")
 
 # Default output location — keep consistent with
 # ~/.gundam-halo/models/<...>/ convention used by Silero VAD.
-DEFAULT_OUTPUT_DIR = os.path.expanduser(
-    "~/.gundam-halo/models/whisper-yue-base/"
-)
+# Sprint 56 R1: resolve via `app.paths.models_dir()` so the path
+# honours $HALO_HOME (canonical fix for the 28-site path duplication
+# found in the Sprint 56 audit).
+from app.paths import models_dir as _models_dir  # noqa: E402
+DEFAULT_OUTPUT_DIR = str(_models_dir() / "whisper-yue-base/")
 # Base model on Hugging Face Hub. We pin a specific revision so
 # future HF updates don't silently change the starting weights.
 HF_BASE_MODEL = "openai/whisper-base"
@@ -1052,7 +1054,8 @@ def main() -> int:
             test: Path | None
         paths = _LocalPaths(train=train_dir, validation=val_dir, test=test_dir)
     else:
-        cache_dir = Path(os.path.expanduser("~/.gundam-halo/cache/cv-yue/"))
+        from app.paths import cache_dir as _halo_cache_dir
+        cache_dir = _halo_cache_dir() / "cv-yue/"
         paths = prepare_common_voice_yue(
             cv_version=args.dataset_version,
             cache_dir=cache_dir,

@@ -26,7 +26,6 @@ Back-compat surface preserved:
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
 import time
@@ -57,12 +56,18 @@ router = APIRouter()
 
 # M15: callback contract is now streaming — yields sentence-sized
 # chunks. The callback may itself be a coroutine (so it can `await`
-# setup) that returns an async iterator, or a plain function that
-# returns an async iterator directly. We accept both shapes via the
-# `inspect.iscoroutine` check at the call site.
+# Sprint 56 R5: strict typing contract.
+# `AgentStreamCallback` MUST be async and MUST return an
+# `AsyncIterator[str] | None`. Bad shapes (sync function, return
+# None from inside, return Awaitable[…] that the caller has to
+# inspect) used to require a `_resolve_stream_iter` normaliser
+# helper to coerce — that helper masked contract bugs at the
+# caller (one signature in tests, a different one in main.py).
+# Strict contract → bad shape raises loud TypeError at register
+# time, not silent "this branch is never taken" at runtime.
 AgentStreamCallback = Callable[
     [str, str],
-    "AsyncIterator[str] | Awaitable[AsyncIterator[str] | None]",
+    Awaitable[AsyncIterator[str] | None],
 ]
 _agent_callback: AgentStreamCallback | None = None
 _responder: HaloResponder | None = None
@@ -127,27 +132,6 @@ def _build_responder() -> HaloResponder | None:
 
 async def _send_json(ws: WebSocket, payload: dict[str, Any]) -> None:
     await ws.send_json(payload)
-
-
-async def _resolve_stream_iter(
-    result: "AsyncIterator[str] | Awaitable[AsyncIterator[str] | None] | None",
-) -> AsyncIterator[str] | None:
-    """Normalise the agent callback's return shape.
-
-    Callers may return either a plain async iterator (no awaiting
-    needed — the work is implicit when the iterator is iterated) or
-    an awaitable that resolves to an async iterator (so the callback
-    can `await` setup like engine construction before yielding).
-    Both shapes are valid; this helper picks the right one.
-    """
-    if result is None:
-        return None
-    if inspect.isawaitable(result) and not hasattr(result, "__aiter__"):
-        # It's a coroutine / future — await it to get the iterator
-        resolved = await result  # type: ignore[func-returns-value]
-        return resolved
-    # Plain async iterator (e.g. async generator object)
-    return result  # type: ignore[return-value]
 
 
 async def _send_text_then_binary(
@@ -434,11 +418,13 @@ async def voice_websocket(websocket: WebSocket) -> None:
                         # (no wake phrase prefix).
                         if _agent_callback is not None:
                             try:
-                                sentence_iter = await _resolve_stream_iter(
-                                    _agent_callback(
-                                        result.session_id,
-                                        display_asr_text,
-                                    )
+                                # Sprint 56 R5: callback contract is
+                                # strict async → AsyncIterator[str] | None.
+                                # The awaited result is the iterator
+                                # directly — no normaliser needed.
+                                sentence_iter = await _agent_callback(
+                                    result.session_id,
+                                    display_asr_text,
                                 )
                             except Exception as e:
                                 logger.error(
@@ -531,8 +517,9 @@ async def voice_websocket(websocket: WebSocket) -> None:
                             })
                             continue
                         try:
-                            sentence_iter = await _resolve_stream_iter(
-                                _agent_callback(sid, display_text)
+                            # Sprint 56 R5: strict contract — see comment above
+                            sentence_iter = await _agent_callback(
+                                sid, display_text
                             )
                         except Exception as e:
                             logger.error(f"Agent callback error: {e}")

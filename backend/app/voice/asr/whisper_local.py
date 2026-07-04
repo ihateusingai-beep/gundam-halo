@@ -39,8 +39,12 @@ from app.core.registry import register_asr
 
 logger = logging.getLogger(__name__)
 
-# Default cache dir for whisper model downloads
-_DEFAULT_WHISPER_CACHE = os.path.expanduser("~/.cache/whisper")
+# Default cache dir for whisper model downloads.
+# Sprint 56 R1: route through `app.paths.whisper_cache_dir()` so
+# future renames land in one place (the openai-whisper library's
+# `~/.cache/whisper` convention is otherwise hard-coded in 4 files).
+from app.paths import whisper_cache_dir as _halo_whisper_cache_dir
+_DEFAULT_WHISPER_CACHE = str(_halo_whisper_cache_dir())
 
 
 @register_asr("whisper_local")

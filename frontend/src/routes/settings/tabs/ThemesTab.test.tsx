@@ -9,7 +9,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { useThemeStore } from "@/stores/theme";
-import { ThemesTab } from "@/routes/settings/ThemesTab";
+import { ThemesTab } from "@/routes/settings/tabs/ThemesTab";
 
 afterEach(() => {
   cleanup();

@@ -63,8 +63,11 @@ def _load_halo_dotenv() -> int:
       - multi-line quoted values
     These are not used by the current dashboard-written .env.
     """
-    halo_home = os.environ.get("HALO_HOME", str(Path.home() / ".gundam-halo"))
-    env_path = Path(halo_home) / ".env"
+    # Sprint 56 R1: route through `app.paths.halo_home()` so the
+    # single-source-of-truth env-var resolution is canonical here too.
+    from app.paths import halo_home
+    halo_home_path = halo_home()
+    env_path = halo_home_path / ".env"
     if not env_path.exists():
         return 0
     n = 0

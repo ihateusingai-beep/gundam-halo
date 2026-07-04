@@ -461,17 +461,19 @@ class RunFinetuneRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-DEFAULT_HALO_HOME = Path.home() / ".gundam-halo"
-DEFAULT_BASE_MODEL_PATH = DEFAULT_HALO_HOME / "models" / "whisper-yue-base"
+# Sprint 56 R1: route through `app.paths.halo_home()` for the
+# canonical env-var-aware resolution; eliminates the inline duplicate
+# the audit flagged in 28 source files.
+from app.paths import halo_home as _halo_home, models_dir
+
+DEFAULT_HALO_HOME = _halo_home()
+DEFAULT_BASE_MODEL_PATH = models_dir() / "whisper-yue-base"
 CORPUS_DIR_PREFIX = "yue-self-"
 
 
 def _resolve_halo_home() -> Path:
     """Resolve $HALO_HOME (env var overrides the default)."""
-    env = os.environ.get("HALO_HOME")
-    if env:
-        return Path(env).expanduser().resolve()
-    return DEFAULT_HALO_HOME.resolve()
+    return _halo_home()
 
 
 def _latest_self_record_corpus(halo_home: Path) -> Path | None:

@@ -50,8 +50,13 @@ def voice_m2_app(monkeypatch):
     async def fake_agent(sid: str, text: str) -> AsyncIterator[str]:
         # Two sentences — the first carries the emotion tag so the
         # responder can detect it and strip it from the displayed text.
-        yield f"[EMO:focused] Agent reply to: {text}."
-        yield "Done."
+        # Sprint 56 R5: the strict callback contract requires `await
+        # fake_agent()` to return the iterator; we yield in a nested
+        # async generator and return it so the outer await unwraps.
+        async def _aiter():
+            yield f"[EMO:focused] Agent reply to: {text}."
+            yield "Done."
+        return _aiter()
 
     voice_ws.set_agent_callback(fake_agent)
 

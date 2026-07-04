@@ -294,11 +294,12 @@ def default_lock_path(halo_home: Optional[Path] = None) -> Path:
     """Return the default lock file path: `<halo_home>/.backend.lock`.
 
     `halo_home` defaults to `$HALO_HOME` or `~/.gundam-halo/`.
+    Sprint 56 R1: route through `app.paths.halo_home()` for the
+    canonical env-var resolution.
     """
     if halo_home is None:
-        halo_home = Path(
-            os.environ.get("HALO_HOME", str(Path.home() / ".gundam-halo"))
-        )
+        from app.paths import halo_home as _halo_home
+        halo_home = _halo_home()
     return Path(halo_home) / LOCK_FILENAME
 
 

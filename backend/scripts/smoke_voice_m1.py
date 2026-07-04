@@ -29,14 +29,17 @@ import httpx
 import websockets
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-HALO_HOME = Path.home() / ".gundam-halo"
-CONFIG_PATH = HALO_HOME / "config.toml"
+# Sprint 56 R1: route through `app.paths` so $HALO_HOME override works.
+from app.paths import halo_home, config_path, logs_dir, projects_dir
+
+HALO_HOME = halo_home()
+CONFIG_PATH = config_path()
 
 
 def _write_smoke_config() -> None:
     """Write a minimal config.toml with voice enabled for the smoke run."""
     HALO_HOME.mkdir(parents=True, exist_ok=True)
-    (HALO_HOME / "logs").mkdir(parents=True, exist_ok=True)
+    logs_dir().mkdir(parents=True, exist_ok=True)
     (HALO_HOME / "projects").mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(
         """[user]

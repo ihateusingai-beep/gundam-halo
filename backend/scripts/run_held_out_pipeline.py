@@ -57,11 +57,15 @@ SCRIPTS_DIR = BACKEND_DIR / "scripts"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-# Default locations (overridable via flags).
-DEFAULT_HALO_HOME = Path.home() / ".gundam-halo"
-DEFAULT_TRAIN_CORPUS_DIR = DEFAULT_HALO_HOME / "recordings"
-DEFAULT_BASE_MODEL_PATH = DEFAULT_HALO_HOME / "models" / "whisper-yue-base"
-DEFAULT_OUTPUT_MODEL_DIR = DEFAULT_HALO_HOME / "models" / "whisper-yue-personalised"
+# Sprint 56 R1: DEFAULT_HALO_HOME + sub-dirs route through `app.paths`
+# so $HALO_HOME env var overrides every script consistently.
+from _script_lib import resolve_halo_home as _resolve_halo_home  # noqa: F401
+from app.paths import halo_home as _halo_home_default, recordings_dir, models_dir
+
+DEFAULT_HALO_HOME = _halo_home_default()
+DEFAULT_TRAIN_CORPUS_DIR = recordings_dir()
+DEFAULT_BASE_MODEL_PATH = models_dir() / "whisper-yue-base"
+DEFAULT_OUTPUT_MODEL_DIR = models_dir() / "whisper-yue-personalised"
 DEFAULT_THRESHOLD = 0.15  # Sprint 26 §4.3 baseline target
 LOG_FILE_SUFFIX = ".orchestrator.log"
 
@@ -156,15 +160,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_halo_home(args: argparse.Namespace) -> Path:
-    import os
-
-    if args.halo_home is not None:
-        return args.halo_home.expanduser().resolve()
-    env = os.environ.get("HALO_HOME")
-    if env:
-        return Path(env).expanduser().resolve()
-    return DEFAULT_HALO_HOME.resolve()
+# _resolve_halo_home now imported from _script_lib (see imports above).
+# Kept as a comment so the rest of this file can still call it.
 
 
 def _run_subprocess(

@@ -107,9 +107,15 @@ def test_voice_text_bypass_returns_agent_message(voice_client):
     from typing import AsyncIterator
 
     async def fake_agent(sid: str, text: str) -> AsyncIterator[str]:
-        # Two sentences — first one is incremental, last is final
-        yield f"echo part 1 of: {text}"
-        yield f"echo part 2 of: {text}"
+        # Two sentences — first one is incremental, last is final.
+        # Sprint 56 R5: the callback contract is `AsyncIterator[str] |
+        # None` returned from the awaited callback. We yield in a
+        # sync helper and return it, so the outer `await fake_agent`
+        # resolves to the async iterator.
+        async def _aiter():
+            yield f"echo part 1 of: {text}"
+            yield f"echo part 2 of: {text}"
+        return _aiter()
 
     voice_ws.set_agent_callback(fake_agent)
 
@@ -256,7 +262,9 @@ def test_voice_text_strict_mode_discards_no_wake(voice_client):
 
     async def should_not_run(sid: str, text: str) -> AsyncIterator[str]:
         agent_invocations.append((sid, text))
-        yield f"echo {text}"
+        async def _aiter():
+            yield f"echo {text}"
+        return _aiter()
 
     voice_ws.set_agent_callback(should_not_run)
     _set_strict(True)
@@ -306,7 +314,9 @@ def test_voice_text_strict_mode_allows_wake_phrase(voice_client):
 
     async def fake_agent(sid: str, text: str) -> AsyncIterator[str]:
         agent_invocations.append((sid, text))
-        yield f"echo: {text}"
+        async def _aiter():
+            yield f"echo: {text}"
+        return _aiter()
 
     voice_ws.set_agent_callback(fake_agent)
     _set_strict(True)
@@ -359,7 +369,9 @@ def test_voice_text_strict_off_allows_no_wake(voice_client):
 
     async def fake_agent(sid: str, text: str) -> AsyncIterator[str]:
         agent_invocations.append((sid, text))
-        yield f"echo: {text}"
+        async def _aiter():
+            yield f"echo: {text}"
+        return _aiter()
 
     voice_ws.set_agent_callback(fake_agent)
     _set_strict(False)

@@ -64,7 +64,10 @@ logger = logging.getLogger(__name__)
 # Default model locations (override via constructor). The D5 symlink
 # target — `~/.gundam-halo/models/iic` is created by
 # `scripts/setup-yuesub-models.sh`.
-_DEFAULT_MODEL_ROOT = os.path.expanduser("~/.gundam-halo/models")
+# Sprint 56 R1: route through `app.paths.models_dir()` so the path
+# honours $HALO_HOME consistently.
+from app.paths import models_dir
+_DEFAULT_MODEL_ROOT = str(models_dir())
 _SENSE_VOICE_DIRNAME = "SenseVoiceSmall"
 _FSMN_VAD_DIRNAME = "speech_fsmn_vad_zh-cn-16k-common-pytorch"
 

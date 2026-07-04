@@ -70,7 +70,11 @@ DEFAULT_MODEL_URL = os.environ.get(
     "GUNDAM_HALO_YOLO_MODEL_URL",
     "https://github.com/ihateusingai-beep/gundam-halo/releases/download/v0.1.4/yolov8n-messaging.onnx",
 )
-DEFAULT_MODEL_PATH = Path.home() / ".gundam-halo" / "models" / "yolov8n-messaging.onnx"
+# Sprint 56 R1: route through `app.paths.models_dir()` so $HALO_HOME
+# env var override cascades (test isolation).
+from app.paths import models_dir
+
+DEFAULT_MODEL_PATH = models_dir() / "yolov8n-messaging.onnx"
 EXPECTED_MODEL_SIZE_MB = 50
 
 

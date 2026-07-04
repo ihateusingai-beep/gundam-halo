@@ -37,7 +37,10 @@ from typing import Iterable
 
 # Where the user records. Honours HALO_HOME (set by tests/conftest.py
 # to a tmp_path). Default: ~/.gundam-halo/recordings/.
-DEFAULT_HALO_HOME = Path.home() / ".gundam-halo"
+# Sprint 56 R1: route through `app.paths.recordings_dir()` for
+# canonical env-var-aware resolution.
+from app.paths import recordings_dir, halo_home as _halo_home
+DEFAULT_HALO_HOME = _halo_home()
 RECORDINGS_DIRNAME = "recordings"
 HELDOUT_PREFIX = "held-out-"
 
@@ -55,6 +58,9 @@ SAMPLE_RATE = 16_000
 # openai-whisper cache layout (~/.cache/whisper/<size>.pt).
 WHISPER_CACHE_DIRNAME = ".cache"
 WHISPER_CACHE_WHISPER_SUBDIR = "whisper"
+# (Kept as constants for back-compat with the docstring + older tests;
+# the canonical `whisper_cache_dir()` lives in `app.paths` now and
+# is re-exported below.)
 
 
 # ---------------------------------------------------------------------------
@@ -259,13 +265,17 @@ def whisper_cache_dir() -> Path:
     the package doesn't honour `HALO_HOME`. If the user
     set `WHISPER_CACHE` env var (openai-whisper does
     honour this), use that instead.
+
+    Sprint 56 R1: deprecated — re-export from `app.paths` to
+    keep one canonical implementation. Kept as a thin shim
+    so callers in this module + older tests don't break.
     """
     import os
-
+    from app.paths import whisper_cache_dir as _wc
     env = os.environ.get("WHISPER_CACHE")
     if env:
         return Path(env).expanduser().resolve()
-    return Path.home() / WHISPER_CACHE_DIRNAME / WHISPER_CACHE_WHISPER_SUBDIR
+    return _wc()
 
 
 def check_cached_whisper_model(size: str = "base") -> Path | None:

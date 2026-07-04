@@ -55,9 +55,7 @@ import argparse
 import asyncio
 import json
 import shutil
-import subprocess
 import sys
-import wave
 from datetime import date
 from pathlib import Path
 
@@ -82,43 +80,61 @@ DEFAULT_HELDOUT_TEXT = "你食咗飯未呀"
 
 VOICE = "zh-HK-HiuMaanNeural"
 
-DEFAULT_HALO_HOME = Path.home() / ".gundam-halo"
-
-SAMPLE_RATE = 16000
+# Sprint 56 R1: halo_home() + resolve_halo_home() moved to
+# `scripts/_script_lib.py` (single source of truth for the
+# ~/.gundam-halo path across all 8 scripts in this dir).
+from _script_lib import resolve_halo_home  # noqa: F401
+from app.paths import halo_home as _halo_home_default
 
 
 def _resolve_halo_home(args: argparse.Namespace) -> Path:
-    halo_home = args.halo_home.expanduser() if args.halo_home else DEFAULT_HALO_HOME
-    if not halo_home.exists():
+    """Back-compat wrapper — original signature + existence check.
+
+    Sprint 56 R1 keeps this thin shim so the rest of the script can
+    keep using `_resolve_halo_home(args)` unchanged. The existence
+    check matches the pre-Sprint-56 behaviour: refuse to auto-create
+    an empty halo_home (recordings dir must pre-exist).
+    """
+    halo = resolve_halo_home(args)
+    if not halo.exists():
         # Don't auto-create — caller may want a different layout.
-        raise SystemExit(f"halo_home does not exist: {halo_home}")
-    return halo_home
+        raise SystemExit(f"halo_home does not exist: {halo}")
+    return halo
+
+
+DEFAULT_HALO_HOME = _halo_home_default()
+# Back-compat: callers that still reference `DEFAULT_HALO_HOME`
+# get the canonical Path; `app.paths.halo_home()` honours $HALO_HOME
+# if set in the environment.
+
+
+SAMPLE_RATE = 16000
+# Sprint 56 R2: route through canonical `app.voice.audio_io`.
+# Note: the canonical impl raises `RuntimeError` on ffmpeg
+# missing — converted to `SystemExit` below for compat with the
+# pre-Sprint-56 behaviour (existing scripts handled the exit
+# via SystemExit not RuntimeError).
+from app.voice.audio_io import (
+    ffmpeg_to_wav as _ffmpeg_to_wav_canonical,
+    SAMPLE_RATE as _AUDIO_IO_SAMPLE_RATE,
+)
 
 
 def _ffmpeg_to_wav(mp3_path: Path, wav_path: Path) -> tuple[float, int]:
     """Convert mp3 → 16 kHz mono s16le WAV via ffmpeg.
 
-    Returns (duration_seconds, sample_rate) read from the resulting WAV
-    header so the manifest can carry accurate values.
+    Sprint 56 R2: thin shim over `app.voice.audio_io.ffmpeg_to_wav`.
+    Kept the same signature so call-sites don't change. Translates
+    RuntimeError to SystemExit to match pre-Sprint-56 behaviour
+    (existing scripts called `subprocess.run(check=True)` whose
+    failure raises `subprocess.CalledProcessError` and the script
+    let it propagate as a fatal error — SystemExit is just a
+    slightly louder exit-style).
     """
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise SystemExit("ffmpeg not found on PATH")
-    cmd = [
-        ffmpeg, "-y", "-loglevel", "error",
-        "-i", str(mp3_path),
-        "-ar", str(SAMPLE_RATE),
-        "-ac", "1",
-        "-sample_fmt", "s16",
-        "-f", "wav",
-        str(wav_path),
-    ]
-    subprocess.run(cmd, check=True)
-    with wave.open(str(wav_path), "rb") as wf:
-        sample_rate = wf.getframerate()
-        n_frames = wf.getnframes()
-    duration_s = n_frames / float(sample_rate)
-    return duration_s, sample_rate
+    try:
+        return _ffmpeg_to_wav_canonical(mp3_path, wav_path)
+    except RuntimeError as e:
+        raise SystemExit(str(e)) from None
 
 
 async def _synth_mp3(text: str, mp3_path: Path) -> None:

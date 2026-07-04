@@ -974,6 +974,161 @@ The WER still looks high (110%) because:
   33b pipeline) is still user-action-required for
   personalised fine-tune beyond the CV-yue baseline.
 
+### Sprint 56 (in-session) — Senior-engineer refactor R1+R2+R3+R5
+
+Closed the 4 top-priority refactors flagged in the Sprint 56
+architecture audit (per senior-eng-just-joined review of
+~30K backend LoC + ~21K frontend LoC). **No user-facing
+capability added — pure internal-quality work.**
+
+**Bumps `__version__` 0.2.0 → 0.2.1 (PATCH)** — refactor only,
+no semantic change. 4 surfaces synced.
+
+#### R1 — Consolidate ~/.gundam-halo path resolution
+
+Audit found the expression `Path.home() / ".gundam-halo"`
+**duplicated across 28 source files** (8 scripts + 1 API
+module + 3 core modules + `config.py` + 15 test files +
+`yuesub.py` + `whisper_local.py` + `held_out_eval.py`).
+
+New module `app/paths.py` is the single source of truth:
+- `halo_home()` — env-var-aware resolver (`$HALO_HOME` for
+  tests + production launchd plist, fallback to
+  `~/.gundam-halo`)
+- Sub-dir helpers: `models_dir()`, `cache_dir()`,
+  `recordings_dir()`, `logs_dir()`, `projects_dir()`,
+  `config_path()`, `whisper_cache_dir()`
+- `DEFAULT_HALO_HOME` re-exported as
+  `app.core.config.DEFAULT_HOME` for back-compat — the 28
+  legacy imports keep working unchanged
+
+Helper `backend/scripts/_script_lib.py` provides
+`resolve_halo_home(args)` for the 8 CLI scripts that take a
+`--halo-home` flag.
+
+**18 call sites migrated** to `app.paths.halo_home()` /
+`_script_lib.resolve_halo_home()`. The `app.core.config`
+imports + tests now operate on the canonical resolver — a
+single `monkeypatch.setenv("HALO_HOME", ...)` cascades to
+every helper, every script, every test.
+
+#### R2 — Canonical audio I/O helper
+
+Two near-identical `_ffmpeg_to_wav` helpers in
+`gen_cantonese_corpus.py` (Sprint 54) and
+`prepare_fsicoli_cv_yue.py` (Sprint 55) consolidated into
+`app/voice/audio_io.py`.
+
+The canonical helper uses **`soundfile` for the duration
+probe**, fixing the **Sprint 55 0.001s manifest bug**
+class (ffmpeg inserts a LIST metadata chunk between `fmt `
+and `data` sub-chunks, breaking any `wave.open()` probe
+that reads bytes at offset 40). The new probe handles BOTH
+standard and ffmpeg-extended WAVs.
+
+Both scripts now `from app.voice.audio_io import
+ffmpeg_to_wav` — 20+ LoC removed per script. `gen_cantonese_corpus.py`
++ `prepare_fsicoli_cv_yue.py` lose 2 unused
+`subprocess` imports each.
+
+#### R3 — Settings tabs → sub-package + TAB_PANELS map
+
+The `routes/settings/index.tsx` page had an 8-arm
+`if activeTab === 'foo' && <FooTab />` chain. Refactored:
+
+- All 8 tab files moved to `routes/settings/tabs/`
+  (Channels/General/Mac/Memory/Secrets/Security/Themes/Voice)
+- `index.tsx` adds `TAB_PANELS: Record<SettingsTab, ...>`
+  map + `<ActiveTabPanel id={activeTab} settings={settings}>`
+  thin wrapper
+- Adding a 9th tab = `SIDEBAR_ENTRIES` entry +
+  `SettingsTab` type union entry + `TAB_PANELS` entry
+  (3 places, all in `./constants.ts` for the sidebar +
+  `./index.tsx` for the map). The if/else chain is gone.
+
+Sprint 51 `useSearchParams` deep-linking behaviour unchanged
+(`?tab=foo` still routes to the right panel via the same
+`isValidSettingsTab` guard).
+
+`settings/tabs/ThemesTab.test.tsx` updated import
+`@/routes/settings/ThemesTab` →
+`@/routes/settings/tabs/ThemesTab`.
+
+#### R5 — Strict agent callback contract
+
+The `AgentStreamCallback` previously accepted two return
+shapes (sync iterator OR awaitable-of-iterator) and used
+`_resolve_stream_iter` (a 20-LoC `inspect.isawaitable` /
+`hasattr(__aiter__)` normaliser) to coerce. Masked contract
+bugs at the caller.
+
+New contract (typed in `app/api/ws_protocol.py`):
+```python
+AgentStreamCallback = Callable[
+    [str, str],
+    Awaitable[AsyncIterator[str] | None],
+]
+```
+Callbacks must be `async def` + may `await` setup +
+return `AsyncIterator[str] | None`. Async-generator test
+callbacks migrated to "yield in nested `_aiter()` and
+return it" pattern so `await` resolves to the iterator.
+
+`_resolve_stream_iter` deleted. `import inspect` removed
+from `ws_protocol.py`. `voice_ws.py` shim no longer
+re-exports the normaliser.
+
+The 4 test callbacks in `test_voice_ws.py` +
+`test_voice_ws_tts.py` were the only call sites that
+needed updating (the main.py canonical callback at
+`app/main.py:193` was already `async def`).
+
+#### Files created (4)
+- `backend/app/paths.py` (~140 LoC)
+- `backend/app/voice/audio_io.py` (~110 LoC)
+- `backend/scripts/_script_lib.py` (~50 LoC)
+- `backend/tests/test_paths.py` (~150 LoC, 17 tests)
+- `backend/tests/test_audio_io.py` (~150 LoC, 7 tests;
+  includes a real ffmpeg-emitted LIST-chunk WAV that
+  would have returned 0.001s under the pre-Sprint-56
+  `wave.open()` probe)
+
+#### Files moved (10 → `routes/settings/tabs/`)
+ChannelsTab, GeneralTab, MacTab, MemoryTab, SecretsTab,
+SecurityTab, SettingsSidebar (stayed put),
+ThemesTab (+ .test.tsx), VoiceTab.
+
+#### Version
+- `__version__` 0.2.0 → 0.2.1 (PATCH)
+- 4 surfaces synced: `backend/app/__init__.py`,
+  `frontend/package.json`,
+  `frontend/src-tauri/Cargo.toml`,
+  `frontend/src-tauri/tauri.conf.json`
+
+#### Tests
+- `backend/tests/`: **1300 passed** (+ 17 from
+  `test_paths.py`, + 7 from `test_audio_io.py`, same
+  baseline for everything else)
+- `frontend/src/`: **145 passed** (vitest), **0 new TS
+  errors** (only the 4 pre-existing `auth-bootstrap.test.ts`
+  Sprint-48 errors remain)
+
+#### Code-review ratio
+- Audit flagged 28 path-duplication sites → 18 migrated
+  to `app.paths` helper (10 untouched test files keep
+  the original literals for clarity in test fixtures —
+  no functional change)
+- VoiceTab.tsx (828 LoC) flagged as a monolith — Sprint
+  56 R3 lays the sub-package groundwork (per-tab split is
+  next-sprint scope)
+
+#### Pre-existing baseline unaffected
+- 2 `test_fsmn_vad.py` failures (missing `funasr_onnx`) —
+  unrelated to Sprint 56
+- 4 `auth-bootstrap.test.ts` TS errors — Sprint 48
+  known, unrelated to Sprint 56
+- 9 ruff I001 warnings — pre-Sprint-56 baseline; cosmetic
+
 ### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
 
 Closes the 3 long-standing "no auth yet" notes (Sprint 13/43/44
