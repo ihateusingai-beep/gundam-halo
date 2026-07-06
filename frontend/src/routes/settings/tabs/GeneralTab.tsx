@@ -9,8 +9,8 @@ import {
 import type { Settings } from "@/types/api";
 import { api } from "@/lib/api";
 
-import { SPEED_PRESETS } from "./constants";
-import { KV, Section } from "./shared";
+import { SPEED_PRESETS } from "../constants";
+import { KV, Section } from "../shared";
 
 const SPEED_FILL_PCT = (fps: number | null): string => {
   if (fps == null) return "25%";

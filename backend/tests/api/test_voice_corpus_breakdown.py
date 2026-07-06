@@ -69,11 +69,21 @@ def client_with_home(monkeypatch, tmp_path):
     files in tests/voice/held_out_results/.
     """
     import app.api.voice_config_api as vc
+    # Sprint 56 R4: the endpoint moved to `app.api.voice.eval_jobs`
+    # which does `from app.voice.held_out_eval import held_out_results_dir`
+    # at module level — that import creates a *separate* binding
+    # than the legacy `voice_config_api.held_out_results_dir` the
+    # test originally targeted. Patch the call-site module too so
+    # the fake `tmp_path` is honoured.
+    import app.api.voice.eval_jobs as _ej
 
     fake_results_dir = tmp_path / "tests" / "voice" / "held_out_results"
     fake_results_dir.mkdir(parents=True)
     monkeypatch.setattr(
         vc, "held_out_results_dir", lambda: fake_results_dir
+    )
+    monkeypatch.setattr(
+        _ej, "held_out_results_dir", lambda: fake_results_dir
     )
     with TestClient(__import__("app.main", fromlist=["halo_app"]).halo_app) as client:
         yield client, tmp_path

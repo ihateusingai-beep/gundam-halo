@@ -4,8 +4,8 @@ import { HudCard } from "@/components/gundam/HudCard";
 import { THEMES } from "@/components/gundam/ThemeSwitcher";
 import { useThemeStore } from "@/stores/theme";
 
-import { BACKGROUNDS } from "./constants";
-import { Section } from "./shared";
+import { BACKGROUNDS } from "../constants";
+import { Section } from "../shared";
 
 /**
  * Sprint 51 — global accent color override.

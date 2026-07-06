@@ -2,7 +2,7 @@ import { HudCard } from "@/components/gundam/HudCard";
 import { StatusDot } from "@/components/gundam/StatusDot";
 import type { Settings } from "@/types/api";
 
-import { KV, Section } from "./shared";
+import { KV, Section } from "../shared";
 
 export function ChannelsTab({ settings }: { settings: Settings }) {
   return (

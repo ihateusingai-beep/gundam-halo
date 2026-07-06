@@ -55,7 +55,7 @@ import { api, ApiError } from "@/lib/api";
 import { getVoiceStatus, type VoiceStatus } from "@/services/halo-voice-ws";
 import { isTauriRuntime, tryTauriInvoke } from "@/lib/tauri";
 
-import { KV, Section } from "./shared";
+import { KV, Section } from "../shared";
 
 interface VoiceConfig {
   wake_phrases: string[];

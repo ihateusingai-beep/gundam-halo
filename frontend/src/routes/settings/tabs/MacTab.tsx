@@ -1,7 +1,7 @@
 import { HudCard } from "@/components/gundam/HudCard";
 import type { Settings } from "@/types/api";
 
-import { KV, PathList, Section, Toggle } from "./shared";
+import { KV, PathList, Section, Toggle } from "../shared";
 
 export function MacTab({ settings }: { settings: Settings }) {
   return (

@@ -266,6 +266,32 @@ markers = [
 [tool.ruff]
 target-version = "py311"
 src = ["app", "tests"]
+# Sprint 56 R8: the per-file ignores below are the standard
+# pytest/fastapi/test-infrastructure patterns. Don't introduce
+# new categories of ignore without a TODO comment + a profile
+# memory note — the next refactor sprint needs a stable
+# baseline to compare against.
+extend-exclude = [
+    ".venv",
+    "build",
+    "dist",
+    "node_modules",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: pytest fixtures are conventionally `F811`
+# (redefinition) and `F401` (unused import) is fine for
+# shared fixtures + re-exports.
+"tests/**" = ["F401", "F811"]
+# Scripts are user-facing entry points — they often
+# import a module just for its side effect (register
+# handlers, populate paths, etc.).
+"scripts/**" = ["F401"]
+# app/api/voice/ shim re-exports the symbol set from
+# the pre-R4 monolith to keep the public surface stable.
+# E402 (module-level import not at top) is intentional.
+"app/api/voice_config_api.py" = ["F401", "F403"]
+"app/api/voice/__init__.py" = ["F401", "F403"]

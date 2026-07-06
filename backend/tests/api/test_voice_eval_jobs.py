@@ -161,6 +161,13 @@ def test_run_held_out_eval_persists_trend_json_path(client, monkeypatch, tmp_pat
     """When the orchestrator writes a trend JSON, the job state
     records its path (verifies the success path through the thread)."""
     # Stub the orchestrator thread target so it doesn't actually run.
+    # Sprint 56 R4: patch the actual call-site module
+    # (`app.api.voice.eval_jobs`), not the legacy shim
+    # (`app.api.voice_config_api`). The shim re-exports the function
+    # so legacy tests still see the symbol, but `from ... import`
+    # inside the endpoint binds to the original module — patching
+    # the shim wouldn't affect the call site.
+    import app.api.voice.eval_jobs as ej
     import app.api.voice_config_api as vc
 
     def fake_thread(job_id, args, halo_home):
@@ -177,7 +184,7 @@ def test_run_held_out_eval_persists_trend_json_path(client, monkeypatch, tmp_pat
             job_id, exit_code=0, trend_json_path=str(results_dir / "fake-trend.json")
         )
 
-    monkeypatch.setattr(vc, "_run_orchestrator_thread", fake_thread)
+    monkeypatch.setattr(ej, "_run_orchestrator_thread", fake_thread)
 
     r = client.post("/voice/run-held-out-eval", json={})
     job_id = r.json()["job_id"]
