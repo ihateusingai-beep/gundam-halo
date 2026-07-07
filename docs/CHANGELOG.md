@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 56.6 → today)
+## Recent Sprints (Sprint 56.7 → today)
 
+- [Sprint 56.7 (in-session) — VoiceTab per-section split (#1-ROI refactor)](#sprint-567-in-session--voicetab-per-section-split-1-roi-refactor)
 - [Sprint 56.6 (in-session) — Route-smoke vitest guard (Sprint 56 R3 follow-up)](#sprint-566-in-session--route-smoke-vitest-guard-sprint-56-r3-follow-up)
 - [Sprint 56.5 (in-session) — Senior-engineer refactor R4 + R6 (cancelled) + R7 + R8](#sprint-565-in-session--senior-engineer-refactor-r4--r6-cancelled--r7--r8)
 - [Sprint 56 (in-session) — Senior-engineer refactor R1+R2+R3+R5](#sprint-56-in-session--senior-engineer-refactor-r1r2r3r5)
@@ -1417,6 +1418,131 @@ being committed:
   `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 56.7 (in-session) — VoiceTab per-section split (#1-ROI refactor)
+
+Lands the #1 ROI refactor from the senior-engineer
+whole-project audit (the follow-up of Sprint 56.5 R8).
+Pure internal-quality work — no user-facing capability
+change.
+
+**Bumps `__version__` 0.2.3 → 0.2.4 (PATCH)** — refactor
+only, no semantic change. 4 surfaces synced.
+
+#### The audit case
+
+`frontend/src/routes/settings/tabs/VoiceTab.tsx` was the
+largest single TSX (828 LoC, 7 distinct UX sections in 1
+component). The whole-project audit ranked it #1 ROI to
+fix because:
+
+- 7 sections sharing one React tree = toggling one
+  section's UI re-renders all 6 others (no memo
+  boundary).
+- Sprint 56 R3 history: this directory was the broken-
+  import source. Future refactors here will surface the
+  same class of bug class without a guard.
+- Per-section files mirror the Sprint 56 R7
+  `services/voice/{types,connection,api}` pattern that
+  already proved ROI-positive.
+
+#### What landed (NOT a feature change)
+
+`tabs/VoiceTab.tsx` is now a thin orchestrator (~138 LoC
+of code, +~80 LoC of docstring). Per-section content
+moved to a new `tabs/voice/` subpackage:
+
+- `tabs/voice/types.ts` (~130 LoC) — shared
+  `VoiceSectionsStore` interface + `VoiceConfig` type +
+  `AsrBackendDraft` / `AsrCorrectorDraft` enums +
+  `isAsrBackend` / `isAsrCorrector` type guards + the
+  Sprint 33b `FinetuneResponse` / `CardPhase` / `CardSetters`
+  / `FinetuneCommand` types.
+- `tabs/voice/RadioOption.tsx` (~50 LoC) — shared
+  radio+label+hint component used by AsrSection +
+  AlwaysOnSection. Extracted mid-implementation per the
+  senior-engineer audit (5 duplicate inline JSX blocks
+  → 1 component).
+- `tabs/voice/runFinetuneCommand.ts` (~75 LoC) —
+  extracted Sprint 33b Tauri IPC dispatcher (was a
+  closure inside VoiceTab's component body). Now
+  unit-testable in isolation.
+- `tabs/voice/sections/DiagnosticsSection.tsx` (~45 LoC)
+  — Voice WebSocket state indicator (read-only).
+- `tabs/voice/sections/AsrSection.tsx` (~135 LoC) —
+  ASR engine radio + corrector radio + restart banner.
+- `tabs/voice/sections/AlwaysOnSection.tsx` (~65 LoC)
+  — voice interaction mode (push-to-talk vs always-on).
+- `tabs/voice/sections/WakeSection.tsx` (~70 LoC) — wake
+  phrases textarea + strict-mode checkbox.
+- `tabs/voice/sections/SaveBar.tsx` (~50 LoC) — Save +
+  Reset buttons + status span.
+- `tabs/voice/sections/HowItWorksSection.tsx` (~25 LoC)
+  — explanatory paragraph.
+- `tabs/voice/sections/PersonalisedFineTuneSection.tsx`
+  (~270 LoC) — Record / Train / Swap cards. Hosts a
+  scoped `Card` helper used only inside this section
+  (kept private per senior-engineer audit — single use
+  site doesn't justify a shared component).
+
+#### Verification
+
+- `frontend/vitest`: **160/160 pass** (was 160, 0
+  deltas in the smoke pass; the route-module-graph
+  test caught a path-count discrepancy on the first
+  implementation — fixed by inverting the import path
+  depth in 7 files).
+- `frontend/tsc`: 0 new errors (4 pre-existing
+  `auth-bootstrap.test.ts` errors unchanged).
+- All `data-testid` test ids preserved verbatim
+  (`asr-backend-radios`, `asr-corrector-radios`,
+  `voice-interaction-mode-radios`,
+  `personalised-finetune-record-card`,
+  `personalised-finetune-record-button`,
+  `record-card-status`, `record-card-message`, ... —
+  the route smoke test treats any unknown test id as a
+  drift signal).
+
+#### Senior-engineer audit applied mid-implementation
+
+Per the Sprint 56.6 standing rule (every >100 LoC code
+addition passes through a mini-audit before commit), the
+freshly-added VoiceTab split went through one refactor
+cycle before commit:
+
+- **P1 finding (NOT applied)**: `VoiceTab.tsx` is 305
+  LoC, not the targeted 80-120 LoC. Reading the file
+  back, this is 138 LoC of code + 80 LoC of docstring
+  + 87 LoC of structure. Acceptable — the
+  orchestrator function-body discipline is maintained.
+- **P2 finding (applied)**: 5 instances of the same
+  `<label className="flex items-center gap-2 cursor-pointer
+  select-none"><input type="radio">…<span><span>`
+  block were duplicated across AsrSection +
+  AlwaysOnSection. Promoted to `RadioOption.tsx`. AsrSection
+  shrunk 172 → 135 LoC (-37); AlwaysOnSection 79 → 64
+  LoC (-15). Net saving offset by RadioOption's 49 LoC.
+- **P3-P7 findings (DEFERRED)**: 5 lower-priority audit
+  notes recorded in the audit summary but not fixed
+  this sprint (premature optimization or single-use-site
+  edits).
+
+#### Standing rule for next session
+
+- **Every per-section refactor MUST route the shared
+  widget through `tabs/voice/<Widget>.tsx`** (not
+  inline-duplicate the JSX inside each section).
+  RadioOption is the precedent.
+- **Adding a new section to VoiceTab** = add 1 file
+  under `tabs/voice/sections/` + 1 line in
+  `VoiceTab.tsx`'s compose tree + 1 line in this
+  CHANGELOG. The triple-edit cost is fixed; reduce the
+  temptation to jam new concerns into an existing
+  section.
+- **Tests that assert on VoiceTab UI** should target the
+  `data-testid` IDs preserved across the split (see the
+  route-module-graph test's `data-testid` regex).
+  Renaming a test id is a behaviour change.
 
 ### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
 
