@@ -287,3 +287,48 @@ Implements the Sprint 13 TODO.
 - `docs/tickets/M13.md` — production deployment checklist
 - `~/.mavis/agents/mavis/memory/MEMORY.md` — Gundam Halo
   control-surface priority + Tailscale-only access pattern
+
+## Dev workflow (`HALO_TEST_AUTH_BYPASS`)
+
+Sprint 49 #7 — the frontend ships with the Sprint 48
+bearer-token wrapper enabled. For local dev / UI iteration /
+design work where you don't want to set up a token, the
+backend supports a bypass flag that turns off the auth
+check on every endpoint.
+
+```bash
+# Terminal 1: backend with test auth bypass
+cd ~/workspace/working/gundam-halo/backend
+HALO_TEST_AUTH_BYPASS=true HALO_HOME=$HOME/.gundam-halo MINIMAX_API_KEY=test \
+    .venv/bin/python -m uvicorn app.main:halo_app --host 127.0.0.1 --port 8765
+
+# Terminal 2: vite dev server
+cd ~/workspace/working/gundam-halo/frontend
+./node_modules/.bin/vite
+
+# Browser: http://localhost:5173/
+```
+
+The Tauri shell is NOT needed — the SPA runs in plain
+Chromium. The `authedRequest()` wrapper silently skips
+bearer injection when `window.__haloApiToken` is unset
+(see `frontend/src/lib/api.ts:authedRequest`), and
+`HALO_TEST_AUTH_BYPASS` turns off the bearer check on the
+backend. Read-side AND write-side endpoints work without
+auth when both sides are in bypass mode.
+
+**Security caveats**:
+
+- The bypass flag is read ONCE at backend startup. Restart
+  the backend after toggling.
+- `HALO_TEST_AUTH_BYPASS` is intended for `127.0.0.1` /
+  `localhost` only. If the server is exposed via Tailscale
+  (which it is, in production), the bypass is a real
+  vulnerability — a Tailscale peer can hit the API without
+  auth. **Always** set `server.require_tailscale = true`
+  (default) when not in dev mode; the two settings are
+  compatible.
+- The flag is intentionally NOT a TOML setting — TOML is
+  loaded from `~/.gundam-halo/config.toml` which is
+  intended to be source-controlled / reviewed; the env var
+  bypass is a per-shell override that doesn't persist.

@@ -6,6 +6,11 @@ import { HudCard } from "@/components/gundam/HudCard";
 import { Reticle } from "@/components/gundam/Reticle";
 import { StatusDot } from "@/components/gundam/StatusDot";
 import { api, ApiError } from "@/lib/api";
+import {
+  backendErrorAction,
+  backendErrorMessage,
+  classifyBackendError,
+} from "@/lib/backend-error";
 import type { AuditEntry } from "@/types/api";
 
 /** Audit log dashboard (B7).
@@ -46,9 +51,22 @@ export function AuditDashboardPage() {
       const data = await api.getAuditLog(500);
       setEntries(data);
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : String(e);
-      setError(msg);
-      toast.error("Failed to load audit log", { description: msg });
+      const kind = classifyBackendError(e);
+      const { headline, hint, detail } = backendErrorMessage(kind, e);
+      const fullMessage = detail
+        ? `${headline} ${hint} (Server: ${detail})`
+        : `${headline} ${hint}`;
+      setError(fullMessage);
+      const action = backendErrorAction(kind);
+      toast.error("Failed to load audit log", {
+        description: fullMessage,
+        action: action
+          ? {
+              label: action.label,
+              onClick: action.onClick,
+            }
+          : undefined,
+      });
     } finally {
       setLoading(false);
     }

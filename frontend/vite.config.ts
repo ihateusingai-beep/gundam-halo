@@ -39,25 +39,30 @@ export default defineConfig(async () => ({
     },
     // Proxy backend calls so the SPA can use a same-origin base URL
     // (avoids CORS, port drift, and "Load failed" fetch errors when
-    // API_BASE defaults to a stale port like 8766).
-    // Backend runs on 8000 (uvicorn app.main:app). API mounts under
-    // /api/*; WebSocket endpoints sit at /ws and /voice.
+    // API_BASE defaults to a stale port).
+    // Backend runs on 8765 (uvicorn app.main:halo_app --port 8765,
+    // per the launchd plist + per docs/SECURITY-HARDENING.md). API
+    // mounts under /api/*; WebSocket endpoints sit at /ws and /voice.
+    // Sprint 49 B1: the proxy was historically hardcoded to 8000
+    // (Sprint 13 era). Sprint 16+ moved the backend to 8765; the
+    // proxy never followed. The mismatch was the root cause of
+    // "cockpit stuck in LOADING" on a fresh clone.
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: "http://127.0.0.1:8765",
         changeOrigin: true,
       },
       "/health": {
-        target: "http://127.0.0.1:8000",
+        target: "http://127.0.0.1:8765",
         changeOrigin: true,
       },
       "/ws": {
-        target: "ws://127.0.0.1:8000",
+        target: "ws://127.0.0.1:8765",
         ws: true,
         changeOrigin: true,
       },
       "/voice": {
-        target: "ws://127.0.0.1:8000",
+        target: "ws://127.0.0.1:8765",
         ws: true,
         changeOrigin: true,
       },

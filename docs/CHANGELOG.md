@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 56.7 → today)
+## Recent Sprints (Sprint 49 → today)
 
+- [Sprint 49 (in-session) — UI robustness catch-up (vite proxy + 3-state loading + backend-error + breadcrumb + rail collapse + dev bypass docs)](#sprint-49-in-session--ui-robustness-catch-up-vite-proxy--3-state-loading--backend-error--breadcrumb--rail-collapse--dev-bypass-docs)
 - [Sprint 56.7 (in-session) — VoiceTab per-section split (#1-ROI refactor)](#sprint-567-in-session--voicetab-per-section-split-1-roi-refactor)
 - [Sprint 56.6 (in-session) — Route-smoke vitest guard (Sprint 56 R3 follow-up)](#sprint-566-in-session--route-smoke-vitest-guard-sprint-56-r3-follow-up)
 - [Sprint 56.5 (in-session) — Senior-engineer refactor R4 + R6 (cancelled) + R7 + R8](#sprint-565-in-session--senior-engineer-refactor-r4--r6-cancelled--r7--r8)
@@ -1415,9 +1416,191 @@ being committed:
   action needed; `isRouteHelper()` recursively infers it.
   Only add a comment if the helper is non-obvious.
 - **Tests that need to assert on WS frames**: use
-  `vi.stubGlobal("WebSocket", MySpyClass)` to override
-  the unconditional stub from `src/test/setup.ts`. See
-  `src/test/ws-stub.ts` for the docstring.
+   `vi.stubGlobal("WebSocket", MySpyClass)` to override
+   the unconditional stub from `src/test/setup.ts`. See
+   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 49 (in-session) — UI robustness catch-up (vite proxy + 3-state loading + backend-error + breadcrumb + rail collapse + dev bypass docs)
+
+Closes the **first-impression UX** blocker that has been
+on the "Sprint 49 deferred" list for 2 sprints. Pure
+frontend + dev-config work — no backend changes required
+(Sprint 48 already shipped auth).
+
+**Bumps `__version__` 0.2.4 → 0.2.5 (PATCH)** — bugfix
++ UI polish; no new user-facing feature. 4 surfaces
+synced.
+
+#### What landed
+
+- **B1 vite proxy port mismatch** —
+  `frontend/vite.config.ts` proxies `/api`, `/health`,
+  `/ws`, `/voice` from `127.0.0.1:8000` (Sprint 13 era)
+  to `127.0.0.1:8765` (current). The proxy was never
+  updated when the backend moved to 8765 in Sprint 16+;
+  this was the root cause of the "cockpit stuck in
+  LOADING" on a fresh clone.
+- **B2 API_BASE default** — `lib/api.ts` `API_BASE`
+  resolves to `window.location.origin` when no
+  `VITE_API_BASE` env var is set. The previous default
+  of `""` produced `fetch(""+path)` which threw
+  `TypeError: Load failed` on every call.
+- **B3 3-state loading machine** —
+  `lib/use-backend-health.ts` (NEW) wraps the first-load
+  health check with a 5s `AbortController` timeout. The
+  cockpit now renders the shell + skeletons immediately
+  and surfaces a friendly `<OfflineBanner>` when the
+  backend is unreachable (instead of a frozen "LOADING"
+  text). The banner is non-blocking + dismissable and
+  classifies WHY the backend is unreachable.
+- **B4 `request()` → `requestJson()` + `requestText()`
+  split with `res.clone()`** — the old pattern
+  `try { await res.json() } catch { await res.text() }`
+  was the source of `TypeError: body stream already read`
+  on `/settings` and `/audit`. The standard fix
+  (`res.clone()` before the first read) was applied;
+  the 39 callsites in `lib/api.ts` were migrated to
+  `requestJson<T>`. `requestText()` is exported for the
+  watchdog curl shim + future raw-text needs.
+- **B5 `classifyBackendError` + helpers** —
+  `lib/backend-error.ts` (NEW) provides a coarse error
+  classifier that maps 401/403 → `auth-invalid`, 422 →
+  `validation`, 429 → `rate-limited`, 500 →
+  `backend-error`, 503 → `auth-missing` (per
+  `app/core/auth.py:289`), 502/504 → `backend-down`,
+  TypeError → `backend-down`, AbortError → `timeout`.
+  `backendErrorMessage()` returns a 2-line
+  `{headline, hint, detail?}` shape so the actionable
+  hint is **always** present, with the server's own
+  message as an optional secondary line. The previous
+  single-string mix lost the hint when a server message
+  was present. `backendErrorAction()` provides the
+  "open docs ↗" button for toast.error.
+
+  One route (`routes/audit.tsx`) was upgraded as the
+  reference example for the B5 pattern. The remaining
+  `routes/**/*.tsx` upgrade (~10 files) is documented
+  in the standing rule below.
+- **#5 right-rail collapse** — `components/layout/
+  RailToggle.tsx` (NEW) extracted as a leaf component
+  so it can be unit-tested without dragging in the
+  full CockpitLayout provider tree. `RAIL_KEY` is
+  exported so the parent reads/writes the same
+  localStorage slot. CockpitLayout's right column
+  collapses from 240 px to 48 px when not expanded
+  (default), giving the center content more room.
+- **#6 persistent breadcrumb** —
+  `components/layout/Breadcrumb.tsx` (NEW) derives
+  segments from `useLocation().pathname`. Hidden on
+  `/` (home is implicit). Mounted in the CockpitLayout
+  top header, so it shows on every page without
+  per-route wiring.
+- **#7 `HALO_TEST_AUTH_BYPASS` dev workflow** —
+  `docs/SECURITY-HARDENING.md` got a new "Dev workflow"
+  section with the two-terminal `uvicorn` + `vite`
+  commands. Security caveats documented: bypass is
+  intended for `127.0.0.1` only; the env var is
+  per-shell (no TOML persistence); restart-on-toggle.
+
+#### Mid-implementation audit applied
+
+Per the Sprint 56.6 standing rule (every >100 LoC code
+addition passes through a mini-audit before commit), the
+freshly-added `lib/backend-error.ts` + components went
+through one refactor cycle before commit:
+
+- **P1 (applied)**: `backendErrorMessage()` originally
+  mixed "Server said: <detail>" with the actionable
+  hint in a single string — the user lost the hint
+  whenever the server had a message. **Fix**: changed
+  the return shape to `{headline, hint, detail?}` so
+  the hint is always shown, with the server's text as
+  an optional secondary line. `routes/audit.tsx` and
+  `lib/use-backend-health.ts` updated to consume the
+  new shape.
+- **P2 (applied)**: `OfflineBanner.tsx` originally had
+  its own `remediationFor(reason)` function that
+  duplicated the same kind→action mapping as
+  `backendErrorAction(reason)`. **Fix**: removed the
+  duplicate; `OfflineBanner` now calls
+  `backendErrorMessage()` + `backendErrorAction()` from
+  `lib/backend-error.ts` (single source of truth).
+- **P6 (applied)**: `RAIL_KEY` was hard-coded in two
+  places (CockpitLayout + RailToggle). **Fix**:
+  exported from RailToggle.tsx; CockpitLayout imports
+  it. One definition, two consumers.
+- **P3, P4, P5 (DEFERRED)**: minor — see standing rules
+  below.
+
+#### Files added/touched
+
+- `frontend/vite.config.ts` (port fix)
+- `frontend/src/lib/api.ts` (B2 + B4)
+- `frontend/src/lib/backend-error.ts` (NEW ~180 LoC)
+- `frontend/src/lib/backend-error.test.ts` (NEW 11 tests)
+- `frontend/src/lib/api.test.ts` (NEW 2 tests)
+- `frontend/src/lib/use-backend-health.ts` (NEW ~70 LoC)
+- `frontend/src/components/layout/Breadcrumb.tsx` (NEW ~50 LoC)
+- `frontend/src/components/layout/Breadcrumb.test.tsx` (NEW 2 tests)
+- `frontend/src/components/layout/OfflineBanner.tsx` (NEW ~80 LoC)
+- `frontend/src/components/layout/RailToggle.tsx` (NEW ~50 LoC)
+- `frontend/src/components/layout/CockpitLayout.test.tsx` (NEW 3 tests)
+- `frontend/src/components/layout/CockpitLayout.tsx` (3-state + breadcrumb + rail)
+- `frontend/src/routes/audit.tsx` (B5 reference upgrade)
+- `docs/SECURITY-HARDENING.md` (`HALO_TEST_AUTH_BYPASS` section)
+
+#### Verification
+
+- `frontend/vitest`: **179/179 pass** (was 160, +19
+  new tests across 4 new test files)
+- `frontend/tsc`: 0 new errors (4 pre-existing
+  `auth-bootstrap.test.ts` errors unchanged)
+- Sprint 56.6 module-graph guard: 15/15 pass
+- No backend changes — full backend pytest baseline
+  unchanged
+
+#### Acceptance criteria (per `docs/FEATURE-SPEC-
+SPRINT49-UI-ROBUSTNESS.md`)
+
+- [x] Fresh clone + dev backend → cockpit renders shell
+  + skeletons within 200 ms (3-state machine)
+- [x] Backend on 8765 + vite proxy fixed → all SPA
+  fetches succeed without absolute-URL overrides
+- [x] `HALO_TEST_AUTH_BYPASS=true` documented in
+  SECURITY-HARDENING.md
+- [x] `/settings` + `/audit` no longer throw
+  `body stream already read` (res.clone() fix + 39
+  callsite migration to `requestJson`)
+- [x] Right rail default-collapsed with localStorage
+  persistence
+- [x] Breadcrumb shows on `/projects/...`, `/settings`,
+  `/audit`, `/setup` (not on `/`)
+- [x] Offline banner surfaces `auth-missing` /
+  `backend-down` with actionable hints + docs link
+
+#### Standing rules going forward
+
+- **Every new `request()`-style call MUST use
+  `requestJson` / `requestText` from `lib/api.ts`.**
+  No direct `fetch()` calls for backend traffic.
+- **Every per-card error catch SHOULD route through
+  `classifyBackendError` + `backendErrorMessage` +
+  `backendErrorAction`**. The pattern is set in
+  `routes/audit.tsx`; copy it for the remaining 10+
+  route-level catches in `routes/**/*.tsx`.
+- **`HALO_TEST_AUTH_BYPASS` is dev-only**. CI must
+  never set it; production must always set
+  `server.require_tailscale = true`.
+- **No new localStorage key without schema version
+  suffix** (e.g. `*.v1`). Future migrations need the
+  version stamp to safely invalidate.
+- **The 503 → `auth-missing` mapping is specific to
+  this app's auth layer** (per
+  `app/core/auth.py:289`). If the backend ever changes
+  its auth-missing status code, update
+  `classifyBackendError` in the same commit.
+
+
 
 ### Sprint 56.7 (in-session) — VoiceTab per-section split (#1-ROI refactor)
 

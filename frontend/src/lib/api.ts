@@ -31,17 +31,25 @@ import type {
 } from "@/types/api";
 
 // Detect backend URL:
-// - Web dev: same-origin via Vite proxy (vite.config.ts) → empty string
-//   means `${path}` is resolved relative to the page origin (5173),
-//   and Vite forwards `/api`, `/health`, `/ws`, `/voice` to the
-//   backend on :8000. This avoids the previous 8766 port drift that
-//   caused `TypeError: Load failed` on every fetch.
-// - Tauri: read from window.__TAURI__ (TBD).
-// - Tailscale / prod: override via VITE_API_BASE (e.g. "http://box:8000").
+// - Web dev: same-origin via Vite proxy (vite.config.ts) → `window.location.origin`
+//   resolves `${path}` against the page origin (5173), and Vite forwards
+//   `/api`, `/health`, `/ws`, `/voice` to the backend on :8765. This
+//   avoids the previous 8766 port drift that caused `TypeError: Load
+//   failed` on every fetch.
+// - Tauri: read from `window.__HALO_API__` (injected by the Tauri shell
+//   at startup; defaults to same-origin in dev mode).
+// - Tailscale / prod: override via `VITE_API_BASE` (e.g.
+//   "http://box.tail123.ts.net:8765").
+//
+// Sprint 49 B2: the previous default of `""` produced `fetch(""+path)`
+// which throws `TypeError: Load failed` on every call when the SPA
+// wasn't on a port that had a working same-origin proxy. The
+// `window.location.origin` fallback means the SPA works out-of-the-box
+// on the vite dev port (5173) without env-var setup.
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string) ||
   (typeof window !== "undefined" && (window as any).__HALO_API__) ||
-  "";
+  (typeof window !== "undefined" ? window.location.origin : "");
 
 class ApiError extends Error {
   status: number;
@@ -54,7 +62,7 @@ class ApiError extends Error {
 }
 
 /**
- * Sprint 48 — wrap `request` with bearer-token injection.
+ * Sprint 48 — wrap `requestJson` with bearer-token injection.
  *
  * Reads `window.__haloApiToken` (set by Tauri at startup) and adds
  * `Authorization: Bearer <token>` to every outgoing fetch. If the
@@ -80,10 +88,38 @@ async function authedRequest<T>(
   if (token && token.length > 0) {
     baseHeaders["Authorization"] = `Bearer ${token}`;
   }
-  return request<T>(path, { ...init, headers: baseHeaders });
+  return requestJson<T>(path, { ...init, headers: baseHeaders });
 }
 
-async function request<T>(
+/**
+ * Sprint 49 B4 — split the old monolithic `request()` into
+ * `requestJson` + `requestText` so callers pick the right
+ * one explicitly.
+ *
+ * Old code was:
+ *
+ *   if (!res.ok) {
+ *     let body: unknown;
+ *     try { body = await res.json(); }
+ *     catch { body = await res.text(); }
+ *     ...
+ *   }
+ *
+ * This pattern is the source of the
+ * `TypeError: Failed to execute 'text' on 'Response': body stream
+ * already read` errors that crashed `/settings` and `/audit` on
+ * certain fast-Render-cycles. The `await res.json()` in the
+ * `try` block consumes the body stream; if the JSON parse
+ * throws (because the server returned text/plain), the `catch`
+ * branch then tries to `await res.text()` on the SAME consumed
+ * stream, which is the lock.
+ *
+ * The standard fix is `res.clone()` BEFORE the first read. We
+ * clone the response in the error branch and consume the
+ * clone; if the JSON parse fails, we still have the original
+ * for `.text()`. Same shape as the Fetch spec guidance.
+ */
+async function requestJson<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
@@ -95,11 +131,21 @@ async function request<T>(
     ...init,
   });
   if (!res.ok) {
+    // Clone BEFORE reading so we can attempt both .json() and
+    // .text() without locking the body stream.
+    const cloned = res.clone();
     let body: unknown;
     try {
-      body = await res.json();
+      body = await cloned.json();
     } catch {
-      body = await res.text();
+      // Fallback: read the original (not the clone) so the
+      // clone is left untouched. If both fail, surface the
+      // text "Unknown error body" so callers don't get stuck.
+      try {
+        body = await res.text();
+      } catch {
+        body = "Unknown error body (both json+text failed)";
+      }
     }
     throw new ApiError(
       res.status,
@@ -111,12 +157,46 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+/**
+ * Sprint 49 — raw-text variant of `requestJson`. Use only for
+ * endpoints that return `text/plain` (currently none in the
+ * codebase, but kept available for the watchdog curl shim and
+ * any future raw-text needs).
+ *
+ * The error path mirrors `requestJson` — clone + dual-read —
+ * so a 500 response with text/plain body still surfaces the
+ * server's error message in the `ApiError`.
+ */
+async function requestText(
+  path: string,
+  init: RequestInit = {},
+): Promise<string> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+  });
+  if (!res.ok) {
+    const cloned = res.clone();
+    let body: string;
+    try {
+      body = await cloned.text();
+    } catch {
+      try {
+        body = await res.text();
+      } catch {
+        body = "Unknown error body (both text+json failed)";
+      }
+    }
+    throw new ApiError(res.status, body, `API ${res.status} on ${path}: ${body}`);
+  }
+  return await res.text();
+}
+
 // Health & system
 export const api = {
-  health: () => request<HealthResponse>("/health"),
-  getGauges: () => request<Gauges>("/api/system/gauges"),
+  health: () => requestJson<HealthResponse>("/health"),
+  getGauges: () => requestJson<Gauges>("/api/system/gauges"),
   getSystemInfo: () =>
-    request<{
+    requestJson<{
       platform: string;
       python_version: string;
       app_version: string;
@@ -135,7 +215,7 @@ export const api = {
   // history: [], threshold_pct: 15.0}`. Corrupt JSONs are skipped
   // silently — see `app/voice/held_out_eval.py::load_eval_history`.
   getVoiceEvalResults: () =>
-    request<{
+    requestJson<{
       latest: EvalRunRow | null;
       history: EvalRunRow[];
       threshold_pct: number;
@@ -166,7 +246,7 @@ export const api = {
     ),
 
   getHeldOutEvalJob: (jobId: string) =>
-    request<EvalJob>(
+    requestJson<EvalJob>(
       `/voice/run-held-out-eval/${encodeURIComponent(jobId)}`,
     ),
 
@@ -194,7 +274,7 @@ export const api = {
     }),
 
   listEvalJobs: (limit = 10) =>
-    request<{ jobs: EvalJob[] }>(
+    requestJson<{ jobs: EvalJob[] }>(
       `/voice/list-jobs?limit=${limit}`,
     ),
 
@@ -202,13 +282,13 @@ export const api = {
   // HeldOutEvalCard to render the "Will fine-tune on: <path>
   // (N chunks · Ms)" hint above the fine-tune button.
   listSelfRecordCorpora: () =>
-    request<SelfRecordCorporaResponse>("/voice/self-record-corpora"),
+    requestJson<SelfRecordCorporaResponse>("/voice/self-record-corpora"),
 
   // Sprint 46: per-corpus WER breakdown. Drives the stacked bar
   // chart in HeldOutEvalCard. `limit` caps how many of the most
   // recent runs are bucketed (default 20).
   getEvalCorpusBreakdown: (limit = 20) =>
-    request<CorpusBreakdownResponse>(
+    requestJson<CorpusBreakdownResponse>(
       `/voice/eval-corpus-breakdown?limit=${limit}`,
     ),
 
@@ -221,7 +301,7 @@ export const api = {
   //   - `reason` (string | null) — populated when `skipped` is true
   // Missing endpoint → ApiError 404. Caller handles via try/catch.
   getSetupState: () =>
-    request<SetupState>("/api/setup/state"),
+    requestJson<SetupState>("/api/setup/state"),
 
   // Sprint 16 + 17a + 17b: voice config GET / PUT.
   //   - `wake_phrases` (Sprint 16) — list of strings, multi-line
@@ -253,7 +333,7 @@ export const api = {
   // forwarding; the frontend auto-fire hook ships in
   // Phase 2).
   getVoiceConfig: () =>
-    request<{
+    requestJson<{
       wake_phrases: string[];
       strict_wake_phrase: boolean;
       asr_backend?: string;
@@ -271,7 +351,7 @@ export const api = {
     asr_corrector?: string;
     always_on_mic?: boolean;
   }) =>
-    request<{
+    requestJson<{
       wake_phrases: string[];
       strict_wake_phrase: boolean;
       asr_backend?: string;
@@ -291,41 +371,41 @@ export const api = {
     }),
 
   // Projects
-  listProjects: () => request<ProjectSummary[]>("/api/projects"),
+  listProjects: () => requestJson<ProjectSummary[]>("/api/projects"),
   createProject: (data: ProjectCreate) =>
-    request<ProjectSummary>("/api/projects", {
+    requestJson<ProjectSummary>("/api/projects", {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  getProject: (name: string) => request<ProjectSummary>(`/api/projects/${name}`),
+  getProject: (name: string) => requestJson<ProjectSummary>(`/api/projects/${name}`),
   deleteProject: (name: string) =>
-    request<void>(`/api/projects/${name}`, { method: "DELETE" }),
+    requestJson<void>(`/api/projects/${name}`, { method: "DELETE" }),
   archiveProject: (name: string) =>
-    request<ProjectSummary>(`/api/projects/${name}/archive`, { method: "POST" }),
+    requestJson<ProjectSummary>(`/api/projects/${name}/archive`, { method: "POST" }),
 
   // Memory (persisted sessions)
   listProjectMemory: (name: string) =>
-    request<SessionListItem[]>(`/api/projects/${name}/memory`),
+    requestJson<SessionListItem[]>(`/api/projects/${name}/memory`),
   getSessionMessages: (name: string, sessionId: string) =>
-    request<{ session_id: string; project_name: string; message_count: number; messages: any[] }>(
+    requestJson<{ session_id: string; project_name: string; message_count: number; messages: any[] }>(
       `/api/projects/${name}/memory/${sessionId}`,
     ),
 
   // Sessions
-  listSessions: () => request<SessionInfo[]>("/api/sessions"),
+  listSessions: () => requestJson<SessionInfo[]>("/api/sessions"),
   startSession: (data: SessionStart) =>
-    request<SessionInfo>("/api/sessions", {
+    requestJson<SessionInfo>("/api/sessions", {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  getSession: (id: string) => request<SessionInfo>(`/api/sessions/${id}`),
+  getSession: (id: string) => requestJson<SessionInfo>(`/api/sessions/${id}`),
   sendMessage: (sessionId: string, data: MessageSend) =>
-    request<MessageResponse>(
+    requestJson<MessageResponse>(
       `/api/sessions/${sessionId}/message`,
       { method: "POST", body: JSON.stringify(data) },
     ),
   stopSession: (id: string) =>
-    request<{ session_id: string; status: string }>(`/api/sessions/${id}/stop`, {
+    requestJson<{ session_id: string; status: string }>(`/api/sessions/${id}/stop`, {
       method: "POST",
     }),
   /** A5 — fetch persisted message history for a session.
@@ -339,29 +419,29 @@ export const api = {
    *  so callers can share a single mapper.
    */
   getSessionHistory: (id: string) =>
-    request<SessionHistoryResponse>(`/api/sessions/${id}/messages`),
+    requestJson<SessionHistoryResponse>(`/api/sessions/${id}/messages`),
 
   // Mac control
   readFile: (data: FileReadRequest) =>
-    request<FileReadResponse>("/api/mac/file/read", {
+    requestJson<FileReadResponse>("/api/mac/file/read", {
       method: "POST",
       body: JSON.stringify(data),
     }),
   writeFile: (data: FileWriteRequest) =>
-    request<FileWriteResponse>("/api/mac/file/write", {
+    requestJson<FileWriteResponse>("/api/mac/file/write", {
       method: "POST",
       body: JSON.stringify(data),
     }),
   runShell: (data: ShellRequest) =>
-    request<ShellResponse>("/api/mac/shell", {
+    requestJson<ShellResponse>("/api/mac/shell", {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
   // Settings
-  getSettings: () => request<import("@/types/api").Settings>("/api/settings"),
+  getSettings: () => requestJson<import("@/types/api").Settings>("/api/settings"),
   getAuditLog: (limit = 100) =>
-    request<import("@/types/api").AuditEntry[]>(
+    requestJson<import("@/types/api").AuditEntry[]>(
       `/api/settings/audit?limit=${limit}`,
     ),
 
@@ -370,7 +450,7 @@ export const api = {
   // status. The POST `value` is sent over HTTPS (or Tailscale) and
   // never logged on either side.
   getSecrets: () =>
-    request<
+    requestJson<
       Record<
         string,
         { label: string; configured: boolean; source: "override" | "env" | "none" }
@@ -379,7 +459,7 @@ export const api = {
   setSecrets: (
     items: Array<{ name: string; value: string }>,
   ) =>
-    request<
+    requestJson<
       Record<
         string,
         { label: string; configured: boolean; source: "override" | "env" | "none" }
@@ -389,14 +469,14 @@ export const api = {
       body: JSON.stringify({ secrets: items }),
     }),
   deleteSecret: (name: string) =>
-    request<
+    requestJson<
       Record<
         string,
         { label: string; configured: boolean; source: "override" | "env" | "none" }
       >
     >(`/api/secrets/${name}`, { method: "DELETE" }),
   clearSecrets: (names: string[]) =>
-    request<
+    requestJson<
       Record<
         string,
         { label: string; configured: boolean; source: "override" | "env" | "none" }
@@ -410,17 +490,17 @@ export const api = {
   // the agent uses the memory_write tool. The dashboard can delete
   // entries the agent got wrong.
   listMemoryUsers: () =>
-    request<{ users: string[] }>("/api/memory"),
+    requestJson<{ users: string[] }>("/api/memory"),
   listMemoryEntries: (user: string) =>
-    request<{ user: string; entries: Array<{ key: string; value: string; updated_at: number; created_at: number }> }>(
+    requestJson<{ user: string; entries: Array<{ key: string; value: string; updated_at: number; created_at: number }> }>(
       `/api/memory/${encodeURIComponent(user)}`,
     ),
   readMemoryEntry: (user: string, key: string) =>
-    request<{ key: string; value: string; updated_at: number; created_at: number }>(
+    requestJson<{ key: string; value: string; updated_at: number; created_at: number }>(
       `/api/memory/${encodeURIComponent(user)}/${encodeURIComponent(key)}`,
     ),
   deleteMemoryEntry: (user: string, key: string) =>
-    request<{ deleted: boolean; user: string; key: string }>(
+    requestJson<{ deleted: boolean; user: string; key: string }>(
       `/api/memory/${encodeURIComponent(user)}/${encodeURIComponent(key)}`,
       { method: "DELETE" },
     ),

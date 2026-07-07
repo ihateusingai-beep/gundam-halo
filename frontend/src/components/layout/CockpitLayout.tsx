@@ -19,6 +19,10 @@ import { useVoiceInput } from "@/hooks/use-voice-input";
 import { useVadStateAutoFire } from "@/hooks/use-vad-state-autofire";
 import { useWsEvent, useWsStatus } from "@/lib/ws";
 import { api } from "@/lib/api";
+import { useBackendHealth } from "@/lib/use-backend-health";
+import { Breadcrumb } from "./Breadcrumb";
+import { OfflineBanner } from "./OfflineBanner";
+import { RAIL_KEY, RailToggle } from "./RailToggle";
 import {
   voiceBegin,
   voiceEnd,
@@ -78,6 +82,36 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   // Pause state — flips from ⏸ toggle in VoicePanel.
   // When true, useVadStateAutoFire ignores VAD events.
   const [micPaused, setMicPaused] = useState<boolean>(false);
+
+  // Sprint 49 B3: 3-state health machine. The cockpit shell
+  // renders immediately; content + offline banner reflect
+  // the health state. Per-card skeletons handle their own
+  // loading — this hook only governs the top-level shell.
+  const health = useBackendHealth();
+
+  // Sprint 49 #5: right-rail collapse. Default collapsed
+  // (the rail is empty/zero state when healthy) so the
+  // center content has more room. Persist the user's
+  // preference to localStorage so it survives reload.
+  // Schema-versioned to make future migrations safer.
+  // The RAIL_KEY is shared with RailToggle (imported) so
+  // the two components read/write the same slot.
+  const [railExpanded, setRailExpanded] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(RAIL_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(RAIL_KEY, railExpanded ? "1" : "0");
+    } catch {
+      /* localStorage disabled (private mode) — silently ignore */
+    }
+  }, [railExpanded]);
 
   // Fetch the voice config on mount and on Settings save.
   // We don't subscribe to a store here; the simplest
@@ -225,6 +259,12 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
           Hidden by default when the backend is healthy. */}
       <BackendHealthBanner />
 
+      {/* Sprint 49 B3: 3-state health machine. Renders the
+          OfflineBanner when the initial health check fails. The
+          watchdog banner above handles Tauri-side runtime crashes;
+          this one handles the first-load / proxy-down case. */}
+      <OfflineBanner state={health} />
+
       {/* Sprint 41 — restart nudge banner. Renders when the
           backend has a self-restart scheduled (5-second
           countdown after an asr_backend / asr_corrector
@@ -241,16 +281,23 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
 
       {/* Top bar — project nav. Responsive padding for chrome. */}
       <header className="border-b border-[var(--border-color)] bg-[var(--bg-card)]/80 backdrop-blur-md px-4 md:pl-48 md:pr-44 py-3 mt-2 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-3">
-          <h1 className="text-xl font-[Orbitron] text-[var(--accent)] tracking-widest uppercase">
-            Gundam Halo
-          </h1>
-          <span className="text-xs text-[var(--text-muted)] font-mono hidden sm:inline">
-            {mode === "active" && projectName
-              ? `// MISSION: ${projectName}`
-              : "// COCKPIT"}
-          </span>
-        </Link>
+          <Link to="/" className="flex items-center gap-3">
+            <h1 className="text-xl font-[Orbitron] text-[var(--accent)] tracking-widest uppercase">
+              Gundam Halo
+            </h1>
+            <span className="text-xs text-[var(--text-muted)] font-mono hidden sm:inline">
+              {mode === "active" && projectName
+                ? `// MISSION: ${projectName}`
+                : "// COCKPIT"}
+            </span>
+          </Link>
+          {/* Sprint 49 #6: persistent breadcrumb. Derived from
+              useLocation; hidden on `/` (home is implicit). Renders
+              inside the header so it shows on every page without
+              per-route wiring. */}
+          <div className="hidden md:block">
+            <Breadcrumb />
+          </div>
         <nav className="flex items-center gap-2 text-sm">
           <Link
             to="/"
@@ -277,7 +324,15 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
         </nav>
       </header>
 
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[200px_1fr_240px] gap-3 p-3 min-h-0">
+      <div
+        className={`flex-1 grid grid-cols-1 gap-3 p-3 min-h-0 ${
+          railExpanded
+            ? "md:grid-cols-[200px_1fr_240px]"
+            : "md:grid-cols-[200px_1fr_48px]"
+        }`}
+        data-testid="cockpit-3col"
+        data-rail-expanded={railExpanded ? "1" : "0"}
+      >
         {/* Left panel — adaptive by mode:
             - select mode: Quick Switch (3 most recent + New)
             - active mode: Full Projects list + Mission Log */}
@@ -341,55 +396,72 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
         {/* Center — main content */}
         <main className="overflow-y-auto min-w-0">{children}</main>
 
-        {/* Right panel — CSS Avatar + Mac system gauges */}
-        <aside className="overflow-y-auto space-y-3">
-          {/* Sprint 18 Track A: audio-reactive CyberWaveform above
-              the avatar. Source flips to "mic" while the user holds
-              the push-to-talk button (mic.state === "capturing"),
-              otherwise idle drift. 80px is a compact cockpit width;
-              the dev /cyber-wave-demo route still shows the full
-              160px form. The SignalCard component encapsulates
-              this logic and is unit-tested in SignalCard.test.tsx. */}
-          <HudCard>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
-                Signal
-              </h2>
-              <span className="text-[9px] font-mono text-[var(--text-muted)]">
-                {mic.state === "capturing" ? "● LIVE" : "○ IDLE"}
-              </span>
-            </div>
-            <SignalCard mic={mic} />
-          </HudCard>
+        {/* Right panel — CSS Avatar + Mac system gauges.
+            Sprint 49 #5: collapsed by default (just a vertical
+            tab strip with a toggle). Click the tab to expand.
+            State persists in localStorage. The 48 px collapsed
+            width fits the expand-tab + a "···" indicator. */}
+        <aside
+          className="overflow-y-auto space-y-3"
+          data-testid="cockpit-right-rail"
+          data-expanded={railExpanded ? "1" : "0"}
+        >
+          {/* Always-visible tab strip — single button that
+              toggles the rail. State persisted to localStorage.
+              See ./RailToggle.tsx for the standalone component
+              (tested in CockpitLayout.test.tsx). */}
+          <RailToggle />
+          {railExpanded && (
+            <>
+              {/* Sprint 18 Track A: audio-reactive CyberWaveform above
+                  the avatar. Source flips to "mic" while the user holds
+                  the push-to-talk button (mic.state === "capturing"),
+                  otherwise idle drift. 80px is a compact cockpit width;
+                  the dev /cyber-wave-demo route still shows the full
+                  160px form. The SignalCard component encapsulates
+                  this logic and is unit-tested in SignalCard.test.tsx. */}
+              <HudCard>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest">
+                    Signal
+                  </h2>
+                  <span className="text-[9px] font-mono text-[var(--text-muted)]">
+                    {mic.state === "capturing" ? "● LIVE" : "○ IDLE"}
+                  </span>
+                </div>
+                <SignalCard mic={mic} />
+              </HudCard>
 
-          <AvatarCard />
+              <AvatarCard />
 
-          <HudCard>
-            <VoicePanel
-              mic={mic}
-              alwaysOn={alwaysOnMic}
-              paused={micPaused}
-              onPausedChange={setMicPaused}
-            />
-          </HudCard>
+              <HudCard>
+                <VoicePanel
+                  mic={mic}
+                  alwaysOn={alwaysOnMic}
+                  paused={micPaused}
+                  onPausedChange={setMicPaused}
+                />
+              </HudCard>
 
-          <HudCard>
-            <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
-              System
-            </h2>
-            <div className="flex justify-around items-end h-32">
-              <Gauge label="CPU" value={gauges?.cpu_percent ?? 0} />
-              <Gauge label="RAM" value={gauges?.memory_percent ?? 0} />
-              <Gauge label="DSK" value={gauges?.disk_percent ?? 0} />
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-1 text-[10px] font-mono text-[var(--text-muted)]">
-              <div>↑ {(gauges?.network_sent_mb ?? 0).toFixed(1)} MB</div>
-              <div>↓ {(gauges?.network_recv_mb ?? 0).toFixed(1)} MB</div>
-            </div>
-            <div className="mt-2 pt-2 border-t border-[var(--border-color)]">
-              <ConnectionStatus />
-            </div>
-          </HudCard>
+              <HudCard>
+                <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">
+                  System
+                </h2>
+                <div className="flex justify-around items-end h-32">
+                  <Gauge label="CPU" value={gauges?.cpu_percent ?? 0} />
+                  <Gauge label="RAM" value={gauges?.memory_percent ?? 0} />
+                  <Gauge label="DSK" value={gauges?.disk_percent ?? 0} />
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-1 text-[10px] font-mono text-[var(--text-muted)]">
+                  <div>↑ {(gauges?.network_sent_mb ?? 0).toFixed(1)} MB</div>
+                  <div>↓ {(gauges?.network_recv_mb ?? 0).toFixed(1)} MB</div>
+                </div>
+                <div className="mt-2 pt-2 border-t border-[var(--border-color)]">
+                  <ConnectionStatus />
+                </div>
+              </HudCard>
+            </>
+          )}
         </aside>
       </div>
 
