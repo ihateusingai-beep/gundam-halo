@@ -6,8 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 56 → today)
+## Recent Sprints (Sprint 56.6 → today)
 
+- [Sprint 56.6 (in-session) — Route-smoke vitest guard (Sprint 56 R3 follow-up)](#sprint-566-in-session--route-smoke-vitest-guard-sprint-56-r3-follow-up)
+- [Sprint 56.5 (in-session) — Senior-engineer refactor R4 + R6 (cancelled) + R7 + R8](#sprint-565-in-session--senior-engineer-refactor-r4--r6-cancelled--r7--r8)
 - [Sprint 56 (in-session) — Senior-engineer refactor R1+R2+R3+R5](#sprint-56-in-session--senior-engineer-refactor-r1r2r3r5)
 - [Sprint 55 (in-session) — M9-E Layer 2 real closure (CV-yue LoRA + swap + version bump)](#sprint-55-in-session--m9-e-layer-2-real-closure-cv-yue-lora--swap--version-bump)
 - [Sprint 54 (in-session) — M9-E Layer 2 demo-grade swap](#sprint-54-in-session--m9-e-layer-2-demo-grade-swap)
@@ -1303,6 +1305,118 @@ Tests:
   voice REST area. The shim is for back-compat only.
 - **Use `from @/services/voice` for new code** in the voice WS
   area. The shim is for back-compat only.
+
+### Sprint 56.6 (in-session) — Route-smoke vitest guard (Sprint 56 R3 follow-up)
+
+Closes the standing-rule promise from Sprint 56.5's commit
+message: **"Add CI-time e2e check for each route so broken
+imports don't slip past vitest/tsc."** Pure internal-quality
+work — no user-facing capability added.
+
+**Bumps `__version__` 0.2.2 → 0.2.3 (PATCH)** — refactor only,
+no semantic change. 4 surfaces synced.
+
+#### The bug class this guards against
+
+Sprint 56 R3 moved the 8 settings tabs into
+`routes/settings/tabs/` via `git mv`. The renamed tabs were
+committed with `from './shared'` (the OLD pre-move path) —
+Vite / tsc didn't catch it because each tab is only rendered
+at runtime when SettingsPage navigates to it. The bug lived
+for one commit cycle and was incidentally fixed in Sprint
+56.5. This sprint adds a guard so the same class of bug can
+never escape a PR again.
+
+#### What landed
+
+- **`frontend/src/routes/__route-module-graph.test.ts`** —
+  15 vitest tests that `import.meta.glob('./**/*.tsx',
+  { eager: true })` every `.tsx` under `src/routes/`. The
+  Vite transform pipeline resolves every static import at
+  test-time, so a wrong `from './foo'` surfaces as `Failed
+  to resolve import` BEFORE the test body even runs.
+- The test asserts each registered route entry (a) loads
+  without broken-import errors and (b) exports the named
+  App.tsx function shape (`SettingsPage`, `OverviewPage`,
+  etc.).
+- The test ALSO asserts every `.tsx` file under `src/routes/`
+  is either a registered route entry OR an inferred helper
+  (file under a folder whose `./<folder>.tsx` is a route
+  entry — e.g. `./settings/tabs/*.tsx`). Adding a new route
+  without registering it in `ROUTE_ENTRIES` fails the
+  test with a clear list of unindexed files.
+- **Verified empirical catch**: reverting any of the 4
+  fixed Sprint 56 R3 tabs (`VoiceTab`, `GeneralTab`,
+  `MacTab`, `ThemesTab`) back to `from './shared'` makes
+  the test fail with `Failed to resolve import './shared'`
+  on the very first `it()`. The Sprint 56 R3 bug class
+  cannot escape PR-time anymore.
+
+#### Senior-engineer audit applied mid-implementation
+
+Per the in-session senior-engineer audit prompt, the
+freshly-added code went through one refactor cycle BEFORE
+being committed:
+
+- **`frontend/src/test/ws-stub.ts` (NEW, 110 LoC)** —
+  extracted from `src/test/setup.ts`. The `WebSocketStub`
+  class is now defined once (instead of re-defined per
+  test file load — setupFiles load per-file). Added a
+  docstring that explains WHY the stub exists (jsdom's
+  default `WebSocket` rejects relative URLs) and HOW to
+  override per-test (`vi.stubGlobal("WebSocket", MySpy)`).
+- **`frontend/src/test/setup.ts`** — collapsed from
+  ~50 LoC of inline stub + UA-detection heuristic to 12
+  LoC that imports the stub and installs it
+  unconditionally. The old heuristic
+  (`/jsdom/i.test(navigator.userAgent)`) was fragile —
+  jsdom v29.1.1 ships a default `WebSocket` constructor
+  whose UA contains `jsdom/29.1.1` (verified empirically
+  via `node -e "new JSDOM('').navigator.userAgent"`), so
+  the second guard clause was the only one that fired.
+  Dropping it removes a future-regression vector if jsdom
+  ever changes its default UA or ships a non-rejecting
+  WebSocket.
+- **`__route-smoke.test.ts` → `__route-module-graph.test.ts`** —
+  renamed for clarity (the file checks the module graph,
+  not just "is the route reachable") and the `__` magic
+  prefix is now documented at the top of the file with
+  exactly which lines must be updated if you rename or
+  relocate it.
+- **`isRouteHelper()` inference** — replaced the hand-
+  enumerated `NON_ROUTE_PREFIXES: string[]` (which would
+  drift every time someone added a new folder) with a
+  recursive walk-up-the-path-tree inference. Today: only
+  `./settings.tsx` is the helper-tree root. Tomorrow: any
+  new entry with a sibling folder's helpers becomes a
+  helper-tree automatically. The suite-block test catches
+  drift.
+
+#### Test results
+
+- `frontend/vitest`: **160/160 pass** (was 145/145 — the
+  15 smoke tests are additive, 0 regressions)
+- `frontend/tsc`: 0 new errors (4 pre-existing
+  `auth-bootstrap` errors unchanged)
+- The new smoke test catches `Failed to resolve import`
+  on the broken-import class of bug at PR-time (verified
+  by manually reverting then re-running).
+
+#### Standing rule for next session
+
+- **Every refactor that `git mv`s files MUST run
+  `pnpm vitest run src/routes/__route-module-graph.test.ts`
+  before commit.** The smoke is the PR gate.
+- **Adding a new route under `src/routes/`**: add it to
+  the `ROUTE_ENTRIES` array in the smoke test. The
+  suite-block test fails loudly if you forget.
+- **Adding a new helper folder under a route entry**: no
+  action needed; `isRouteHelper()` recursively infers it.
+  Only add a comment if the helper is non-obvious.
+- **Tests that need to assert on WS frames**: use
+  `vi.stubGlobal("WebSocket", MySpyClass)` to override
+  the unconditional stub from `src/test/setup.ts`. See
+  `src/test/ws-stub.ts` for the docstring.
 
 ### Sprint 48 — Auth layer for /api/system/* + write-side /voice/* + /api/setup/*
 
