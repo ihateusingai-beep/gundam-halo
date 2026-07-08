@@ -15,6 +15,8 @@ import { toast } from "sonner";
 
 import type { UseVoiceInputResult } from "@/hooks/use-voice-input";
 import { api } from "@/lib/api";
+import { TtsAudioGraph } from "@/lib/audio-graph";
+import { useThemeStore } from "@/stores/theme";
 import { WakePhraseHint } from "@/components/gundam/WakePhraseHint";
 import {
   getVoiceStatus,
@@ -105,6 +107,35 @@ export function VoicePanel({
   // could overlap or play a frame past the queue head.)
   const playSeqRef = useRef(0);
   const drainingRef = useRef(false);
+  // Sprint 57: per-theme TTS EQ. The graph owns the
+  // AudioContext + 5-band BiquadFilter chain. We attach the
+  // <audio> element on the first playChunk and apply the
+  // current theme's preset (the cockpit's visual theme —
+  // NT-D / SEED / CROSS / etc.). The graph is disposed on
+  // unmount.
+  const ttsGraphRef = useRef<TtsAudioGraph | null>(null);
+  const theme = useThemeStore((s) => s.theme);
+
+  // Sprint 57: keep the TTS graph's EQ preset in sync with the
+  // current theme. Setting the theme on the graph calls
+  // `applyEqPreset(filters, newPreset)` — instant snap, no
+  // cross-fade (matches the visual theme switch).
+  useEffect(() => {
+    if (!ttsGraphRef.current) {
+      ttsGraphRef.current = new TtsAudioGraph();
+    }
+    ttsGraphRef.current.setTheme(theme);
+  }, [theme]);
+
+  // Cleanup: dispose the TTS graph on unmount to release the
+  // AudioContext (otherwise hot-reload + remount would leak
+  // contexts until the tab hits the browser's limit).
+  useEffect(() => {
+    return () => {
+      ttsGraphRef.current?.dispose();
+      ttsGraphRef.current = null;
+    };
+  }, []);
 
   // Subscribe to state changes
   useEffect(() => {
@@ -177,6 +208,23 @@ export function VoicePanel({
       const url = URL.createObjectURL(blob);
       const audio = audioRef.current ?? new Audio();
       audioRef.current = audio;
+
+      // Sprint 57: route the <audio> element through the
+      // TTS EQ graph (MediaElementAudioSourceNode → 5-band
+      // BiquadFilter chain → AudioDestination). attachMediaElement
+      // is idempotent — first call creates the source node
+      // + connects it; subsequent calls are no-ops (the
+      // graph retains the source across chunks).
+      const graph = ttsGraphRef.current;
+      if (graph) {
+        graph.attachMediaElement(audio);
+        // Re-apply the current theme's preset on every chunk
+        // (cheap — 5 setValueAtTime calls). This guarantees
+        // the EQ is always in sync even if the user changed
+        // themes mid-playback.
+        graph.setTheme(useThemeStore.getState().theme);
+        graph.resume();
+      }
 
       const cleanup = () => {
         URL.revokeObjectURL(url);

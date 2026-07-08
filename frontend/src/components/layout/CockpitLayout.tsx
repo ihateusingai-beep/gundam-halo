@@ -11,6 +11,7 @@ import { MaybeBackendOutdatedBanner } from "@/components/gundam/BackendOutdatedB
 import { BackendHealthBanner } from "@/components/gundam/BackendHealthBanner";
 import { RestartNudgeBanner } from "@/components/gundam/RestartNudgeBanner";
 import { SignalCard } from "@/components/gundam/SignalCard";
+import { CockpitEqCard } from "@/components/gundam/CockpitEqCard";
 import { AvatarCard } from "@/components/live2d/AvatarCard";
 import { useBackendVersion } from "@/hooks/use-backend-version";
 import { useProjectsStore } from "@/stores/projects";
@@ -20,6 +21,7 @@ import { useVadStateAutoFire } from "@/hooks/use-vad-state-autofire";
 import { useWsEvent, useWsStatus } from "@/lib/ws";
 import { api } from "@/lib/api";
 import { useBackendHealth } from "@/lib/use-backend-health";
+import { getVoiceStatus, onVoiceStatusChange } from "@/services/halo-voice-ws";
 import { Breadcrumb } from "./Breadcrumb";
 import { OfflineBanner } from "./OfflineBanner";
 import { RAIL_KEY, RailToggle } from "./RailToggle";
@@ -88,6 +90,13 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   // the health state. Per-card skeletons handle their own
   // loading — this hook only governs the top-level shell.
   const health = useBackendHealth();
+
+  // Sprint 57: subscribe to voice status so the EQ visualizer
+  // lights up when the agent is speaking. VoicePanel also
+  // subscribes (independently) for its own state; this is
+  // a one-way fire-and-forget.
+  const [voiceStatus, setVoiceStatusState] = useState(() => getVoiceStatus());
+  useEffect(() => onVoiceStatusChange(setVoiceStatusState), []);
 
   // Sprint 49 #5: right-rail collapse. Default collapsed
   // (the rail is empty/zero state when healthy) so the
@@ -442,6 +451,16 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
                   onPausedChange={setMicPaused}
                 />
               </HudCard>
+
+              {/* Sprint 57: per-theme TTS equalizer visualizer.
+                  Owns a SEPARATE TtsAudioGraph (read-only — never
+                  connects to an audio source) for visualizing
+                  the active EQ profile. The active playback
+                  chain lives in VoicePanel; the visualizer just
+                  reads the preset + filter state for display. */}
+              <CockpitEqCard
+                live={mic.state === "capturing" || voiceStatus.state === "speaking"}
+              />
 
               <HudCard>
                 <h2 className="text-xs font-[Orbitron] text-[var(--accent)] uppercase tracking-widest mb-3">

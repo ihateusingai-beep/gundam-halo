@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 49 → today)
+## Recent Sprints (Sprint 57 → today)
 
+- [Sprint 57 (in-session) — Per-theme TTS equalizer + gundam-style visualizer (8 themes × 5-band EQ)](#sprint-57-in-session--per-theme-tts-equalizer--gundam-style-visualizer-8-themes--5-band-eq)
 - [Sprint 49 (in-session) — UI robustness catch-up (vite proxy + 3-state loading + backend-error + breadcrumb + rail collapse + dev bypass docs)](#sprint-49-in-session--ui-robustness-catch-up-vite-proxy--3-state-loading--backend-error--breadcrumb--rail-collapse--dev-bypass-docs)
 - [Sprint 56.7 (in-session) — VoiceTab per-section split (#1-ROI refactor)](#sprint-567-in-session--voicetab-per-section-split-1-roi-refactor)
 - [Sprint 56.6 (in-session) — Route-smoke vitest guard (Sprint 56 R3 follow-up)](#sprint-566-in-session--route-smoke-vitest-guard-sprint-56-r3-follow-up)
@@ -1417,8 +1418,171 @@ being committed:
   Only add a comment if the helper is non-obvious.
 - **Tests that need to assert on WS frames**: use
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
-   the unconditional stub from `src/test/setup.ts`. See
-   `src/test/ws-stub.ts` for the docstring.
+  the unconditional stub from `src/test/setup.ts`. See
+  `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 57 (in-session) — Per-theme TTS equalizer + gundam-style visualizer
+
+**User-facing capability** (not pure polish). When the
+agent speaks via TTS, the audio is now routed through a
+**5-band BiquadFilter equalizer** whose preset is **driven by
+the cockpit theme**. The right rail shows a **gundam-style EQ
+visualizer** that lights up while the agent is speaking.
+
+**Bumps `__version__` 0.2.5 → 0.2.6 (MINOR)** — new
+user-facing capability. 4 surfaces synced.
+
+#### What landed
+
+- **Per-theme EQ presets** — `frontend/src/lib/audio-eq.ts`
+  (~180 LoC). 8 named presets, one per Gundam theme:
+  - **NT-D (psycho-frame resonance)**: high-shelf boost
+    + low-cut. Sharp, crystalline.
+  - **SEED (prismatic)**: presence boost around 2 kHz.
+    Bright, airy.
+  - **CROSS (X-1 skull)**: low-shelf boost + high-cut.
+    Dark, bassy.
+  - **GREEN (green frame)**: near-flat, gentle upper-bass
+    lift. Balanced, organic.
+  - **00 (Qubit Trans-Am)**: mid boost around 1 kHz.
+    Metallic, mid-forward.
+  - **DESTINY (beam blade)**: treble boost around 5 kHz.
+    Sharp, cutting.
+  - **GOD (flame of God)**: low-shelf boost + slight
+    mid-cut. Deep, warm.
+  - **KAWAII (chibi)**: high-pass at 300 Hz + treble
+    boost. Cute, treble-only.
+  - **Flat** (system default fallback): no EQ.
+
+  Each preset is 5 BiquadFilter configurations (low shelf
+  @ 100 Hz / peaking @ 250 Hz / peaking @ 1 kHz / peaking
+  @ 2.5 kHz / high shelf @ 6 kHz).
+
+- **`TtsAudioGraph` (lifecycle)** — `frontend/src/lib/
+  audio-graph.ts` (~150 LoC). One class that owns:
+  1. The single `AudioContext` for the component.
+  2. The 5-band BiquadFilter chain (filters connected in
+     series, output → `ctx.destination`).
+  3. The `MediaElementAudioSourceNode` patch that
+     routes the `<audio>` element through the chain.
+  4. The `setTheme(themeId)` method that re-applies the
+     preset (no-op if the theme hasn't changed).
+  5. The `dispose()` method for clean unmount.
+
+- **VoicePanel wiring** — `frontend/src/components/
+  gundam/VoicePanel.tsx`. The existing TTS pipeline
+  (MP3 chunks via `onVoiceBinary` → Blob URL → `<audio>.src`)
+  now passes through `TtsAudioGraph.attachMediaElement(audio)`
+  + `setTheme(useThemeStore.getState().theme)` on every
+  chunk. The EQ updates **instantly** when the user
+  switches theme mid-playback (no fade — matches the
+  visual theme switch, which is also instant).
+
+- **CockpitEqCard (right-rail widget)** — `frontend/src/
+  components/gundam/CockpitEqCard.tsx` (~70 LoC). New
+  `<HudCard>` mounted in the right rail (between the
+  VoicePanel and the System gauges). Owns a SEPARATE
+  `TtsAudioGraph` for read-only visualization (the actual
+  playback graph is in VoicePanel). Shows the active
+  preset name + 5 vertical bars (gains in dB) + per-band
+  frequency labels + a "● LIVE" / "○ IDLE" indicator
+  that lights up when the agent is speaking.
+
+- **EqVisualizer (presentation)** — `frontend/src/
+  components/gundam/EqVisualizer.tsx` (~150 LoC). Pure
+  presentation; takes a `preset: EqPreset` and `live:
+  boolean` and renders the 5-band bar chart with
+  per-band colors (`--band-1` through `--band-5`).
+
+- **CSS variables** — `frontend/src/styles/gundam.css`.
+  5 new tokens defined alongside the existing palette:
+  - `--band-1: #00D4FF` (cyan)
+  - `--band-2: #FF69B4` (pink)
+  - `--band-3: #FFD700` (yellow)
+  - `--band-4: #B14EFF` (magenta)
+  - `--band-5: #00FF7F` (green)
+
+  The colors were chosen to be visually distinct against
+  the gundam dark-blue background while staying inside
+  the existing gundam palette.
+
+#### Mid-implementation audit applied
+
+Per the Sprint 56.6 standing rule (every >100 LoC code
+addition passes through a mini-audit before commit):
+
+- **P1 (applied)**: `TtsAudioGraph.setTheme()` originally
+  re-applied the preset on every TTS chunk. The 5
+  `setValueAtTime` calls are O(1) per chunk but a single
+  turn can have 5-20 chunks. **Fix**: cache the current
+  preset; if `getEqPreset(themeId) === currentPreset`,
+  return early. Defensive per-chunk re-apply is preserved
+  for the rare case where the theme changes mid-turn.
+- **P3 (applied)**: `EqVisualizer` originally referenced
+  `var(--band-1)` through `var(--band-5)` — these tokens
+  didn't exist in `gundam.css`, so the bars rendered
+  black. **Fix**: added the 5 tokens to `:root,
+  [data-theme^="gundam-"]` with documented choices.
+- **P2 (deferred)**: VoicePanel + CockpitEqCard each
+  create their own AudioContext (2 total). Browser limit
+  is ~6 per page in Chromium, so this is fine today.
+  Documented the limit in a comment for future work.
+- **P5 (deferred)**: `applyEqPreset` uses `setValueAtTime`
+  (instant snap) which can produce an audible click when
+  the user switches theme. The spec explicitly chose
+  snap to match the visual theme switch. A 50ms
+  `linearRampToValueAtTime` would be smoother but is
+  out of scope.
+
+#### Files added/touched
+
+- `frontend/src/lib/audio-eq.ts` (NEW ~190 LoC)
+- `frontend/src/lib/audio-eq.test.ts` (NEW 7 tests)
+- `frontend/src/lib/audio-graph.ts` (NEW ~150 LoC)
+- `frontend/src/lib/audio-graph.test.ts` (NEW 4 tests)
+- `frontend/src/components/gundam/EqVisualizer.tsx` (NEW ~150 LoC)
+- `frontend/src/components/gundam/EqVisualizer.test.tsx` (NEW 4 tests)
+- `frontend/src/components/gundam/CockpitEqCard.tsx` (NEW ~70 LoC)
+- `frontend/src/components/gundam/CockpitEqCard.test.tsx` (NEW 3 tests)
+- `frontend/src/components/gundam/VoicePanel.tsx` (TTS graph integration)
+- `frontend/src/components/layout/CockpitLayout.tsx` (right-rail mount)
+- `frontend/src/styles/gundam.css` (5 new CSS tokens)
+
+#### Verification
+
+- `frontend/vitest`: **197/197 pass** (was 179; +18
+  new tests across 4 new test files)
+- `frontend/tsc`: 0 new errors (4 pre-existing
+  `auth-bootstrap.test.ts` errors unchanged)
+- Sprint 56.6 module-graph guard: 15/15 pass
+- No backend changes — pytest baseline unchanged
+
+#### Standing rule for next session
+
+- **Every new audio-routing component MUST reuse
+  `TtsAudioGraph`** rather than creating its own
+  AudioContext. The graph is the single source of
+  truth for the EQ chain.
+- **The EQ presets are a UX guarantee, not a stylistic
+  preference.** Any future preset change must be
+  reflected in `audio-eq.test.ts` (per-theme
+  character tests pin the high-shelf, low-shelf,
+  mid-emphasis choices).
+- **The `--band-N` CSS tokens are gundam-palette
+  decisions** — coordinate any color change with the
+  existing `gundam.css` palette (cyan / pink / yellow /
+  magenta / green).
+- **Per-theme EQ is a starting point** — if user
+  feedback wants per-USER EQ (independent of theme),
+  lift the preset registry to `useEqStore` (mirroring
+  `useThemeStore`). M11 follow-up.
+- **The visualizer is read-only** (CockpitEqCard's
+  graph doesn't connect to an audio source). It just
+  reads the active preset. Don't add input controls
+  to the visualizer — that's a separate "EQ Editor"
+  feature for later.
+
+
 
 ### Sprint 49 (in-session) — UI robustness catch-up (vite proxy + 3-state loading + backend-error + breadcrumb + rail collapse + dev bypass docs)
 

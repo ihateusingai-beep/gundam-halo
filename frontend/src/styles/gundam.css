@@ -11,6 +11,18 @@
   --bg-input: #1a2540;
   --bg-elevated: #1e2a45;
 
+  /* EQ visualizer band colours (Sprint 57). One per BiquadFilter
+     band in the TTS equalizer (100 Hz / 250 Hz / 1 kHz / 2.5 kHz
+     / 6 kHz). Chosen to be visually distinct against the gundam
+     dark-blue background while staying inside the gundam
+     palette (cyan / pink / yellow / magenta / green). The
+     visualizer (EqVisualizer.tsx) reads these via var(--band-N). */
+  --band-1: #00D4FF; /* cyan — low shelf @ 100 Hz */
+  --band-2: #FF69B4; /* pink  — peaking  @ 250 Hz */
+  --band-3: #FFD700; /* yellow — peaking @ 1 kHz */
+  --band-4: #B14EFF; /* magenta — peaking @ 2.5 kHz */
+  --band-5: #00FF7F; /* green  — high shelf @ 6 kHz */
+
   /* Text */
   --text-primary: #E8F4F8;
   --text-secondary: #6A8BA8;
