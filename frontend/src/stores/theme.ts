@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { GundamTheme } from "@/types/api";
+import { defaultBgForTheme } from "@/lib/theme-bg-constants";
 
 export type CockpitBackground =
   | "none" // pure hex grid, no JPG
@@ -91,6 +92,21 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     if (t) {
       document.documentElement.setAttribute("data-theme", t);
       localStorage.setItem("gundam-halo-theme", t);
+      // Sprint 58: auto-cascade the cockpit background to the
+      // per-theme default. Each Gundam theme has its own hero
+      // wallpaper (bg-<theme>-core-01.jpg); picking SEED no
+      // longer leaves you looking at Unicorn NT-D background art.
+      //
+      // Only auto-switch when the current bg is "none" (user
+      // never picked one) or "core-01" (the historical default
+      // -- they get the new theme's variant). If the user picked
+      // core-02 / 03 / 04 explicitly, preserve their choice.
+      const currentBg = get().background;
+      if (currentBg === "none" || currentBg === "core-01") {
+        const newBg = defaultBgForTheme(t);
+        applyBackground(newBg);
+        set({ background: newBg });
+      }
     } else {
       document.documentElement.removeAttribute("data-theme");
       localStorage.removeItem("gundam-halo-theme");

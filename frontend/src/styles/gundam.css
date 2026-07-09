@@ -1322,8 +1322,12 @@
   isolation: isolate;
 }
 
-/* Background image layer (only visible when html[data-bg] is set).
- * Uses cover so any uploaded JPG scales correctly without distortion. */
+/* Background image layer (Sprint 58: per-theme asset URL is
+ * applied inline by CockpitLayout, keyed on (theme, background)).
+ * The CSS rule below is a safety-net — it sets background-size /
+ * position / blend mode / opacity. The inline style overrides
+ * `background-image` when set; otherwise the cockpit shows the
+ * pure hex grid (no image). */
 [data-theme^="gundam-"] .gundam-cockpit-bg {
   position: fixed;
   inset: 0;
@@ -1333,9 +1337,7 @@
   background-repeat: no-repeat;
   opacity: 0.5;
   pointer-events: none;
-  /* Default fallback — pure hex grid only. When html[data-bg] is set,
-   * the M14 theme controller writes an inline background-image to this
-   * element, so this declaration is just a safety net. */
+  /* No default image — pure hex grid only when inline is absent. */
   background-image: none;
   mix-blend-mode: screen;
 }

@@ -3,6 +3,8 @@ import { Link, useLocation } from "react-router";
 import { Toaster } from "sonner";
 
 import { HudCard } from "@/components/gundam/HudCard";
+import { resolveBgAsset } from "@/routes/settings/constants";
+import { useThemeStore } from "@/stores/theme";
 import { Gauge } from "@/components/gundam/Gauge";
 import { ConnectionStatus } from "@/components/gundam/ConnectionStatus";
 import { MissionLog } from "@/components/gundam/MissionLog";
@@ -113,6 +115,14 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
       return false;
     }
   });
+
+  // Sprint 58: per-theme cockpit background. Subscribe to the
+  // store so we re-derive the asset URL whenever the user picks
+  // a new theme (the store's setTheme cascade switches the
+  // slug, but the actual asset URL also depends on the theme).
+  const theme = useThemeStore((s) => s.theme);
+  const background = useThemeStore((s) => s.background);
+  const cockpitBgUrl = background !== "none" ? resolveBgAsset(background, theme) : null;
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -228,8 +238,21 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
 
   return (
     <div className={`gundam-cockpit-frame gundam-cockpit-vignette gundam-hex-bg gundam-mode-${mode} min-h-screen flex flex-col`}>
-      {/* Background image layer (visible only when [data-bg] is set on <html>) */}
-      <div className="gundam-cockpit-bg" aria-hidden="true" />
+      {/* Background image layer (Sprint 58: per-theme asset URL
+          computed inline from the current theme + bg slug; falls
+          back to no image when bg = "none"). The CSS rule on
+          `.gundam-cockpit-bg` only sets the safety-net
+          background-image: none, so the inline style here is what
+          actually paints the wallpaper. */}
+      <div
+        className="gundam-cockpit-bg"
+        aria-hidden="true"
+        style={
+          cockpitBgUrl
+            ? { backgroundImage: `url(${cockpitBgUrl})` }
+            : undefined
+        }
+      />
 
       {/* Toaster (Sonner) — global */}
       <Toaster

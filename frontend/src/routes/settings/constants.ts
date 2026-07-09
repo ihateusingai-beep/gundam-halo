@@ -54,19 +54,42 @@ export function isValidSettingsTab(s: string | null | undefined): s is SettingsT
   return !!s && SIDEBAR_ENTRIES.some(e => e.id === s);
 }
 
+/**
+ * Sprint 58 — per-theme bg helpers. Re-exported from
+ * `lib/theme-bg-constants.ts` (the single source of truth)
+ * so wizard + settings + store all import the same mapping.
+ * The `setTheme()` store action auto-cascades the cockpit
+ * background to `defaultBgForTheme()` when the user picks a
+ * new theme and the current bg is "none" or "core-01" (the
+ * historical defaults). Picking SEED no longer leaves you
+ * looking at Unicorn NT-D background art.
+ */
+export {
+  defaultBgForTheme,
+  resolveBgAsset,
+  THEME_DEFAULT_BG,
+  THEMES_WITH_BG_SET,
+} from "@/lib/theme-bg-constants";
+
 export interface BgOption {
   id: CockpitBackground;
   label: string;
   description: string;
+  /** Legacy NT-D Unicorn thumb; the per-theme variant is
+   *  computed at render time via `resolveBgAsset(id, themeId)`. */
   thumb: string | null;
 }
 
+/** Static descriptor list. The thumbnail URL uses the NT-D
+ *  Unicorn baseline; the actual rendered thumb comes from
+ *  `resolveBgAsset(id, themeId)` so each theme shows its own
+ *  artwork in the wizard. */
 export const BACKGROUNDS: BgOption[] = [
   { id: "none", label: "NONE", description: "Pure hex grid — fast, no asset", thumb: null },
-  { id: "core-01", label: "CORE-01", description: "Psychoframe — pink pulse", thumb: "/gundam-assets/backgrounds/bg-unicorn-core-01.jpg" },
-  { id: "core-02", label: "CORE-02", description: "Psychoframe — cyan glow", thumb: "/gundam-assets/backgrounds/bg-unicorn-core-02.jpg" },
-  { id: "core-03", label: "CORE-03", description: "Psychoframe — strong pulse", thumb: "/gundam-assets/backgrounds/bg-unicorn-core-03.jpg" },
-  { id: "core-04", label: "CORE-04", description: "Psychoframe — soft glow", thumb: "/gundam-assets/backgrounds/bg-unicorn-core-04.jpg" },
+  { id: "core-01", label: "CORE-01", description: "Hero — flagship artwork", thumb: "/gundam-assets/backgrounds/bg-unicorn-core-01.jpg" },
+  { id: "core-02", label: "CORE-02", description: "Alternate 1", thumb: "/gundam-assets/backgrounds/bg-unicorn-core-02.jpg" },
+  { id: "core-03", label: "CORE-03", description: "Alternate 2", thumb: "/gundam-assets/backgrounds/bg-unicorn-core-03.jpg" },
+  { id: "core-04", label: "CORE-04", description: "Alternate 3", thumb: "/gundam-assets/backgrounds/bg-unicorn-core-04.jpg" },
 ];
 
 export const SPEED_PRESETS: Array<{

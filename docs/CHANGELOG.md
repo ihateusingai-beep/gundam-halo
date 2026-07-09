@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 57 → today)
+## Recent Sprints (Sprint 58 → today)
 
+- [Sprint 58 (in-session) — Per-theme gundam assets Phase 4 wire-up (themes + avatars + bg + 9-theme union + version bump 0.2.6→0.2.7)](#sprint-58-in-session--per-theme-gundam-assets-phase-4-wire-up-themes--avatars--bg--9-theme-union--version-bump-026027)
 - [Sprint 57 (in-session) — Per-theme TTS equalizer + gundam-style visualizer (8 themes × 5-band EQ)](#sprint-57-in-session--per-theme-tts-equalizer--gundam-style-visualizer-8-themes--5-band-eq)
 - [Sprint 49 (in-session) — UI robustness catch-up (vite proxy + 3-state loading + backend-error + breadcrumb + rail collapse + dev bypass docs)](#sprint-49-in-session--ui-robustness-catch-up-vite-proxy--3-state-loading--backend-error--breadcrumb--rail-collapse--dev-bypass-docs)
 - [Sprint 56.7 (in-session) — VoiceTab per-section split (#1-ROI refactor)](#sprint-567-in-session--voicetab-per-section-split-1-roi-refactor)
@@ -1420,6 +1421,42 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 58 (in-session) — Per-theme gundam assets Phase 4 wire-up (themes + avatars + bg + 9-theme union + version bump 0.2.6→0.2.7)
+
+**What shipped**: 81 gundam assets (9 emblems + 12 backgrounds + 4 anchors + 36 emotion-{ntd-green, 00, destiny, god} + 9 SEED + 9 NT-D legacy + 4 NT-D legacy bg) are now actually visible in the cockpit, themed per the active theme. Before this sprint, the asset files existed on disk but only the SEED emotion set was wired up; backgrounds and the rest of the avatars silently fell through to no-render.
+
+**The 5 Phase 4 changes**:
+
+1. **Single source of truth for per-theme assets**: NEW `frontend/src/lib/theme-bg-constants.ts` (THEMES_WITH_BG_SET + THEME_DEFAULT_BG + defaultBgForTheme + themeAssetSlug + resolveBgAsset) + NEW `frontend/src/lib/avatar-paths.ts` (THEMES_WITH_AVATAR_SET + avatarDirForTheme + buildAvatarImageMap). Both stores/wizard/settings-tabs import from these instead of duplicating literals.
+
+2. **`setTheme` auto-cascade**: `frontend/src/stores/theme.ts::setTheme` now switches the cockpit background to the per-theme default whenever the user picks a new theme and the current bg is `none` or `core-01` (the historical defaults). Picking SEED no longer leaves you looking at Unicorn NT-D background art. User's explicit `core-02/03/04` choices are preserved.
+
+3. **CockpitLayout inline bg**: NEW `cockpitBgUrl = resolveBgAsset(background, theme)` selector wired into `<div className="gundam-cockpit-bg">` style. **Pre-Sprint-58 bug fixed**: the CSS rule had `background-image: none` as the safety net and the inline style was never set, so the wallpaper NEVER rendered regardless of theme or bg slug. Now it does.
+
+4. **9-theme union consolidation**: `GundamTheme` (in `types/api.ts`) was missing `"gundam-halo"`, and `ThemeConfig.themeId` was missing `"gundam-00"`. The two unions diverged — a real pre-existing type bug that would surface as a runtime-unknown-theme warning when HALO or 00 was picked. Sprint 58 consolidates both to the full 9-entry set: `ntd | seed | crossbone | ntd-green | 00 | destiny | god | cartoon | halo`.
+
+5. **Per-theme wizard thumb**: `frontend/src/routes/settings/tabs/ThemesTab.tsx` Cockpit Background section now derives the thumb URL from `resolveBgAsset(b.id, theme)` so picking SEED shows the SEED hero in the picker, not the legacy unicorn.
+
+**NT-D special-casing**: NT-D uses the historical Unicorn baseline (the bare `emotions/` directory for avatars + `bg-unicorn-core-XX.jpg` for backgrounds). All 8 other themes use the per-theme `<slug>/` convention. Documented in the source — adding a new theme = add to `THEMES_WITH_BG_SET` / `THEMES_WITH_AVATAR_SET` + drop the asset files + add the entry in `StepTheme`'s THEMES list.
+
+**Tests added**:
+- `frontend/src/lib/theme-bg-constants.test.ts` (via `routes/settings/constants.test.ts`) — 5 tests pinning `resolveBgAsset` + `defaultBgForTheme` (NT-D vs per-theme vs unknown fallback)
+- `frontend/src/lib/avatar-paths.test.ts` — 5 tests pinning `avatarDirForTheme` + `buildAvatarImageMap`
+- `frontend/src/components/layout/cockpit-bg.test.ts` — 4 tests pinning the per-theme URL contract (the pre-existing bug we fixed)
+
+**Standing rules added**:
+- Every `themeId` field in app code is **always string-keyed** against the 9-theme union. Type errors here are bugs, not warnings.
+- Per-theme asset paths use `gundam-<slug>` strip + fallback to NT-D's bare `emotions/` and `bg-unicorn-core-XX.jpg`. Don't introduce new bare names.
+- Adding a new theme = single source-of-truth set + asset files + themeId entry. No other code changes required.
+
+**Version bump**: `__version__` 0.2.6 → **0.2.7** (MINOR — new themed assets user-visible; Sprint 57 was the last MINOR for the EQ feature). All 4 surfaces synced: `backend/app/__init__.py`, `frontend/package.json`, `frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/tauri.conf.json`.
+
+**Senior-engineer audit findings**:
+- **P1**: NT-D + per-theme asset path collision caught during test writing — special-case NT-D as the bare Unicorn baseline. (Fixed: `THEMES_WITH_BG_SET` / `THEMES_WITH_AVATAR_SET` omit `gundam-ntd` explicitly.)
+- **P2**: Pre-existing CSS `.gundam-cockpit-bg` rule had `background-image: none` and never set inline — wallpaper never rendered regardless of theme or bg slug. (Fixed: inline style in CockpitLayout keyed on `(theme, background)`.)
+- **P3**: `GundamTheme` and `ThemeConfig.themeId` diverged by 1 theme each. (Fixed: consolidated to 9-entry union.)
+- **P4 (deferred)**: only 4 of 9 themes have full emotion sets (the legacy `emotions/` baseline is reused for NT-D). Follow-up Sprint 59 — generate the missing 5 sets (HALO, CARTOON, plus completing CROSSBONE's 3 PNGs to a full 9).
 
 ### Sprint 57 (in-session) — Per-theme TTS equalizer + gundam-style visualizer
 

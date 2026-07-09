@@ -131,7 +131,17 @@ export interface SessionMessagesResponse {
   }>;
 }
 
-// Theme
+// Theme — Sprint 58 consolidated 9-entry union. Previously this
+// declaration omitted "gundam-halo" and the separate `ThemeConfig.
+// themeId` declaration omitted "gundam-00", so the two unions
+// diverged. The full set is the union of both:
+//
+//   ntd | seed | crossbone | ntd-green | 00 | destiny | god |
+//   cartoon | halo
+//
+// All per-theme asset maps (THEME_DEFAULT_BG, THEMES_WITH_BG_SET,
+// THEMES_WITH_AVATAR_SET) and StepTheme's theme card list read
+// from this single source.
 export type GundamTheme =
   | "gundam-ntd"
   | "gundam-seed"
@@ -141,6 +151,7 @@ export type GundamTheme =
   | "gundam-destiny"
   | "gundam-god"
   | "gundam-cartoon"
+  | "gundam-halo"
   | null;
 
 export interface ThemeInfo {
@@ -380,15 +391,21 @@ export interface VoiceTTSConfig {
 }
 
 export interface ThemeConfig {
+  // Sprint 58: consolidated to the full 9-theme set (same as
+  // the `GundamTheme` union above). Previously omitted
+  // "gundam-00", which would cause a runtime-unknown-theme
+  // warning when 00 is selected but the backend's themeId
+  // is strictly typed.
   themeId:
     | "gundam-ntd"
-    | "gundam-god"
     | "gundam-seed"
     | "gundam-crossbone"
-    | "gundam-destiny"
-    | "gundam-halo"
     | "gundam-ntd-green"
-    | "gundam-cartoon";
+    | "gundam-00"
+    | "gundam-destiny"
+    | "gundam-god"
+    | "gundam-cartoon"
+    | "gundam-halo";
 }
 
 export interface TailscaleConfig {

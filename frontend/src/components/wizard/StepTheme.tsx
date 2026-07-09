@@ -54,6 +54,13 @@ export function StepTheme({ form, onChange, errors, busy }: StepThemeProps) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {THEMES.map((t) => {
           const isSelected = form.themeId === t.id;
+          // Sprint 58: emblem thumbnail per theme. The emblem
+          // PNGs live at /gundam-assets/emblems/emblem-<slug>.png
+          // where <slug> is the theme id without the "gundam-"
+          // prefix. Falls back to the colored circle if a future
+          // theme doesn't have an emblem yet (the onError handler
+          // falls back to the colored block via CSS).
+          const emblemSrc = `/gundam-assets/emblems/emblem-${t.id.replace(/^gundam-/, "")}.png`;
           return (
             <button
               key={t.id}
@@ -74,8 +81,12 @@ export function StepTheme({ form, onChange, errors, busy }: StepThemeProps) {
               }}
             >
               <div
-                className="h-8 w-full mb-2 rounded-sm"
-                style={{ background: t.accent }}
+                className="h-10 w-full mb-2 rounded-sm bg-cover bg-center"
+                style={{
+                  backgroundImage: `url(${emblemSrc})`,
+                  backgroundColor: t.accent,
+                }}
+                aria-hidden="true"
               />
               <div className="text-xs font-[Rajdhani] font-bold">{t.name}</div>
               <div className="text-[10px] text-[var(--text-muted)] font-mono">
