@@ -33,19 +33,64 @@ describe("avatarDirForTheme (Sprint 58)", () => {
   });
 });
 
-describe("buildAvatarImageMap (Sprint 58)", () => {
+describe("buildAvatarImageMap (Sprint 58 + 59)", () => {
   it("emits 9 emotion URLs for the given theme", () => {
     const map = buildAvatarImageMap("gundam-seed");
     expect(Object.keys(map)).toHaveLength(9);
-    expect(map.idle).toBe("/avatars/emotions-seed/idle.png");
-    expect(map.listening).toBe("/avatars/emotions-seed/listening.png");
-    expect(map.damage).toBe("/avatars/emotions-seed/damage.png");
-    expect(map.confused).toBe("/avatars/emotions-seed/confused.png");
+    // Sprint 59: per-(dir, emotion) extension. Seed is all jpg.
+    expect(map.idle).toBe("/avatars/emotions-seed/idle.jpg");
+    expect(map.listening).toBe("/avatars/emotions-seed/listening.jpg");
+    expect(map.damage).toBe("/avatars/emotions-seed/damage.jpg");
+    expect(map.confused).toBe("/avatars/emotions-seed/confused.jpg");
   });
 
-  it("falls back to NT-D 'emotions/' for unknown themes", () => {
+  it("falls back to NT-D 'emotions/' (PNG) for unknown themes", () => {
     const map = buildAvatarImageMap("gundam-future-99");
     expect(map.idle).toBe("/avatars/emotions/idle.png");
     expect(map.speaking).toBe("/avatars/emotions/speaking.png");
+  });
+
+  it("emits valid URLs for every per-theme set (Sprint 59: full coverage)", () => {
+    // Sprint 59 closed the P4 deferred item — every per-theme
+    // directory has a full 9-emotion set now. URLs may be .jpg
+    // or .png depending on matrix MCP's per-call format choice.
+    const themes = [
+      "gundam-seed",
+      "gundam-ntd-green",
+      "gundam-00",
+      "gundam-destiny",
+      "gundam-god",
+      "gundam-crossbone",
+      "gundam-halo",
+      "gundam-cartoon",
+    ];
+    for (const t of themes) {
+      const map = buildAvatarImageMap(t);
+      for (const [emotion, url] of Object.entries(map)) {
+        expect(url, `${t}.${emotion}`).toMatch(/\.(jpg|png)$/);
+        expect(url, `${t}.${emotion}`).toContain(`/avatars/emotions-`);
+      }
+    }
+  });
+
+  it("emits .png URLs only for the NT-D baseline 'emotions/' dir", () => {
+    const map = buildAvatarImageMap("gundam-ntd");
+    expect(map.idle).toBe("/avatars/emotions/idle.png");
+    expect(map.listening).toBe("/avatars/emotions/listening.png");
+    expect(map.damage).toBe("/avatars/emotions/damage.png");
+  });
+
+  it("crossbone full set uses per-emotion extension table (Sprint 59)", () => {
+    const map = buildAvatarImageMap("gundam-crossbone");
+    // crossbone has mixed jpg/png — pin the truth.
+    expect(map.idle).toBe("/avatars/emotions-crossbone/idle.jpg");
+    expect(map.listening).toBe("/avatars/emotions-crossbone/listening.png");
+    expect(map.thinking).toBe("/avatars/emotions-crossbone/thinking.jpg");
+    expect(map.speaking).toBe("/avatars/emotions-crossbone/speaking.png");
+    expect(map.damage).toBe("/avatars/emotions-crossbone/damage.png");
+    expect(map.joy).toBe("/avatars/emotions-crossbone/joy.jpg");
+    expect(map.sad).toBe("/avatars/emotions-crossbone/sad.jpg");
+    expect(map.confused).toBe("/avatars/emotions-crossbone/confused.jpg");
+    expect(map.warning).toBe("/avatars/emotions-crossbone/warning.jpg");
   });
 });

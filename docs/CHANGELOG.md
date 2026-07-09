@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 58 → today)
+## Recent Sprints (Sprint 59 → today)
 
+- [Sprint 59 (in-session) — Per-theme assets P4 follow-up: CROSSBONE/HALO/CARTOON emotion sets complete + file-ext alignment + version bump 0.2.7→0.2.8](#sprint-59-in-session--per-theme-assets-p4-follow-up-crossbonehalocartoon-emotion-sets-complete--file-ext-alignment--version-bump-027028)
 - [Sprint 58 (in-session) — Per-theme gundam assets Phase 4 wire-up (themes + avatars + bg + 9-theme union + version bump 0.2.6→0.2.7)](#sprint-58-in-session--per-theme-gundam-assets-phase-4-wire-up-themes--avatars--bg--9-theme-union--version-bump-026027)
 - [Sprint 57 (in-session) — Per-theme TTS equalizer + gundam-style visualizer (8 themes × 5-band EQ)](#sprint-57-in-session--per-theme-tts-equalizer--gundam-style-visualizer-8-themes--5-band-eq)
 - [Sprint 49 (in-session) — UI robustness catch-up (vite proxy + 3-state loading + backend-error + breadcrumb + rail collapse + dev bypass docs)](#sprint-49-in-session--ui-robustness-catch-up-vite-proxy--3-state-loading--backend-error--breadcrumb--rail-collapse--dev-bypass-docs)
@@ -1421,6 +1422,41 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 59 (in-session) — Per-theme assets P4 follow-up: CROSSBONE/HALO/CARTOON emotion sets complete + file-ext alignment + version bump 0.2.7→0.2.8
+
+**What shipped**: closes the Sprint 58 P4 deferred item — every theme now ships with a full 9-emotion avatar set + per-theme hero background. Crossbone's 3 partial PNGs were replaced by a fresh anchor-driven full set; HALO and CARTOON got full sets from scratch.
+
+**The 4 changes**:
+
+1. **3 new anchor portraits**: `avatars/anchors/anchor-{crossbone,halo,cartoon}.jpg` — fresh text-to-image generation, 1024×1024 each. CROSSBONE uses the new anchor (per user preference: NOT reuse the 3 partial PNGs as i2i reference, because 1 emotion reference would bias 6 new emotion variants).
+
+2. **27 new emotion JPGs**: 3 themes × 9 emotions × 1 i2i per (anchor, emotion) pair, generated in 3 batched calls (`matrix_generate_image` with 9-item `requests` array, `input_files` = anchor path). Per-emotion prompt suffix controls pose/expression; the anchor carries the character design.
+
+3. **HALO + CARTOON added to `THEMES_WITH_AVATAR_SET`** in `lib/avatar-paths.ts`. The set now has 8 entries (was 6 in Sprint 58: + HALO + CARTOON). NT-D stays special-cased (bare `emotions/`).
+
+4. **File-extension alignment** (P3 audit finding): previously all 81 Sprint 58 assets had `.png` extensions but matrix MCP returned **JPEG bytes** for ~90% of them (random per-call — some PNG, most JPEG). Sprint 59 renames `.png` → `.jpg` on disk for the actually-JPEG files, and adds `PER_THEME_EXT` table in `avatar-paths.ts::extForEmotion()` to look up the correct extension per (directory, emotion) pair. The legacy NT-D `emotions/` directory stays PNG (hand-authored before Sprint 58).
+
+**Tests added** (2 new test cases; 213 total / 47 files pass):
+- `lib/avatar-paths.test.ts` — `crossbone full set uses per-emotion extension table (Sprint 59)` — pins the crossbone jpg/png asymmetry (3 PNGs out of 9).
+- `lib/avatar-paths.test.ts` — `emits valid URLs for every per-theme set (Sprint 59: full coverage)` — every per-theme dir returns 9 URLs ending in `.jpg` or `.png`.
+
+**Senior-engineer audit findings**:
+- **P1**: file-extension asymmetry caught (legacy NT-D PNG vs per-theme JPG). Fixed via `extForEmotion()` helper.
+- **P2**: file-type vs filename mismatch — pre-existing Sprint 58 bug where all assets had `.png` extension but most bytes were JPEG. Sprint 59 renames on disk + aligns URL builder.
+- **P3**: matrix MCP randomly returns PNG or JPEG for the same prompt — empirically observed during Sprint 59 generation (crossbone had 3 PNG, halo 1 PNG, cartoon 3 PNG; the other 5 themes were all JPG). Future cleanup: convert all to one format via libvips.
+
+**Standing rules** (carry-over + new):
+- Every `themeId` field string-keyed against the 9-theme union.
+- Per-theme asset paths use `gundam-<slug>` strip + NT-D's bare `emotions/` + Unicorn bg fallback.
+- **NEW**: when adding matrix MCP image gen, **always check `file -b` on the output** — the extension may not match the bytes. Either rename on disk OR build a per-(dir, emotion) extension table.
+- Asset commits stay separate from wire-up commits.
+
+**Version bump**: `__version__` 0.2.7 → **0.2.8** (MINOR — new themed asset, full 9-theme coverage). All 4 surfaces synced.
+
+**File count**: 30 new binaries (3 anchors + 27 emotions), ~17 MB total. Plus 3 crossbone legacy PNGs deleted (`confused.png`, `sad.png`, `warning.png` — replaced by the anchor-driven set).
+
+**Cost estimate**: matrix MCP usage on Sprint 59 ≈ $0.16 for 30 PNGs.
 
 ### Sprint 58 (in-session) — Per-theme gundam assets Phase 4 wire-up (themes + avatars + bg + 9-theme union + version bump 0.2.6→0.2.7)
 
