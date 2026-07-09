@@ -19,6 +19,43 @@ import { useEffect, useState } from "react";
 
 export const RAIL_KEY = "halo.cockpit.railExpanded.v1";
 
+/** Toggle button for the cockpit's right-rail (Sprint 49 #5).
+ *
+ *  Renders a thin (h-8) horizontal button at the top of the
+ *  right rail. Click flips `expanded` state and the arrow
+ *  icon (`→` collapsed / `←` expanded).
+ *
+ *  Owns its own state — does NOT accept `expanded` /
+ *  `onChange` props. State persists to localStorage at
+ *  `RAIL_KEY` (schema-versioned for future migrations).
+ *
+ *  Production mounting: `CockpitLayout` mounts this inside
+ *  the right rail and reads the SAME key to derive its
+ *  3-column grid template (`200px_1fr_48px` collapsed vs.
+ *  `200px_1fr_240px` expanded). The two components don't
+ *  share a parent state — they coordinate via localStorage.
+ *  See `CockpitLayout.tsx::railExpanded` for the parent.
+ *
+ *  Test mounting: `CockpitLayout.test.tsx` mounts this
+ *  component in isolation (without the full layout) and
+ *  asserts the localStorage round-trip and aria-label flip.
+ *  No provider tree required.
+ *
+ *  Accessibility:
+ *    - `aria-label` toggles between "Collapse right rail"
+ *      and "Expand right rail" so screen-reader users hear
+ *      the current action.
+ *    - `data-expanded="0|1"` is a test hook (NOT for styling
+ *      — the styling is done via the aria-label-derived
+ *      `expanded` state).
+ *    - `data-testid="rail-toggle"` for unit tests.
+ *
+ *  Edge cases:
+ *    - SSR / no window: state initialised to `false`. Effect
+ *      short-circuits when `window` is undefined.
+ *    - localStorage disabled (private mode): reads return
+ *      `false` (catch-all), writes silently fail.
+ */
 export function RailToggle() {
   const [expanded, setExpanded] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;

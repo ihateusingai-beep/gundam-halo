@@ -16,6 +16,37 @@
 import { Fragment } from "react";
 import { Link, useLocation } from "react-router";
 
+/** Persistent breadcrumb derived from the current URL.
+ *
+ *  Reads `useLocation().pathname` reactively — no manual state
+ *  to keep in step with the router. Splits the path on `/`,
+ *  drops empty segments (the leading slash), and renders a
+ *  chain: `⌂ Home / projects / foo / sessions / bar`.
+ *
+ *  Hidden on `/` because home is implicit (the breadcrumb adds
+ *  no value when there are no ancestors).
+ *
+ *  Segment labels use the raw URL slug (e.g. `projects`, `audit`,
+ *  `settings`). For human-friendly overrides (e.g. `audit` →
+ *  "Audit Log"), add a `LABEL_OVERRIDES: Record<string, string>`
+ *  map and apply it in the `segments.map` body.
+ *
+ *  Accessibility:
+ *    - `<nav aria-label="Breadcrumb">` so screen readers
+ *      announce it as a navigation region.
+ *    - The final segment gets `aria-current="page"` and renders
+ *      as plain `<span>` (not a link) — the user is already
+ *      there.
+ *    - Slashes are `aria-hidden="true"` decorative separators.
+ *
+ *  Testable surface: `data-testid="breadcrumb"` for parent
+ *  components that need to assert the breadcrumb rendered.
+ *  Covered by `Breadcrumb.test.tsx`.
+ *
+ *  Mounted by `CockpitLayout` in the top-right of the header
+ *  (hidden on `md-` viewports via the parent's `hidden md:block`
+ *  class).
+ */
 export function Breadcrumb() {
   const location = useLocation();
   if (location.pathname === "/") return null;

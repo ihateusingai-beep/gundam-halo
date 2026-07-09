@@ -42,6 +42,52 @@ const GROUP_LABELS: Record<SidebarEntry["group"], string> = {
 
 const GROUPS: SidebarEntry["group"][] = ["personalisation", "system"];
 
+/** Bottom-sheet settings nav for mobile (<768px) viewports.
+ *
+ *  Sprint 51. Mirrors the desktop `SettingsSidebar`'s 8-tab /
+ *  2-group structure but renders as a 2×2 grid of 64-px tiles
+ *  optimised for touch. Slides up from the bottom edge.
+ *
+ *  Why this exists: Sprint 50's `MobileLayout` had a flat 3-tab
+ *  bottom nav (Cockpit / + New / Settings) where tapping Settings
+ *  just navigated to `/settings` — the full settings page was
+ *  narrow and scroll-heavy on phones. The drawer pattern lets
+ *  users jump directly to a specific tab, matching the desktop
+ *  sidebar's quick-jump affordance.
+ *
+ *  Props:
+ *    - `open: boolean` — controls visibility. The component
+ *      itself is a no-op when closed (returns null + clears
+ *      its effects).
+ *    - `onClose: () => void` — fired when the user dismisses
+ *      via Escape, backdrop click, backdrop keyboard (Enter /
+ *      Space), or the ✕ button.
+ *    - `onSelect: (tab: SettingsTab) => void` — fired when a
+ *      tile is tapped. Always immediately followed by `onClose()`
+ *      (a tap both selects and dismisses — the user is now on
+ *      the settings tab they wanted).
+ *    - `activeTab: SettingsTab` — currently-active tab from
+ *      the parent (so the matching tile can be highlighted
+ *      with `aria-current="page"`).
+ *
+ *  Behaviour:
+ *    - **Escape key** closes the drawer (window keydown
+ *      listener; cleaned up on unmount or close).
+ *    - **Body scroll lock** while open (iOS Safari fix — sets
+ *      `document.body.style.overflow = "hidden"`, restores the
+ *      original on close).
+ *    - **Backdrop click + keyboard** both dismiss. The backdrop
+ *      is `role="button"` + `tabIndex={-1}` so keyboard users
+ *      can focus and press Enter/Space.
+ *    - **Safe-area** padding (`pb-[env(safe-area-inset-bottom)]`)
+ *      so the drawer doesn't get cut off on iPhones with a
+ *      home-indicator.
+ *
+ *  Tested by: `SettingsDrawer.test.tsx` — covers open/close,
+ *  tile selection, Escape key, backdrop click.
+ *
+ *  Mounted by: `MobileLayout` (mobile-only).
+ */
 export function SettingsDrawer({ open, onClose, onSelect, activeTab }: SettingsDrawerProps) {
   // Escape key handler — closes drawer when open.
   useEffect(() => {
@@ -69,11 +115,17 @@ export function SettingsDrawer({ open, onClose, onSelect, activeTab }: SettingsD
 
   if (!open) return null;
 
+  /** Tap a tile → propagate selection up to parent, then
+   *  close the drawer. The user lands on /settings/<tab>
+   *  with the drawer dismissed. */
   const handleTabClick = (tab: SettingsTab) => {
     onSelect(tab);
     onClose();
   };
 
+  /** Keyboard handler on the backdrop. The backdrop is
+   *  `role="button"` + `tabIndex={-1}` so keyboard users can
+   *  focus it; Enter or Space activates the close action. */
   const handleBackdropKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     // Enter / Space on backdrop also closes (a11y).
     if (e.key === "Enter" || e.key === " ") {

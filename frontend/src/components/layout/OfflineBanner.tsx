@@ -24,6 +24,40 @@ import {
 } from "@/lib/backend-error";
 import type { HealthState } from "@/lib/use-backend-health";
 
+/** Non-blocking alert banner shown when the backend health check
+ *  reports an `offline` state (Sprint 49 B3).
+ *
+ *  Inputs:
+ *    - `state: HealthState` — the current health from
+ *      `useBackendHealth()`. When `state.kind === "offline"`
+ *      the banner renders; otherwise it returns null.
+ *
+ *  Render shape (2-line, per Sprint 49 B5 audit fix):
+ *    1. Headline (warning color, Orbitron uppercase, 10px)
+ *       — `⚠ Backend unreachable · <reason>`
+ *    2. Body: `headline` (text-primary) + `hint` (text-muted)
+ *       — the `{headline, hint}` pair from `backendErrorMessage()`
+ *    3. Optional `detail` (text-muted/80, 10px) — raw server
+ *       detail for advanced debugging
+ *    4. Optional `action` button — `backendErrorAction()` maps
+ *       each error kind to a one-click remediation (e.g.
+ *       "Open Settings → Secrets" for auth-missing)
+ *    5. Dismiss button (✕) — local `dismissed` state; resets
+ *       on next `offline` event because the `state` prop
+ *       changes (parent handles the cycle).
+ *
+ *  Behaviour:
+ *    - Non-blocking: per-card skeletons still render even when
+ *      the banner shows, because some data may have loaded.
+ *    - Single-user app — dismiss is local-only, doesn't
+ *      persist; a fresh offline event re-shows the banner.
+ *
+ *  Used by: `CockpitLayout` (renders this near the top of
+ *  the shell, below the framework banners).
+ *
+ *  Tested: covered indirectly via the route smoke guard
+ *  (Sprint 56.6) which catches any import-resolution break.
+ */
 export function OfflineBanner({ state }: { state: HealthState }) {
   const [dismissed, setDismissed] = useState(false);
   if (state.kind !== "offline" || dismissed) return null;

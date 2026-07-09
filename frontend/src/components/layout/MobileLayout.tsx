@@ -18,6 +18,45 @@ interface MobileLayoutProps {
  * through. Auto-closes on route change so the drawer doesn't linger
  * after navigation.
  */
+/** Vertical-stack layout for mobile (<768px).
+ *
+ *  Three regions:
+ *    1. **Header** — title + a settings cog button (top-right).
+ *       The cog opens the SettingsDrawer (no direct navigation).
+ *    2. **Main** — page content (`children`).
+ *    3. **Bottom nav** — three tap targets:
+ *       Cockpit (→ `/`), + New (→ `/projects/new`), Settings
+ *       (opens the drawer). The "Settings" entry is highlighted
+ *       when either the drawer is open OR the user is on
+ *       `/settings`.
+ *
+ *  Props:
+ *    - `children: ReactNode` — the route content.
+ *
+ *  URL-driven state:
+ *    - Reads `?tab=` from the search params (via
+ *      `useSearchParams`) and validates with
+ *      `isValidSettingsTab`. Unknown / missing values fall
+ *      back to `"general"`.
+ *    - `handleSelect(tab)` writes `?tab=<tab>` to the URL via
+ *      `navigate()`, replacing history if the user is already
+ *      on `/settings` (so the back button doesn't accumulate
+ *      redundant entries).
+ *
+ *  Drawer lifecycle:
+ *    - Auto-closes on `location.pathname` change so the drawer
+ *      doesn't linger after the user navigates via Cockpit /
+ *      + New links.
+ *    - Selecting a tile inside the drawer also closes it
+ *      (handled by SettingsDrawer — `onSelect` immediately
+ *      calls `onClose`).
+ *
+ *  Mounted by: `App.tsx` route guard based on viewport
+ *  breakpoint (<768px). The desktop `CockpitLayout` owns
+ *  the larger viewports.
+ *
+ *  Tested by: `MobileLayout.test.tsx`.
+ */
 export function MobileLayout({ children }: MobileLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -34,9 +73,20 @@ export function MobileLayout({ children }: MobileLayoutProps) {
     setDrawerOpen(false);
   }, [location.pathname]);
 
+  /** Open the settings drawer (called by both the header
+   *  cog and the bottom-nav "Settings" button). */
   const openDrawer = () => setDrawerOpen(true);
+  /** Close the settings drawer (called on Escape, backdrop
+   *  click, tile select, route change). */
   const closeDrawer = () => setDrawerOpen(false);
 
+  /** Handle a tile selection from inside the drawer.
+   *
+   *  Closes the drawer, then navigates to `/settings?tab=<tab>`.
+   *  If we're already on `/settings`, use `replace: true` so
+   *  the back button doesn't accumulate duplicate entries.
+   *  Otherwise push normally (the back button returns to
+   *  wherever the user was before). */
   const handleSelect = (tab: SettingsTab) => {
     closeDrawer();
     // Use replace if already on /settings, push otherwise — keeps

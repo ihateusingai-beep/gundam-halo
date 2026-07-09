@@ -40,9 +40,30 @@ interface CockpitLayoutProps {
 
 type CockpitMode = "select" | "active";
 
-/** Determine cockpit mode from the current route.
- *  select = no project active (Overview, Settings, New)
- *  active = a project page is showing
+/** Hook — derive the cockpit's visual mode from the current URL.
+ *
+ *  Inputs:
+ *    - `useLocation()` (react-router) — reads `pathname` reactively.
+ *
+ *  Returns `{ mode, projectName }`:
+ *    - `mode = "active"` only when the path matches `/projects/<name>`
+ *      (or `/projects/<name>/...`) AND `<name>` is NOT the literal
+ *      `"new"`. The `/projects/new` route is the creation form, not
+ *      an active mission, so it stays in `select` mode.
+ *    - `mode = "select"` for everything else (overview, settings,
+ *      audit, setup).
+ *    - `projectName` is the URL slug in active mode, null in select.
+ *
+ *  Used by:
+ *    - The `CockpitLayout` component to switch the 3-column sidebar
+ *      (Quick Switch vs. Projects list), the top-bar subtitle, and
+ *      the frame-corner brand text (`// MISSION: <name>` vs.
+ *      `// AWAITING ORDERS`).
+ *
+ *  Note: a regex match is intentional (vs. router params) because
+ *  `CockpitLayout` is a route-blanket shell that mounts on every
+ *  page — pulling `useParams()` would require every child route to
+ *  expose the slug, which they already do via `useLocation()`.
  */
 function useCockpitMode(): { mode: CockpitMode; projectName: string | null } {
   const location = useLocation();
@@ -53,21 +74,55 @@ function useCockpitMode(): { mode: CockpitMode; projectName: string | null } {
   return { mode: "select", projectName: null };
 }
 
-/** First-person cockpit layout for desktop (≥768px).
+/** Top-level layout component for the desktop cockpit (≥768px).
  *
- *  Two modes:
+ *  Renders the full cockpit shell around `children`:
+ *    - Frame chrome (corner brackets, brand banner, status, scan line)
+ *    - 3-column grid: left sidebar (project switcher / mission log),
+ *      center content (`children`), right rail (signal/avatar/voice/EQ/system)
+ *    - Top header with persistent breadcrumb (Sprint 49 #6)
+ *    - Footer with current path
+ *    - Global Sonner toaster (top-right, themed)
+ *    - Background health banners (Backend watchdog, offline,
+ *      restart-nudge, backend-outdated)
+ *
+ *  Props:
+ *    - `children` — the route-specific content (rendered in the
+ *      center column).
+ *
+ *  Side-effects on mount:
+ *    - Fetches voice config (`always_on_mic`) — re-fetches on
+ *      visibility change / window focus.
+ *    - Subscribes to WS `system_gauges` event.
+ *    - Starts REST polling fallback for system gauges when WS
+ *      is disconnected.
+ *    - Boots the voice input stream (push-to-talk or always-on).
+ *    - Subscribes to VAD auto-fire for always-on mode.
+ *
+ *  Reads from stores:
+ *    - `useProjectsStore` — projects list (for sidebar / mission log).
+ *    - `useSystemStore` — gauges (CPU/RAM/DSK + network counters).
+ *    - `useThemeStore` — theme + background slug (Sprint 58: for
+ *      the inline cockpit-bg `backgroundImage`).
+ *    - `useBackendVersion` — git SHA + feature compatibility check.
+ *    - `useBackendHealth` — Sprint 49 B3 3-state machine
+ *      (loading / online / offline).
+ *    - `getVoiceStatus()` + `onVoiceStatusChange()` — for the
+ *      `live` flag passed to `CockpitEqCard`.
+ *
+ *  Two modes (via `useCockpitMode()`):
  *    select — Overview / Settings / New. Subdued accent, slow scan,
  *             sidebar shows quick-switch (3 most recent projects).
  *    active — Project page. Brighter accent, faster scan, frame glow,
- *             sidebar shows full project list for navigation.
+ *             sidebar shows full project list + mission log.
  *
  *  Frame layers (z-index, bottom → top):
- *   0  background image (optional, [data-bg="core-XX"])
- *   1  hex grid overlay
- *   1  content
- *   5  CRT vignette (fixed, pointer-events: none)
- *   9996 corner brackets + brand/status (fixed)
- *   9997 top scan line (fixed)
+ *    0  background image (optional, [data-bg="core-XX"])
+ *    1  hex grid overlay
+ *    1  content
+ *    5  CRT vignette (fixed, pointer-events: none)
+ *    9996 corner brackets + brand/status (fixed)
+ *    9997 top scan line (fixed)
  */
 export function CockpitLayout({ children }: CockpitLayoutProps) {
   const { projects, fetchProjects } = useProjectsStore();
@@ -141,6 +196,13 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   // applied via this effect's cleanup + remount.
   useEffect(() => {
     let alive = true;
+    /** Fire-and-forget: GET /api/voice/config, update
+     *  `alwaysOnMic` state if the response carries a
+     *  defined `always_on_mic` field. The `alive` guard
+     *  prevents state writes after unmount (the effect
+     *  cleanup flips it false). Failures are silent —
+     *  the cockpit falls back to push-to-talk (default
+     *  `false`) if the backend is unreachable. */
     const fetchCfg = () => {
       api
         .getVoiceConfig()
@@ -154,6 +216,10 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
         });
     };
     fetchCfg();
+    /** Visibility handler — refetch when the tab
+     *  returns to the foreground (handles the case
+     *  where the user toggled always-on in the Settings
+     *  tab, then switched back to the cockpit tab). */
     const onVis = () => {
       if (document.visibilityState === "visible") fetchCfg();
     };
@@ -184,6 +250,19 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   const mic = useVoiceInput({
     alwaysOn: alwaysOnMic,
     onFrame: voiceSendAudio,
+    /** `useVoiceInput` callback — fires when the mic capture
+     *  stream transitions from idle to capturing.
+     *
+     *  Behaviour by mode:
+     *    - always-on (alwaysOnMic=true): no-op. The WS turn
+     *      is opened by `useVadStateAutoFire` on `speech_start`,
+     *      not by the mic stream lifecycle. Opening it here
+     *      would create a phantom empty turn.
+     *    - push-to-talk (alwaysOnMic=false): opens a WS turn
+     *      via `voiceBegin()` so the next `voiceSendAudio()`
+     *      frame has a server-side receiver. Failures are
+     *      non-fatal (the mic still captures audio; VoicePanel
+     *      surfaces its own toast on the next failed send). */
     onStart: () => {
       // No-op in always-on mode (the WS turn is opened
       // by useVadStateAutoFire on speech_start). In
@@ -198,6 +277,16 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
         console.warn("[CockpitLayout] voiceBegin failed:", e);
       }
     },
+    /** `useVoiceInput` callback — fires when the mic capture
+     *  stream transitions from capturing to idle.
+     *
+     *  Behaviour by mode:
+     *    - always-on (alwaysOnMic=true): no-op. The WS turn
+     *      is closed by `useVadStateAutoFire` on `speech_end`.
+     *    - push-to-talk: closes the WS turn via `voiceEnd()`
+     *      so the server-side pipeline finalises and the
+     *      transcript can stream back. Failures are logged
+     *      but don't block the user. */
     onStop: () => {
       // No-op in always-on mode (the WS turn is closed
       // by useVadStateAutoFire on speech_end).
@@ -222,6 +311,11 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
   }, [fetchProjects]);
 
   // Push live gauges from WS into the store.
+  /** WS event handler — receives a `system_gauges` payload
+   *  (CPU %, RAM %, DSK %, network sent/recv MB) and writes
+   *  it into the system store. The store is the source of
+   *  truth for the gauge components in the right rail.
+   *  Frequency: backend pushes roughly every 2s. */
   useWsEvent("system_gauges", (event) => {
     setGauges(event.data);
   });
