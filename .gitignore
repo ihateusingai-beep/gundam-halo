@@ -146,3 +146,10 @@ backend/tests/voice/held_out_results/*.json
 # 2026-06-13: binary artifacts stay out of git. Re-add to commit
 # if/when a screenshot becomes part of the docs/ surface.
 screenshots/
+
+# Agent runtime state (Mavis)
+# Per-project plans, decision-cycle JSONs, session workspace.
+# Per Sprint 56.6 standing rule: agent state is per-machine,
+# not per-repo. Re-add if/when plans become part of the
+# audit trail surface.
+.mavis/
