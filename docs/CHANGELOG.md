@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 59 → today)
+## Recent Sprints (Sprint 60 → today)
 
+- [Sprint 60 (in-session) — Quality-of-life + coverage gaps (TtsPlayer + shared SaveBar + 3 wizard tests + 7 UI primitive tests + NotFound route + version bump 0.2.8→0.2.9)](#sprint-60-in-session--quality-of-life--coverage-gaps-ttsplayer--shared-savebar--3-wizard-tests--7-ui-primitive-tests--notfound-route--version-bump-028029)
 - [Sprint 59 (in-session) — Per-theme assets P4 follow-up: CROSSBONE/HALO/CARTOON emotion sets complete + file-ext alignment + version bump 0.2.7→0.2.8](#sprint-59-in-session--per-theme-assets-p4-follow-up-crossbonehalocartoon-emotion-sets-complete--file-ext-alignment--version-bump-027028)
 - [Sprint 58 (in-session) — Per-theme gundam assets Phase 4 wire-up (themes + avatars + bg + 9-theme union + version bump 0.2.6→0.2.7)](#sprint-58-in-session--per-theme-gundam-assets-phase-4-wire-up-themes--avatars--bg--9-theme-union--version-bump-026027)
 - [Sprint 57 (in-session) — Per-theme TTS equalizer + gundam-style visualizer (8 themes × 5-band EQ)](#sprint-57-in-session--per-theme-tts-equalizer--gundam-style-visualizer-8-themes--5-band-eq)
@@ -1422,6 +1423,47 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 60 (in-session) — Quality-of-life + coverage gaps (TtsPlayer + shared SaveBar + 3 wizard tests + 7 UI primitive tests + NotFound route + version bump 0.2.8→0.2.9)
+
+**What shipped**: Ships the top-5 picks from `docs/REVIEW-2026-07-09.md`. No new user-facing features; pure refactor + test coverage sprint. 213 → **256 tests passing** in 47 → 53 test files (+23 tests, +6 files).
+
+**The 5 items**:
+
+1. **A-A1 — `lib/tts-player.ts`** (NEW, ~190 LoC). The TTS playback queue (queue + drain + sequence-bump + dispose) extracted from `VoicePanel.tsx` into a `TtsPlayer` class. VoicePanel drops from 548 → 420 LoC. The class is testable WITHOUT React + AudioContext + voice WS subscriptions. 8 unit tests cover lazy-attach, drain order, sequence-bump abort, dispose idempotency, empty-enqueue no-op, play() rejection resilience, onerror path, getAudioElement() exposure.
+
+2. **S-A4 — `routes/settings/shared/SaveBar.tsx`** (NEW, ~95 LoC). Shared Save/Reset button group promoted from `routes/settings/tabs/voice/sections/SaveBar.tsx` (which was VoiceTab-specific). Now any tab can `<SaveBar dirty saving={...} onSave={...} onReset={...} />`. VoiceTab adopts the shared version (preserves `voice-save-button` / `voice-reset-button` / `voice-config-summary` testids via props). 6 unit tests cover rendering, dirty/saving states, onReset omission, saveDisabled click no-op.
+
+3. **W-A1 — wizard tests** (2 new test files, +6 tests):
+   - `StepWelcome.test.tsx` (3 tests): renders heading, click fires onNext, renders 7-step list.
+   - `StepFinish.test.tsx` (3 tests): renders heading, click fires onOpenCockpit, redirect hint variants.
+   - (Reconciliation: `useSetupWizard.test.ts` already existed from Sprint 44 — corrected the Sprint 60 plan's "3 missing" claim to "2 missing"; the hook test was already in place.)
+
+4. **U-A1 — UI primitive smoke tests** (1 consolidated file, 7 tests covering all 7 primitives in `components/ui/`): button / input / textarea / input-group / dialog / command / dropdown-menu. Each test asserts: renders with `data-slot="..."`, handles the core prop (click / value / open), exposes the right testid for downstream consumers.
+
+5. **R-A3 — `routes/NotFound.tsx`** (NEW, ~60 LoC). Replaces the pre-existing `<Navigate to="/" replace />` catch-all in App.tsx with a proper 404 page that echoes the requested URL + offers a "Back to Cockpit" link. The route smoke guard (`__route-module-graph.test.ts`) caught the new file immediately and forced me to register `NotFoundPage` in `ROUTE_ENTRIES` — the guard paid for itself. 4 unit tests cover URL echo, link target, useLocation reactivity, heading.
+
+**Senior-engineer audit findings**:
+- **P1 — TtsPlayer attach lifecycle**: clean (single-call lazy attach verified).
+- **P2 — SaveBar a11y**: `aria-disabled` (not `disabled`) so screen-reader tab order is preserved.
+- **P3 — NotFoundRoute test isolation**: wrapped in MemoryRouter + `<Routes>`.
+- **P4 — UI primitive test cleanup**: `afterEach(() => cleanup())` added (testid leakage caught on first run).
+- **P5 — Route smoke guard caught NotFound**: yes, in `__route-module-graph.test.ts`. Forced `ROUTE_ENTRIES` update.
+- **P6 — Unused `Navigate` import**: removed.
+
+**Net effect**:
+- VoicePanel: 548 → 420 LoC (−23%)
+- VoiceTab's SaveBar: 47 LoC inline → 60 LoC shared (8 tabs can adopt; not yet adopted outside VoiceTab in this sprint).
+- Test count: 213 → 256 (+20%; 47 → 53 test files)
+- 1 file deleted (old `routes/settings/tabs/voice/sections/SaveBar.tsx`)
+- 5 files added: `lib/tts-player.ts`, `routes/settings/shared/SaveBar.tsx`, `routes/NotFound.tsx`, + 3 test files
+
+**Standing rules added**:
+- Any new shared component MUST have ≥3 tests (smoke + variant + a11y).
+- Any new extractable utility class (like TtsPlayer) MUST use the `attach-on-first-use` pattern + be testable WITHOUT real `AudioContext` (use `vi.fn()` for any audio-graph methods called by the player).
+- New routes MUST be registered in `ROUTE_ENTRIES` (the route smoke guard enforces this — `pnpm vitest run src/routes/__route-module-graph.test.ts` is the gate).
+
+**Version bump**: `__version__` 0.2.8 → **0.2.9** (PATCH — refactor + tests only, no new feature). All 4 surfaces synced.
 
 ### Sprint 59 (in-session) — Per-theme assets P4 follow-up: CROSSBONE/HALO/CARTOON emotion sets complete + file-ext alignment + version bump 0.2.7→0.2.8
 
