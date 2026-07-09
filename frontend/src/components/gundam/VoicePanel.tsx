@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import type { UseVoiceInputResult } from "@/hooks/use-voice-input";
 import { api } from "@/lib/api";
 import { TtsAudioGraph } from "@/lib/audio-graph";
+import { TtsPlayer } from "@/lib/tts-player";
 import { useThemeStore } from "@/stores/theme";
 import { WakePhraseHint } from "@/components/gundam/WakePhraseHint";
 import {
@@ -100,13 +101,13 @@ export function VoicePanel({
   const [textInput, setTextInput] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const audioQueueRef = useRef<ArrayBuffer[]>([]);
-  // M10-A Plan A4: sequenceId bumps on every enqueue so stale in-flight
-  // frames abort their onended chain instead of triggering the next chunk.
-  // (Previously two simultaneous frames would race on isPlayingRef and
-  // could overlap or play a frame past the queue head.)
-  const playSeqRef = useRef(0);
-  const drainingRef = useRef(false);
+  // Sprint 60 A-A1: TTS playback queue extracted into lib/tts-player.ts.
+  // The class owns the queue + drain + sequence-bump + dispose
+  // lifecycle. VoicePanel holds the player, mounts it on first
+  // TTS chunk, and disposes on unmount. The TTS EQ graph
+  // (`ttsGraphRef`) is still owned here because it's coupled to
+  // the cockpit theme + needs an AudioContext.
+  const ttsPlayerRef = useRef<TtsPlayer | null>(null);
   // Sprint 57: per-theme TTS EQ. The graph owns the
   // AudioContext + 5-band BiquadFilter chain. We attach the
   // <audio> element on the first playChunk and apply the
@@ -127,13 +128,16 @@ export function VoicePanel({
     ttsGraphRef.current.setTheme(theme);
   }, [theme]);
 
-  // Cleanup: dispose the TTS graph on unmount to release the
-  // AudioContext (otherwise hot-reload + remount would leak
-  // contexts until the tab hits the browser's limit).
+  // Cleanup: dispose the TTS graph AND the TTS player on
+  // unmount to release the AudioContext + clear the queue
+  // (otherwise hot-reload + remount would leak contexts
+  // until the tab hits the browser's limit).
   useEffect(() => {
     return () => {
       ttsGraphRef.current?.dispose();
       ttsGraphRef.current = null;
+      ttsPlayerRef.current?.dispose();
+      ttsPlayerRef.current = null;
     };
   }, []);
 
@@ -142,15 +146,18 @@ export function VoicePanel({
     return onVoiceStatusChange(setStatus);
   }, []);
 
-  // M10-A Plan A4: when the turn ends (state goes back to ready/idle/error
-  // from speaking), bump the play seq so any in-flight drain chain aborts
-  // and clear the queue. This prevents stale frames from playing after
-  // the user pressed ✕ or after a new turn boundary.
+  // M10-A Plan A4: when the turn ends (state goes back to
+  // ready/idle/error from speaking), reset the TTS player
+  // so any in-flight chain aborts and the queue clears.
+  // This prevents stale frames from playing after the user
+  // pressed ✕ or after a new turn boundary.
   useEffect(() => {
-    if (status.state === "ready" || status.state === "idle" || status.state === "error") {
-      playSeqRef.current += 1;
-      audioQueueRef.current = [];
-      drainingRef.current = false;
+    if (
+      status.state === "ready" ||
+      status.state === "idle" ||
+      status.state === "error"
+    ) {
+      ttsPlayerRef.current?.reset();
     }
   }, [status.state]);
 
@@ -167,80 +174,34 @@ export function VoicePanel({
   }, []);
 
   // TTS audio playback: enqueue binary frames, drain sequentially.
+  // Sprint 60 A-A1: the queue + drain logic now lives in
+  // `TtsPlayer` (lib/tts-player.ts). We just hand chunks off
+  // and let the player manage the lifecycle. The player lazily
+  // creates the `<audio>` element on first enqueue; the
+  // onChunkStart hook re-attaches the EQ graph to keep the
+  // TTS audio routed through the per-theme BiquadFilter chain.
   useEffect(() => {
     return onVoiceBinary((chunk) => {
-      audioQueueRef.current.push(chunk);
-      void drainAudioQueue();
+      if (!ttsPlayerRef.current) {
+        ttsPlayerRef.current = new TtsPlayer({
+          onChunkStart: () => {
+            // Re-attach the EQ graph on every chunk. The graph's
+            // attachMediaElement is idempotent — first call creates
+            // the MediaElementAudioSourceNode + connects to the
+            // filter chain; subsequent calls are no-ops.
+            const audio = ttsPlayerRef.current?.getAudioElement();
+            const graph = ttsGraphRef.current;
+            if (audio && graph) {
+              graph.attachMediaElement(audio);
+              graph.setTheme(useThemeStore.getState().theme);
+              graph.resume();
+            }
+          },
+        });
+      }
+      ttsPlayerRef.current.enqueue(chunk);
     });
   }, []);
-
-  async function drainAudioQueue(): Promise<void> {
-    // Sequential drain: only one drain chain runs at a time. Stale chains
-    // exit early if playSeqRef moved past the version they were started
-    // with (e.g. user pressed ✕ Cancel, or new turn superseded).
-    if (drainingRef.current) return;
-    drainingRef.current = true;
-    const mySeq = playSeqRef.current;
-
-    try {
-      while (audioQueueRef.current.length > 0) {
-        if (mySeq !== playSeqRef.current) return; // superseded
-        const next = audioQueueRef.current.shift();
-        if (!next) return;
-        try {
-          await playChunk(next);
-        } catch (err) {
-          // Swallow per-chunk errors so one bad frame doesn't kill the queue.
-          console.warn("[VoicePanel] TTS chunk play failed:", err);
-        }
-        if (mySeq !== playSeqRef.current) return;
-      }
-    } finally {
-      drainingRef.current = false;
-    }
-  }
-
-  function playChunk(chunk: ArrayBuffer): Promise<void> {
-    return new Promise((resolve) => {
-      // Wrap MP3 bytes in a Blob URL. edge-tts output (see `voice_ws.py`
-      // + `tts_factory`) is already encoded as MP3.
-      const blob = new Blob([chunk], { type: "audio/mpeg" });
-      const url = URL.createObjectURL(blob);
-      const audio = audioRef.current ?? new Audio();
-      audioRef.current = audio;
-
-      // Sprint 57: route the <audio> element through the
-      // TTS EQ graph (MediaElementAudioSourceNode → 5-band
-      // BiquadFilter chain → AudioDestination). attachMediaElement
-      // is idempotent — first call creates the source node
-      // + connects it; subsequent calls are no-ops (the
-      // graph retains the source across chunks).
-      const graph = ttsGraphRef.current;
-      if (graph) {
-        graph.attachMediaElement(audio);
-        // Re-apply the current theme's preset on every chunk
-        // (cheap — 5 setValueAtTime calls). This guarantees
-        // the EQ is always in sync even if the user changed
-        // themes mid-playback.
-        graph.setTheme(useThemeStore.getState().theme);
-        graph.resume();
-      }
-
-      const cleanup = () => {
-        URL.revokeObjectURL(url);
-        audio.onended = null;
-        audio.onerror = null;
-        resolve();
-      };
-      audio.onended = cleanup;
-      audio.onerror = cleanup;
-      audio.src = url;
-      audio.play().catch((err) => {
-        console.warn("[VoicePanel] audio.play() rejected:", err);
-        cleanup();
-      });
-    });
-  }
 
   // Sprint 16: fetch the active wake phrases on mount so the
   // WakePhraseHint can render the "Listening for **X**" affordance.

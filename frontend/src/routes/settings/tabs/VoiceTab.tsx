@@ -56,7 +56,7 @@ import { AsrSection } from "./voice/sections/AsrSection";
 import { DiagnosticsSection } from "./voice/sections/DiagnosticsSection";
 import { HowItWorksSection } from "./voice/sections/HowItWorksSection";
 import { PersonalisedFineTuneSection } from "./voice/sections/PersonalisedFineTuneSection";
-import { SaveBar } from "./voice/sections/SaveBar";
+import { SaveBar } from "../shared/SaveBar";
 import { WakeSection } from "./voice/sections/WakeSection";
 import {
   isAsrBackend,
@@ -249,7 +249,22 @@ export function VoiceTab() {
       <AsrSection store={store} />
       <AlwaysOnSection store={store} />
       <WakeSection store={store} />
-      <SaveBar store={store} />
+      <SaveBar
+        dirty
+        saving={store.saving}
+        onSave={store.handleSave}
+        onReset={store.handleReset}
+        saveTestId="voice-save-button"
+        resetTestId="voice-reset-button"
+        summary={
+          store.config ? (
+            <span data-testid="voice-config-summary">
+              {store.config.wake_phrases.length} phrase(s) · gate:{" "}
+              {store.config.strict_wake_phrase ? "strict" : "permissive"}
+            </span>
+          ) : undefined
+        }
+      />
       <HowItWorksSection />
       <PersonalisedFineTuneSection />
     </HudCard>

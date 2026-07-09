@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from "react-router";
+import { Routes, Route } from "react-router";
 
 import { CockpitLayout } from "@/components/layout/CockpitLayout";
 import { MobileLayout } from "@/components/layout/MobileLayout";
@@ -10,6 +10,7 @@ import { SessionDetailPage } from "@/routes/projects/[id]/sessions/[sessionId]";
 import { SettingsPage } from "@/routes/settings";
 import { SetupPage } from "@/routes/setup";
 import { AuditDashboardPage } from "@/routes/audit";
+import { NotFoundPage } from "@/routes/NotFound";
 import { ThemeSwitcher } from "@/components/gundam/ThemeSwitcher";
 import { CommandPalette } from "@/components/gundam/CommandPalette";
 import { HaloLive2DProvider } from "@/context/live2d-bridge-context";
@@ -36,7 +37,11 @@ function AppRoutes() {
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/audit" element={<AuditDashboardPage />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      {/* Sprint 60 R-A3: friendly 404 instead of silent redirect.
+          The previous `<Navigate to="/" replace />` swallowed the
+          user's typo with no feedback — they ended up on `/`
+          wondering why their deep link didn't work. */}
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }

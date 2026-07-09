@@ -87,6 +87,9 @@ const ROUTE_ENTRIES: RouteEntry[] = [
     file: "./projects/[id]/sessions/[sessionId].tsx",
     namedExport: "SessionDetailPage",
   },
+  // Sprint 60 R-A3: catch-all 404 page (replaces the pre-existing
+  // silent <Navigate to="/" replace />).
+  { file: "./NotFound.tsx", namedExport: "NotFoundPage" },
 ];
 
 // Helper files live next to a route entry but are not
