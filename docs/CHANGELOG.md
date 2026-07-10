@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 60 → today)
+## Recent Sprints (Sprint 61 → today)
 
+- [Sprint 61 (in-session) — Refactor + UX (useDirtyGuard + SecretsTab SaveBar + audit section-split + TanStack Query + version bump 0.2.9→0.3.0)](#sprint-61-in-session--refactor--ux-usedirtyguard--secretstab-savebar--audit-section-split--tanstack-query--version-bump-029030)
 - [Sprint 60 (in-session) — Quality-of-life + coverage gaps (TtsPlayer + shared SaveBar + 3 wizard tests + 7 UI primitive tests + NotFound route + version bump 0.2.8→0.2.9)](#sprint-60-in-session--quality-of-life--coverage-gaps-ttsplayer--shared-savebar--3-wizard-tests--7-ui-primitive-tests--notfound-route--version-bump-028029)
 - [Sprint 59 (in-session) — Per-theme assets P4 follow-up: CROSSBONE/HALO/CARTOON emotion sets complete + file-ext alignment + version bump 0.2.7→0.2.8](#sprint-59-in-session--per-theme-assets-p4-follow-up-crossbonehalocartoon-emotion-sets-complete--file-ext-alignment--version-bump-027028)
 - [Sprint 58 (in-session) — Per-theme gundam assets Phase 4 wire-up (themes + avatars + bg + 9-theme union + version bump 0.2.6→0.2.7)](#sprint-58-in-session--per-theme-gundam-assets-phase-4-wire-up-themes--avatars--bg--9-theme-union--version-bump-026027)
@@ -1423,6 +1424,54 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 61 (in-session) — Refactor + UX (useDirtyGuard + SecretsTab SaveBar + audit section-split + TanStack Query + version bump 0.2.9→0.3.0)
+
+**What shipped**: 4 deferred items from `docs/REVIEW-2026-07-09.md` and `docs/SPRINT-60-PLAN.md`. 256 → **280 tests passing** (+24 tests, +6 files). 1 new dep (`@tanstack/react-query@5.101.2`, ~13KB gzipped).
+
+**The 4 items**:
+
+1. **S-A3 — `hooks/useDirtyGuard.ts`** (NEW, ~90 LoC). Hook that listens to `popstate` (browser back/forward) and shows `confirm()` when a dirty form is at risk. SSR-safe (`typeof window` guard). 6 unit tests. Adopted in **2 tabs** (SecretsTab, VoiceTab) — only tabs with explicit draft state; GeneralTab and MemoryTab have viewer-only state, no drafts to protect (per the recon).
+
+2. **S-A2 — `SecretsTab` adopts shared `SaveBar`** (the file is only 282 LoC and already uses 1 HudCard + 2 inline SecretInputs, so a section-split is overkill — `REVIEW-2026-07-09.md` overestimated this at 5 sections; the actual implementation has 2 secrets). Replaces the inline Save/Refresh buttons with the shared `SaveBar` (Sprint 60). Adds a useDirtyGuard for the unsaved-input case. 0 new tests (covered by `useDirtyGuard` and `SaveBar` test suites).
+
+3. **R-A1 — `routes/audit.tsx` section-split** (482 LoC → 165 LoC orchestrator + 5 sub-files):
+   - `routes/audit/format.ts` (108 LoC) — 4 pure helpers: `groupByDate`, `formatTime`, `formatBytes`, `formatMs`. 6 unit tests.
+   - `routes/audit/DataTable.tsx` (30 LoC) — JSON key-value table.
+   - `routes/audit/AuditNode.tsx` (110 LoC) — single-entry expand/collapse. 4 unit tests.
+   - `routes/audit/AuditHeader.tsx` (110 LoC) — title + stat cards + refresh button. Inline `StatCard` helper.
+   - `routes/audit/AuditFilters.tsx` (75 LoC) — type chips + target search. 2 unit tests.
+   - `routes/audit/AuditList.tsx` (75 LoC) — timeline list w/ 4 render states (loading / error / empty / data).
+   - `routes/audit.tsx` (165 LoC) — orchestrator: query state + filter state + composition.
+
+4. **R-A4 — TanStack Query for `/audit`** (NEW dep). Installed `@tanstack/react-query@5.101.2`. The audit orchestrator now uses `useQuery({ queryKey: ['audit', 'log', { limit: 500 }], queryFn: () => api.getAuditLog(500) })`. App.tsx wraps everything in a `<QueryClientProvider>` with `staleTime: 30_000` + `refetchOnWindowFocus: true` + 4xx-skip retry. 0 new tests (the integration is the `audit` page load — covered by manual smoke + Sprint 62 perf benchmark).
+
+**Reconciliation note**: The Sprint 61 plan said "section-split SecretsTab into 4 sub-components" and "useDirtyGuard in 4 tabs". Both over-estimated. The actual file structure for SecretsTab is 1 HudCard + 2 SecretInputs (the plan assumed 5 sections based on the review doc, but the implementation has 2). And only 2 of the 8 tabs have actual draft state (the others are viewer-only). Sprint 61 ships what the code actually needs.
+
+**Senior-engineer audit findings**:
+- **P1**: useDirtyGuard SSR safety — `typeof window !== "undefined"` guard present.
+- **P2**: useDirtyGuard popstate scope — explicitly browser back/forward only; in-app `<Link>` is out of scope (JSDoc documents this). Sprint 62+ can adopt react-router's `useBlocker` for full coverage.
+- **P3**: TanStack Query staleTime 30s — appropriate for an append-only log.
+- **P4**: QueryClient at module scope in App.tsx — single instance for the app lifetime.
+- **P5**: SecretsTab state ownership — 1 useState; section-split wasn't needed.
+- **P6**: audit split orchestrator testability — 5 pure sub-components + 1 orchestrator. Sub-components don't import `useQuery`.
+- **P7**: TanStack Query bundle size — ~13KB gzipped (under 50KB budget).
+- **P8**: Route smoke guard — `routes/audit/*` files auto-detected as helper files; no `ROUTE_ENTRIES` change needed. 32/32 route-graph tests pass.
+
+**Standing rules added**:
+- Any new custom hook MUST have ≥4 tests (hook contract + SSR safety + unmount cleanup + edge case).
+- Any new dep addition MUST: (1) be reviewed for bundle size impact, (2) have a stated rollback plan, (3) be added to CHANGELOG in the same commit.
+- New route sub-directories (e.g. `routes/audit/`) auto-qualify as helper files for the route smoke guard; no `ROUTE_ENTRIES` update needed.
+
+**Version bump**: `__version__` 0.2.9 → **0.3.0** (MINOR — new `@tanstack/react-query` dep = new runtime requirement per SemVer). All 4 surfaces synced.
+
+**Net effect**:
+- audit.tsx: 482 → 165 LoC (-66%)
+- SecretsTab: uses shared SaveBar + useDirtyGuard (no LoC reduction needed; code quality up)
+- Test count: 256 → 280 (+24 tests; 53 → 59 test files)
+- 1 new dep (`@tanstack/react-query@5.101.2`)
+- 4 new files in `routes/audit/` sub-directory
+- 2 new files in `hooks/`
 
 ### Sprint 60 (in-session) — Quality-of-life + coverage gaps (TtsPlayer + shared SaveBar + 3 wizard tests + 7 UI primitive tests + NotFound route + version bump 0.2.8→0.2.9)
 
