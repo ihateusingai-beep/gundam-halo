@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 61 → today)
+## Recent Sprints (Sprint 62 → today)
 
+- [Sprint 62 (in-session) — Per-USER EQ + A/B compare + Card primitive + version bump 0.3.0→0.3.1](#sprint-62-in-session--per-user-eq--ab-compare--card-primitive--version-bump-030031)
 - [Sprint 61 (in-session) — Refactor + UX (useDirtyGuard + SecretsTab SaveBar + audit section-split + TanStack Query + version bump 0.2.9→0.3.0)](#sprint-61-in-session--refactor--ux-usedirtyguard--secretstab-savebar--audit-section-split--tanstack-query--version-bump-029030)
 - [Sprint 60 (in-session) — Quality-of-life + coverage gaps (TtsPlayer + shared SaveBar + 3 wizard tests + 7 UI primitive tests + NotFound route + version bump 0.2.8→0.2.9)](#sprint-60-in-session--quality-of-life--coverage-gaps-ttsplayer--shared-savebar--3-wizard-tests--7-ui-primitive-tests--notfound-route--version-bump-028029)
 - [Sprint 59 (in-session) — Per-theme assets P4 follow-up: CROSSBONE/HALO/CARTOON emotion sets complete + file-ext alignment + version bump 0.2.7→0.2.8](#sprint-59-in-session--per-theme-assets-p4-follow-up-crossbonehalocartoon-emotion-sets-complete--file-ext-alignment--version-bump-027028)
@@ -1424,6 +1425,50 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 62 (in-session) — Per-USER EQ + A/B compare + Card primitive + version bump 0.3.0→0.3.1
+
+**What shipped**: 3 deferred items from `docs/REVIEW-2026-07-09.md` deferred list. 280 → **295 tests passing** (+15 tests, +1 file). No new dep.
+
+**The 3 items**:
+
+1. **A-A2 — `stores/eq.ts`** (NEW, ~100 LoC). Per-USER EQ preset override. `useEqStore` Zustand store with:
+   - `override: EqPreset | null` — the user's override (null = no override, use theme's preset)
+   - `setPreset(p) / resetToThemePreset()` — write to / clear the override
+   - `getActivePreset(themeId)` — the resolver (override ?? theme's preset)
+   - `getActiveEqPreset(themeId)` — non-React helper for non-React callers
+   8 unit tests covering default state, set/reset semantics, theme-vs-override precedence, and the non-React helper.
+
+2. **A-A3 — A/B compare themes button** in `CockpitEqCard`. 8 chips for non-current themes. Click a chip → 10-second timer starts, the visualizer reflects the chosen theme's preset; at T-0 the compare reverts. "Pin" promotes the compare to a permanent override (calls `useEqStore.setPreset`). "✕" cancels without modifying the override. When an override is active, a "Reset override" button appears. 5 unit tests.
+
+3. **U-A2 — `components/ui/card.tsx`** (NEW, ~120 LoC). Generic Card primitive for non-cockpit routes. 7 sub-components: `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter`. The gundam-specific `HudCard` is unchanged — the new Card is for routes that should NOT inherit the cockpit accent. 5 unit tests. Adopted in `routes/setup/index.tsx` (the "Backend unhealthy" block).
+
+**Real bugs caught during execution**:
+- **`TtsAudioGraph.setPreset` was missing** — extracted `useEqStore` then realized the graph only had `setTheme(theme)`. Added `setPreset(preset)` as a sibling method. The two graphs (VoicePanel's playback + CockpitEqCard's visualizer) now both call `setPreset(override)` or `setTheme(theme)` based on the override state.
+- **CockpitEqCard.test.tsx tsc error** — initial mock had `setPreset(p: { name: string })` which didn't satisfy the `EqPreset` shape. Fixed by using `typeof FLAT_PRESET` for the param type.
+
+**Senior-engineer audit findings** (8 points, all pass):
+- **P1**: useEqStore persistence is explicit `null` (no localStorage) — test asserts no persistence.
+- **P2**: useEqStore race condition — sync (Zustand), no race.
+- **P3**: A/B compare timer cleanup — `clearInterval` + `clearTimeout` in effect cleanup.
+- **P4**: Card primitive a11y — plain `<div>`; documented in JSDoc.
+- **P5**: Card primitive NO theme leak — tested (data-theme is null).
+- **P6**: Route smoke guard — `components/ui/card.tsx` is a UI primitive, auto-detected.
+- **P7**: A/B compare button label — "A/B" + "Compare:" (clear).
+- **P8**: Carry-over rules — Card 5 tests, useEqStore 8 tests, no new deps.
+
+**Standing rules added**:
+- Per-USER overrides (e.g. EQ preset override) are session-only by default. Adding persistence is a separate task with its own sprint + UX review.
+- A/B compare / preview affordances must use `setTimeout` + `setInterval` and **clear both** in the effect cleanup (defense in depth).
+
+**Version bump**: `__version__` 0.3.0 → **0.3.1** (PATCH — refactor + small UX enhancement; no new dep, no breaking change). All 4 surfaces synced.
+
+**Net effect**:
+- New `useEqStore` (Zustand) decouples EQ from theme
+- 1 user-facing affordance: A/B compare
+- 1 new UI primitive: `Card` (adopted in 1 route; more to follow in Sprint 63+)
+- Test count: 280 → 295 (+15 tests; 59 → 61 test files)
+- `TtsAudioGraph.setPreset()` added (3 new lines, 1 new method)
 
 ### Sprint 61 (in-session) — Refactor + UX (useDirtyGuard + SecretsTab SaveBar + audit section-split + TanStack Query + version bump 0.2.9→0.3.0)
 

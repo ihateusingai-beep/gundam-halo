@@ -17,6 +17,7 @@ import type { UseVoiceInputResult } from "@/hooks/use-voice-input";
 import { api } from "@/lib/api";
 import { TtsAudioGraph } from "@/lib/audio-graph";
 import { TtsPlayer } from "@/lib/tts-player";
+import { useEqStore } from "@/stores/eq";
 import { useThemeStore } from "@/stores/theme";
 import { WakePhraseHint } from "@/components/gundam/WakePhraseHint";
 import {
@@ -116,6 +117,7 @@ export function VoicePanel({
   // unmount.
   const ttsGraphRef = useRef<TtsAudioGraph | null>(null);
   const theme = useThemeStore((s) => s.theme);
+  const eqOverride = useEqStore((s) => s.override);
 
   // Sprint 57: keep the TTS graph's EQ preset in sync with the
   // current theme. Setting the theme on the graph calls
@@ -125,8 +127,15 @@ export function VoicePanel({
     if (!ttsGraphRef.current) {
       ttsGraphRef.current = new TtsAudioGraph();
     }
-    ttsGraphRef.current.setTheme(theme);
-  }, [theme]);
+    // Sprint 62 A-A2: honor the per-USER EQ override (if set);
+    // otherwise resolve from the theme. The effect re-runs on
+    // either change so the graph stays in sync.
+    if (eqOverride) {
+      ttsGraphRef.current.setPreset(eqOverride);
+    } else {
+      ttsGraphRef.current.setTheme(theme);
+    }
+  }, [theme, eqOverride]);
 
   // Cleanup: dispose the TTS graph AND the TTS player on
   // unmount to release the AudioContext + clear the queue
@@ -193,7 +202,16 @@ export function VoicePanel({
             const graph = ttsGraphRef.current;
             if (audio && graph) {
               graph.attachMediaElement(audio);
-              graph.setTheme(useThemeStore.getState().theme);
+              // Sprint 62 A-A2: honor the per-USER EQ override
+              // (if set); otherwise fall back to the theme's
+              // preset. Mirrors CockpitEqCard's logic so both
+              // graphs stay in sync.
+              const override = useEqStore.getState().override;
+              if (override) {
+                graph.setPreset(override);
+              } else {
+                graph.setTheme(useThemeStore.getState().theme);
+              }
               graph.resume();
             }
           },

@@ -125,6 +125,21 @@ export class TtsAudioGraph {
     }
   }
 
+  /** Sprint 62 A-A2: set the EQ preset directly (bypasses the
+   *  theme lookup). Used by `useEqStore` for the per-USER
+   *  override — the user picks a theme for visuals but a
+   *  different preset for audio. After `setPreset(p)`, the
+   *  next `setTheme(...)` call would re-resolve from the
+   *  theme (overriding the override); the caller (the
+   *  store) re-applies the override as needed. */
+  setPreset(preset: EqPreset): void {
+    if (preset === this.currentPreset) return;
+    this.currentPreset = preset;
+    if (this.filters.length === 5) {
+      applyEqPreset(this.filters, this.currentPreset);
+    }
+  }
+
   /** Current preset (useful for the visualizer). */
   getPreset(): EqPreset {
     return this.currentPreset;

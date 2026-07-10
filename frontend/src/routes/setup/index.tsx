@@ -16,7 +16,7 @@
 
 import { useEffect, useState } from "react";
 
-import { HudCard } from "@/components/gundam/HudCard";
+import { Card } from "@/components/ui/card";
 import { WizardShell } from "@/components/wizard/WizardShell";
 import { getWatchdogStatus, subscribeWatchdog } from "@/services/halo-watchdog-events";
 
@@ -32,8 +32,11 @@ export function SetupPage() {
   if (health.state === "respawn-disabled") {
     return (
       <div className="max-w-2xl mx-auto p-4">
-        <HudCard className="!border-[var(--danger)]">
-          <div className="p-6 text-center space-y-3" data-testid="setup-health-blocked">
+        <Card className="border-[var(--danger)]">
+          <div
+            className="p-6 text-center space-y-3"
+            data-testid="setup-health-blocked"
+          >
             <h2 className="text-xl font-[Orbitron] text-[var(--danger)] uppercase tracking-widest">
               Backend unhealthy
             </h2>
@@ -44,7 +47,7 @@ export function SetupPage() {
               this wizard.
             </p>
           </div>
-        </HudCard>
+        </Card>
       </div>
     );
   }
