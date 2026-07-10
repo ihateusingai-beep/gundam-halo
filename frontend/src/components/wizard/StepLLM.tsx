@@ -18,12 +18,26 @@
  */
 
 import { useState } from "react";
+import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
+import { useStepValidation } from "@/hooks/useStepValidation";
 import { cn } from "@/lib/utils";
 import { setupApi } from "@/lib/setup-api";
 import type { LLMConfig } from "@/types/api";
 import type { WizardError } from "@/hooks/useSetupWizard";
+
+/** Sprint 63 W-A4 (pilot): Zod schema for the LLM step.
+ *  This is the only step migrated in Sprint 63 — the
+ *  remaining 6 wizard steps keep their hand-rolled
+ *  validation until the pilot proves out. */
+const llmSchema = z.object({
+  provider: z.enum(["minimax", "openai", "anthropic", "ollama"]),
+  api_key: z.string().min(1, "API key is required"),
+  base_url: z.string().url("Base URL must be a valid URL"),
+  default_model: z.string().min(1, "Default model is required"),
+  fallback_model: z.string().optional(),
+});
 
 export interface StepLLMProps {
   form: LLMConfig;
@@ -50,6 +64,22 @@ export function StepLLM({ form, onSubmit, onValidate, errors, busy }: StepLLMPro
   const [validation, setValidation] = useState<
     { ok: boolean; message: string } | null
   >(null);
+
+  // Sprint 63 W-A4 (pilot): Zod-backed validation. The hook
+  // re-validates on `draft` change (memoised). The result is
+  // merged with the parent-supplied `errors` below — backend
+  // errors win (they include server-side context like "this
+  // key is wrong for THIS model") while Zod errors win on
+  // client-side constraints (URL format, non-empty fields).
+  const zodValidation = useStepValidation(llmSchema, draft);
+  const allErrors: WizardError[] = [
+    ...zodValidation.errors.map((e) => ({
+      field: e.field,
+      code: "zod",
+      message: e.message,
+    })),
+    ...errors,
+  ];
 
   function pickProvider(p: LLMConfig["provider"]) {
     setDraft((d) => ({
@@ -83,8 +113,12 @@ export function StepLLM({ form, onSubmit, onValidate, errors, busy }: StepLLMPro
     await onSubmit(draft);
   }
 
-  // Highlight errors per field.
-  const errorByField = Object.fromEntries(errors.map((e) => [e.field, e.message]));
+  // Highlight errors per field. Zod errors take precedence
+  // over backend errors for the same field (Zod catches
+  // "URL malformed" before the user clicks Next).
+  const errorByField = Object.fromEntries(
+    allErrors.map((e) => [e.field, e.message]),
+  );
 
   return (
     <div className="space-y-3 py-2" data-testid="step-llm">

@@ -17,7 +17,7 @@
  */
 import { Link } from "react-router";
 
-import { HudCard } from "@/components/gundam/HudCard";
+import { Card } from "@/components/ui/card";
 import { StatusDot } from "@/components/gundam/StatusDot";
 
 export interface AuditStats {
@@ -35,7 +35,7 @@ export interface AuditHeaderProps {
 
 export function AuditHeader({ stats, loading, onRefresh }: AuditHeaderProps) {
   return (
-    <HudCard>
+    <Card>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-widest mb-1">
@@ -83,7 +83,7 @@ export function AuditHeader({ stats, loading, onRefresh }: AuditHeaderProps) {
         />
         <StatCard label="UNIQUE ACTIONS" value={stats.uniqueActions} />
       </div>
-    </HudCard>
+    </Card>
   );
 }
 

@@ -23,7 +23,7 @@
  *   - `onToggle: (id: string) => void` — fired when an
  *     `AuditNode` row is clicked.
  */
-import { HudCard } from "@/components/gundam/HudCard";
+import { Card } from "@/components/ui/card";
 import { Reticle } from "@/components/gundam/Reticle";
 import type { AuditEntry } from "@/types/api";
 
@@ -50,7 +50,7 @@ export function AuditList({
   onToggle,
 }: AuditListProps) {
   return (
-    <HudCard className="flex-1 overflow-y-auto" data-testid="audit-list">
+    <Card className="flex-1 overflow-y-auto" data-testid="audit-list">
       {loading && unfilteredCount === 0 ? (
         <div className="flex items-center gap-3">
           <div className="gundam-radar w-6 h-6" />
@@ -93,6 +93,6 @@ export function AuditList({
           ))}
         </div>
       )}
-    </HudCard>
+    </Card>
   );
 }

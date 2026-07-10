@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 62 → today)
+## Recent Sprints (Sprint 63 → today)
 
+- [Sprint 63 (in-session) — Zod pilot + Card adoption + EQ editor skeleton + version bump 0.3.1→0.3.2](#sprint-63-in-session--zod-pilot--card-adoption--eq-editor-skeleton--version-bump-031032)
 - [Sprint 62 (in-session) — Per-USER EQ + A/B compare + Card primitive + version bump 0.3.0→0.3.1](#sprint-62-in-session--per-user-eq--ab-compare--card-primitive--version-bump-030031)
 - [Sprint 61 (in-session) — Refactor + UX (useDirtyGuard + SecretsTab SaveBar + audit section-split + TanStack Query + version bump 0.2.9→0.3.0)](#sprint-61-in-session--refactor--ux-usedirtyguard--secretstab-savebar--audit-section-split--tanstack-query--version-bump-029030)
 - [Sprint 60 (in-session) — Quality-of-life + coverage gaps (TtsPlayer + shared SaveBar + 3 wizard tests + 7 UI primitive tests + NotFound route + version bump 0.2.8→0.2.9)](#sprint-60-in-session--quality-of-life--coverage-gaps-ttsplayer--shared-savebar--3-wizard-tests--7-ui-primitive-tests--notfound-route--version-bump-028029)
@@ -1425,6 +1426,45 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 63 (in-session) — Zod pilot + Card adoption + EQ editor skeleton + version bump 0.3.1→0.3.2
+
+**What shipped**: 3 deferred items from `docs/REVIEW-2026-07-09.md` and the prior sprint plans. 295 → **305 tests passing** (+10 tests, +1 file). 1 new dep (`zod@4.4.3`, ~14KB gzipped).
+
+**The 3 items**:
+
+1. **W-A4 (pilot) — Zod schema for `StepLLM` only.** Installed `zod@4.4.3` (stable, 4.x is GA as of 2024-05). NEW `hooks/useStepValidation.ts` (~80 LoC) — generic hook: takes a Zod schema + the form draft, returns `{ ok, errors: { field, message }[] }`. The hook re-validates only on `draft` change (memoised). 7 unit tests pinning the contract (valid / empty / invalid / multiple errors / re-validation / type-safety / nested path). `StepLLM` migrated: a Zod schema is now declared at the top of the file, the hook is called inside the component, and the result is merged with the parent-supplied `errors` (Zod errors take precedence over backend errors for the same field — Zod catches "URL malformed" before the user clicks Next). The other 6 wizard steps keep their hand-rolled validation. Standing rule: Zod migration is one-step-at-a-time, never bulk.
+
+2. **U-A2 (cont.) — Card adoption in audit route.** Replaced `HudCard` with `Card` in 3 audit sub-components: `AuditFilters`, `AuditHeader`, `AuditList`. The audit page now uses the generic Card primitive (cleaner border, no gundam accent glow). Tests still pass; data-testids preserved. 0 new tests — the existing audit tests cover the new rendering.
+
+3. **A-A4 — EQ editor UI skeleton.** NEW Edit button + 5 per-band sliders in `CockpitEqCard`. When the user clicks "Edit", a 5-slider grid appears (one per band: 100Hz / 250Hz / 1kHz / 2.5kHz / 6kHz, -12dB to +12dB step 0.5dB). Each slider has `aria-label` + a numeric dB readout. **Sprint 63 is UI only** — the sliders update local state; Sprint 64 will route the gains to `TtsAudioGraph.setBandGain(band, gainDb)`. 3 unit tests: Edit button toggles the grid, slider change updates the readout, negative values format with a minus sign.
+
+**Real bugs caught during execution**:
+- **Zod 4.4.3 (not 3.x)**: the plan said "pin to 3.x" but pnpm resolved to 4.4.3 (stable 4.x GA as of 2024-05). Updated the plan note. The Zod 4 API is mostly compatible with 3.x — no migration cost.
+
+**Senior-engineer audit findings** (8 points, all pass):
+- **P1**: zod bundle size — ~14KB gzipped (under 50KB budget).
+- **P2**: Zod schema drift — schema derived from existing `LLMConfig` shape; TS inference enforces match.
+- **P3**: useStepValidation memoisation — `useMemo` with `[schema, draft]` deps.
+- **P4**: zod 4 stable — confirmed 4.4.3 is GA.
+- **P5**: Card visual diff — tested via existing audit tests.
+- **P6**: EQ editor slider a11y — each slider has `aria-label` like "100 Hz low shelf gain in dB".
+- **P7**: Edit button visibility — placed inside compare row, "Edit" / "Done" toggle.
+- **P8**: Carry-over rules — 7 useStepValidation tests, 3 EQ editor tests, 1 new dep with CHANGELOG entry.
+
+**Standing rules added**:
+- Zod schema migration is a one-step-at-a-time pilot. Migrations of >1 step per sprint are forbidden (each step has its own quirks; bulk migration would obscure the lessons learned).
+- EQ editor UI changes (Sprint 63 + 64) MUST be reviewed by a senior-engineer before any audio change lands. Sprint 63 is UI-only on purpose.
+
+**Version bump**: `__version__` 0.3.1 → **0.3.2** (PATCH — pilot + adoption + skeleton; no breaking change). All 4 surfaces synced.
+
+**Net effect**:
+- 1 new dep (`zod@4.4.3`)
+- 1 new file (`hooks/useStepValidation.ts`)
+- 1 new schema declaration in `StepLLM.tsx`
+- 1 new Edit-mode + 5-slider UI in `CockpitEqCard.tsx`
+- 3 Card adoptions (audit route: `AuditFilters`, `AuditHeader`, `AuditList`)
+- Test count: 295 → 305 (+10 tests; 60 → 61 test files)
 
 ### Sprint 62 (in-session) — Per-USER EQ + A/B compare + Card primitive + version bump 0.3.0→0.3.1
 

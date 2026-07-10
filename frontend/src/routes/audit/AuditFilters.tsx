@@ -16,7 +16,7 @@
  *   - `targetQuery: string` — current target search substring.
  *   - `setTargetQuery: (q: string) => void` — input change.
  */
-import { HudCard } from "@/components/gundam/HudCard";
+import { Card } from "@/components/ui/card";
 
 export interface AuditFiltersProps {
   eventTypes: string[];
@@ -34,7 +34,7 @@ export function AuditFilters({
   setTargetQuery,
 }: AuditFiltersProps) {
   return (
-    <HudCard>
+    <Card>
       <div
         className="flex flex-wrap items-center gap-3"
         data-testid="audit-filters"
@@ -82,6 +82,6 @@ export function AuditFilters({
           )}
         </div>
       </div>
-    </HudCard>
+    </Card>
   );
 }

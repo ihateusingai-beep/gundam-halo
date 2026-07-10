@@ -39,6 +39,17 @@ import { HudCard } from "./HudCard";
  *  we apply its preset for 10s, then revert. */
 const COMPARE_DURATION_MS = 10_000;
 
+/** Sprint 63 A-A4: EQ editor band metadata. The 5 bands
+ *  match the BiquadFilterNode layout in `audio-eq.ts`
+ *  (low shelf at 100Hz, 3 peaking bands, high shelf at 6kHz). */
+const BAND_LABELS = [
+  { freq: "100 Hz", shape: "low shelf" },
+  { freq: "250 Hz", shape: "peaking" },
+  { freq: "1 kHz", shape: "peaking" },
+  { freq: "2.5 kHz", shape: "peaking" },
+  { freq: "6 kHz", shape: "high shelf" },
+] as const;
+
 export function CockpitEqCard({ live = false }: { live?: boolean }) {
   const theme = useThemeStore((s) => s.theme);
   const eqOverride = useEqStore((s) => s.override);
@@ -54,6 +65,16 @@ export function CockpitEqCard({ live = false }: { live?: boolean }) {
   // COMPARE_DURATION_MS, then revert.
   const [compareThemeId, setCompareThemeId] = useState<string | null>(null);
   const [compareSecondsLeft, setCompareSecondsLeft] = useState<number>(0);
+
+  // Sprint 63 A-A4: EQ editor (UI skeleton, no audio change).
+  // `editMode` toggles between the read-only visualizer and
+  // the per-band slider grid. `localGains` is local-only
+  // state — NOT wired to the audio graph in Sprint 63
+  // (the wiring is Sprint 64's job).
+  const [editMode, setEditMode] = useState(false);
+  const [localGains, setLocalGains] = useState<
+    [number, number, number, number, number]
+  >(() => preset.bands.map((b) => b.gain) as [number, number, number, number, number]);
 
   useEffect(() => {
     // Sprint 62 A-A2: if the user has overridden the EQ preset,
@@ -196,7 +217,57 @@ export function CockpitEqCard({ live = false }: { live?: boolean }) {
               )}
             </>
           )}
+          {/* Sprint 63 A-A4: Edit-mode toggle. Sits inside the
+              compare row so the existing layout doesn't grow. */}
+          <button
+            type="button"
+            onClick={() => setEditMode((v) => !v)}
+            data-testid="eq-edit-toggle"
+            className="text-[9px] font-mono px-1.5 py-0.5 border border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors ml-auto"
+          >
+            {editMode ? "Done" : "Edit"}
+          </button>
         </div>
+        {/* Sprint 63 A-A4: per-band slider grid (UI skeleton).
+            Local-only state; NOT wired to the audio graph.
+            Sprint 64 will route the gains to
+            TtsAudioGraph.setBandGain(band, gainDb). */}
+        {editMode && (
+          <div
+            className="mt-2 grid grid-cols-5 gap-2"
+            data-testid="eq-editor-grid"
+          >
+            {BAND_LABELS.map((band, i) => (
+              <div key={i} className="flex flex-col items-center gap-1">
+                <span className="text-[8px] font-mono text-[var(--text-muted)]">
+                  {band.freq}
+                </span>
+                <input
+                  type="range"
+                  min={-12}
+                  max={12}
+                  step={0.5}
+                  value={localGains[i]}
+                  onChange={(e) => {
+                    const next = [...localGains] as typeof localGains;
+                    next[i] = Number(e.target.value);
+                    setLocalGains(next);
+                  }}
+                  aria-label={`${band.freq} ${band.shape} gain in dB`}
+                  data-testid={`eq-editor-band-${i}`}
+                  className="w-full accent-[var(--accent)]"
+                />
+                <span
+                  className="text-[8px] font-mono text-[var(--accent)]"
+                  data-testid={`eq-editor-band-${i}-readout`}
+                >
+                  {localGains[i] >= 0 ? "+" : ""}
+                  {localGains[i].toFixed(1)} dB
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </HudCard>
     </div>
   );

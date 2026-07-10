@@ -127,4 +127,37 @@ describe("CockpitEqCard A/B compare (Sprint 62 A-A3)", () => {
     fireEvent.click(screen.getByTestId("eq-compare-reset-override"));
     expect(mockReset).toHaveBeenCalledTimes(1);
   });
+
+  // Sprint 63 A-A4: EQ editor (UI skeleton). The 3 tests
+  // pin the edit-mode affordance without touching audio
+  // graph plumbing (Sprint 64's job).
+  it("Edit button toggles the per-band slider grid", () => {
+    render(<CockpitEqCard />);
+    expect(screen.queryByTestId("eq-editor-grid")).toBeNull();
+    fireEvent.click(screen.getByTestId("eq-edit-toggle"));
+    expect(screen.getByTestId("eq-editor-grid")).toBeTruthy();
+    // 5 sliders, one per band.
+    expect(screen.getByTestId("eq-editor-band-0")).toBeTruthy();
+    expect(screen.getByTestId("eq-editor-band-4")).toBeTruthy();
+  });
+
+  it("slider change updates the readout", () => {
+    render(<CockpitEqCard />);
+    fireEvent.click(screen.getByTestId("eq-edit-toggle"));
+    const band0 = screen.getByTestId("eq-editor-band-0");
+    fireEvent.change(band0, { target: { value: "5" } });
+    expect(
+      screen.getByTestId("eq-editor-band-0-readout").textContent,
+    ).toMatch(/\+5\.0 dB/);
+  });
+
+  it("readout formats negative values with a minus sign", () => {
+    render(<CockpitEqCard />);
+    fireEvent.click(screen.getByTestId("eq-edit-toggle"));
+    const band4 = screen.getByTestId("eq-editor-band-4");
+    fireEvent.change(band4, { target: { value: "-3" } });
+    expect(
+      screen.getByTestId("eq-editor-band-4-readout").textContent,
+    ).toMatch(/−3\.0 dB|-3\.0 dB/);
+  });
 });
