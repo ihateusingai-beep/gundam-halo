@@ -1,4 +1,5 @@
 import { Routes, Route } from "react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { CockpitLayout } from "@/components/layout/CockpitLayout";
 import { MobileLayout } from "@/components/layout/MobileLayout";
@@ -22,7 +23,32 @@ import { useResponsive } from "@/lib/use-responsive";
  * (CockpitLayout) — a new route added to one side and not the other
  * would silently redirect mobile users to `/` (the catch-all). Extracting
  * this once means future route additions only need to touch one place.
+ *
+ * Sprint 61 R-A4: wrapped in `<QueryClientProvider>` so the audit
+ * dashboard (and future TanStack Query adopters) can use `useQuery`
+ * with shared cache. The single client is created once at module
+ * load and lives for the lifetime of the app.
  */
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Audit log doesn't change mid-session — 30s staleTime
+      // dedupes rapid remounts without serving stale data for
+      // long. Window focus refetch gives the user a quick
+      // refresh if they tab away + back.
+      staleTime: 30_000,
+      refetchOnWindowFocus: true,
+      // Don't retry on 4xx — auth-missing / not-found won't
+      // succeed on retry.
+      retry: (failureCount, error) => {
+        const status = (error as { status?: number })?.status;
+        if (status && status >= 400 && status < 500) return false;
+        return failureCount < 2;
+      },
+    },
+  },
+});
+
 function AppRoutes() {
   return (
     <Routes>
@@ -50,7 +76,7 @@ export default function App() {
   const isMobile = useResponsive();
 
   return (
-    <>
+    <QueryClientProvider client={queryClient}>
       {/* Floating theme switcher (always visible) */}
       <ThemeSwitcher />
 
@@ -70,6 +96,6 @@ export default function App() {
           above all other UI. Self-contained: subscribes to its own
           open/close bus and reads the global Cmd/Ctrl+K shortcut. */}
       <CommandPalette />
-    </>
+    </QueryClientProvider>
   );
 }

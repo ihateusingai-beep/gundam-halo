@@ -3,6 +3,8 @@ import { toast } from "sonner";
 
 import { HudCard } from "@/components/gundam/HudCard";
 import { api, ApiError } from "@/lib/api";
+import { useDirtyGuard } from "@/hooks/useDirtyGuard";
+import { SaveBar } from "../shared/SaveBar";
 
 const SECRET_INPUT_CLASS =
   "w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-xs font-mono " +
@@ -139,6 +141,16 @@ export function SecretsTab() {
   const [telegram, setTelegram] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // Sprint 61 S-A3: dirty-state guard. Active when the user has
+  // typed either value but hasn't saved. Browser back/forward
+  // triggers a confirm() dialog before navigation. In-app Link
+  // clicks are not yet covered (out of scope per the plan).
+  const isDirty = minimax.trim().length > 0 || telegram.trim().length > 0;
+  useDirtyGuard({
+    when: isDirty,
+    message: "You have unsaved secret values. Leave and lose them?",
+  });
+
   const refresh = async () => {
     try {
       setError(null);
@@ -269,13 +281,20 @@ export function SecretsTab() {
         >
           Refresh
         </button>
-        <button
-          onClick={handleSave}
-          disabled={saving || (!minimax.trim() && !telegram.trim())}
-          className="px-4 py-1 text-[10px] uppercase tracking-wider font-[Rajdhani] border border-[var(--accent)] text-[var(--accent)] bg-[var(--bg-elevated)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors disabled:opacity-40"
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
+        <SaveBar
+          dirty={isDirty}
+          saving={saving}
+          onSave={handleSave}
+          saveTestId="secrets-save-button"
+          summary={
+            status ? (
+              <span data-testid="secrets-status-summary">
+                {Object.values(status).filter((s) => s.configured).length}/
+                {Object.keys(status).length} configured
+              </span>
+            ) : undefined
+          }
+        />
       </div>
     </HudCard>
   );

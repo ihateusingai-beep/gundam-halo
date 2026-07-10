@@ -45,6 +45,7 @@
  * works without any other file edits.
  */
 import { useEffect, useState } from "react";
+import { useDirtyGuard } from "@/hooks/useDirtyGuard";
 import { toast } from "sonner";
 
 import { HudCard } from "@/components/gundam/HudCard";
@@ -94,6 +95,23 @@ export function VoiceTab() {
     useState<AsrCorrectorDraft>(ASR_CORRECTOR_DEFAULT);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Sprint 61 S-A3: dirty-state guard. Active when ANY draft
+  // differs from the last-saved config. We compute "dirty" by
+  // comparing the 4 draft fields against the saved config.
+  // The hook fires window.confirm() on browser back/forward;
+  // in-app Link clicks are out of scope (Sprint 62+).
+  const isDraftDirty =
+    config != null &&
+    (draft !== (config.wake_phrases.join("\n") ?? "") ||
+      strictDraft !== config.strict_wake_phrase ||
+      alwaysOnMicDraft !== config.always_on_mic ||
+      asrBackendDraft !== (config.asr_backend ?? ASR_BACKEND_DEFAULT) ||
+      asrCorrectorDraft !== (config.asr_corrector ?? ASR_CORRECTOR_DEFAULT));
+  useDirtyGuard({
+    when: isDraftDirty,
+    message: "You have unsaved voice settings. Leave and lose them?",
+  });
   // Mirroring the voice service's state into this tab —
   // cheap (no polling, just an interval read on the
   // shared status singleton from `services/voice/`).
