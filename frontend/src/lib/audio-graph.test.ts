@@ -98,4 +98,72 @@ describe("TtsAudioGraph", () => {
     expect(graph.getFilters().length).toBe(0);
     expect(fake.close).toHaveBeenCalledOnce();
   });
+
+  // Sprint 64 A-A4: per-band gain control
+  it("setBandGain(0, 5) calls setValueAtTime(5) on the first filter", () => {
+    const fake = buildFakeAudioContext();
+    (window as unknown as { AudioContext: unknown }).AudioContext = function FakeAudioContext() {
+      return fake;
+    };
+    const graph = new TtsAudioGraph();
+    void graph.getContext();
+    graph.setTheme("gundam-ntd"); // initialise the 5 filters
+    const filters = graph.getFilters();
+    const band0 = filters[0];
+    if (!band0) throw new Error("band 0 filter not initialised");
+    const band0Mock = band0.gain.setValueAtTime as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    const band1 = filters[1];
+    if (!band1) throw new Error("band 1 filter not initialised");
+    const band1Mock = band1.gain.setValueAtTime as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    const before = band1Mock.mock.calls.length;
+    graph.setBandGain(0, 5);
+    // setValueAtTime was called on band 0 (with the new gain)
+    expect(band0Mock.mock.calls.length).toBeGreaterThan(0);
+    // ...but NOT on band 1 (other bands unchanged)
+    expect(band1Mock.mock.calls.length).toBe(before);
+  });
+
+  it("setBandGain before graph init is a no-op", () => {
+    const fake = buildFakeAudioContext();
+    (window as unknown as { AudioContext: unknown }).AudioContext = function FakeAudioContext() {
+      return fake;
+    };
+    const graph = new TtsAudioGraph();
+    // No getContext() / setTheme call — filters[] is still empty
+    graph.setBandGain(0, 5);
+    expect(graph.getFilters().length).toBe(0);
+  });
+
+  it("setBandGain(99, 5) is out-of-bounds (no-op + warn)", () => {
+    const fake = buildFakeAudioContext();
+    (window as unknown as { AudioContext: unknown }).AudioContext = function FakeAudioContext() {
+      return fake;
+    };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const graph = new TtsAudioGraph();
+    void graph.getContext();
+    graph.setTheme("gundam-ntd");
+    graph.setBandGain(99 as never, 5);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("out of range"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("setBandGain updates getPreset() (UI sees the new value)", () => {
+    const fake = buildFakeAudioContext();
+    (window as unknown as { AudioContext: unknown }).AudioContext = function FakeAudioContext() {
+      return fake;
+    };
+    const graph = new TtsAudioGraph();
+    void graph.getContext();
+    graph.setTheme("gundam-ntd");
+    const before = graph.getPreset().bands[0]?.gain ?? 0;
+    graph.setBandGain(0, before + 3);
+    expect(graph.getPreset().bands[0]?.gain).toBeCloseTo(before + 3);
+  });
 });

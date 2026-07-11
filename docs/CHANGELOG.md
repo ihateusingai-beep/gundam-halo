@@ -6,8 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Recent Sprints (Sprint 63 → today)
+## Recent Sprints (Sprint 64 → today)
 
+- [Sprint 64 (in-session) — EQ editor audio wire + Zod migration (2 steps) + version bump 0.3.2→0.3.3](#sprint-64-in-session--eq-editor-audio-wire--zod-migration-2-steps--version-bump-032033)
 - [Sprint 63 (in-session) — Zod pilot + Card adoption + EQ editor skeleton + version bump 0.3.1→0.3.2](#sprint-63-in-session--zod-pilot--card-adoption--eq-editor-skeleton--version-bump-031032)
 - [Sprint 62 (in-session) — Per-USER EQ + A/B compare + Card primitive + version bump 0.3.0→0.3.1](#sprint-62-in-session--per-user-eq--ab-compare--card-primitive--version-bump-030031)
 - [Sprint 61 (in-session) — Refactor + UX (useDirtyGuard + SecretsTab SaveBar + audit section-split + TanStack Query + version bump 0.2.9→0.3.0)](#sprint-61-in-session--refactor--ux-usedirtyguard--secretstab-savebar--audit-section-split--tanstack-query--version-bump-029030)
@@ -1426,6 +1427,40 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 64 (in-session) — EQ editor audio wire + Zod migration (2 steps) + version bump 0.3.2→0.3.3
+
+**What shipped**: The audio half of the EQ editor (Sprint 63 was UI-only) + 2 more wizard steps migrated to Zod. 305 → **312 tests passing** (+7 tests). No new dep.
+
+**The 2 items**:
+
+1. **A-A4 (audio) — `TtsAudioGraph.setBandGain(band, gainDb)`.** New per-band gain control on the audio graph. The user adjusts a single band via the EQ editor slider; the method writes the new gain to the corresponding BiquadFilterNode via `setValueAtTime` (snap, no ramp — matches the visual theme switch per the Sprint 57 spec). Out-of-bounds band = no-op + console.warn (defensive). The graph's `currentPreset` is updated so `getPreset()` reports the new value. 4 unit tests pinning the contract. `CockpitEqCard`'s slider `onChange` now calls `graph.setBandGain(band, newGain)` on every drag — the user hears the change in real time. **New Apply + Reset buttons**: Apply promotes the per-band edits to a permanent override (writes to `useEqStore` as a new `EqPreset` named "X (custom)"); Reset restores the preset's default gains and closes edit mode. 2 unit tests for Apply/Reset.
+
+2. **W-A4 (migrate 2) — StepVoiceASR + StepTheme.** Continued the Zod migration pilot (Sprint 63 shipped StepLLM). Each step now declares a Zod schema at the top of the file, calls `useStepValidation(schema, draft)`, and merges the result with the parent-supplied `errors` (Zod errors take precedence over backend errors for the same field — same pattern as StepLLM). The other 4 wizard steps keep their hand-rolled validation. 2 new unit tests (1 per step) confirming the migration doesn't break existing flows.
+
+**Real bugs caught during execution**:
+- **`graph.setBandGain` was missing from the test mock** — initial test run threw `TypeError: graph.setBandGain is not a function` (4 unhandled errors). Added the method stub to the mock.
+- **`setValueAtTime` mock typing** — TS2339 (`Property 'mock' does not exist`). The mock's `setValueAtTime` is typed as the real `AudioParam.setValueAtTime` signature, which doesn't have a `.mock` property. Fixed with a `as unknown as { mock: { calls: unknown[][] } }` cast in the test.
+
+**Senior-engineer audit findings** (6 points, all pass):
+- **P1**: setBandGain uses `setValueAtTime` (snap) — matches setTheme/setPreset in Sprint 57.
+- **P2**: out-of-bounds band = no-op + warn (defensive only; callers pass TS-narrowed 0|1|2|3|4).
+- **P3**: audio graph lifecycle — the slider's effect uses the existing graph; no new cleanup needed.
+- **P4**: sliders vs. performance — every onChange triggers 1 setValueAtTime + 1 React render, same cost as per-theme setTheme.
+- **P5**: Zod schema + parent errors merge — pattern matches StepLLM; data-testids preserved.
+- **P6**: carry-over rules — 4 setBandGain tests + 2 step tests; no new deps.
+
+**Standing rules carried over**:
+- Zod schema migration is a one-step-at-a-time pilot. Migrations of >1 step per sprint are still forbidden.
+- EQ editor UI changes must be senior-engineer reviewed before any audio change lands. Sprint 64 is the audio wire-up; the plan was approved at write time.
+
+**Version bump**: `__version__` 0.3.2 → **0.3.3** (PATCH — audio wire-up + 2 Zod migrations; no breaking change). All 4 surfaces synced.
+
+**Net effect**:
+- New `TtsAudioGraph.setBandGain(band, gainDb)` method
+- New Apply + Reset buttons in CockpitEqCard
+- 2 more wizard steps on Zod (3 of 7 total)
+- Test count: 305 → 312 (+7 tests; 60 → 61 test files)
 
 ### Sprint 63 (in-session) — Zod pilot + Card adoption + EQ editor skeleton + version bump 0.3.1→0.3.2
 

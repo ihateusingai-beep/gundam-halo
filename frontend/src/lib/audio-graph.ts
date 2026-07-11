@@ -145,6 +145,55 @@ export class TtsAudioGraph {
     return this.currentPreset;
   }
 
+  /** Sprint 64 A-A4: per-band gain control. The user
+   *  adjusts a single band via the EQ editor slider;
+   *  this method writes the new gain to the corresponding
+   *  BiquadFilterNode without disturbing the other 4
+   *  bands. The other 2 graph methods (`setTheme` /
+   *  `setPreset`) overwrite ALL 5 bands at once — this
+   *  is the surgical alternative.
+   *
+   *  Uses `setValueAtTime` for snap (no ramp, matching
+   *  the visual theme switch per the Sprint 57 spec).
+   *
+   *  @param band - 0..4 (maps to the 5 BiquadFilterNodes
+   *    created at init). Out-of-range is a no-op + warn
+   *    (defensive only; callers should pass a
+   *    TS-narrowed 0|1|2|3|4).
+   *  @param gainDb - the new gain in dB (-12 to +12 in
+   *    practice, but no clamp is applied here).
+   *
+   *  No-op if the graph has not been initialised (the
+   *  BiquadFilterNodes are created in `attachMediaElement`
+   *  via the first call to `setTheme`/`setPreset`).
+   *  No-op if `dispose` has been called. */
+  setBandGain(band: 0 | 1 | 2 | 3 | 4, gainDb: number): void {
+    if (band < 0 || band > 4 || !Number.isInteger(band)) {
+      console.warn(`[TtsAudioGraph] setBandGain: band ${band} out of range`);
+      return;
+    }
+    if (this.filters.length !== 5) return; // not initialised yet
+    const filter = this.filters[band];
+    if (!filter) return;
+    const ctx = this.getContext();
+    if (ctx) {
+      filter.gain.setValueAtTime(gainDb, ctx.currentTime);
+    } else {
+      // jsdom / no-AudioContext path: just set the value
+      // (no scheduling). Useful for unit tests.
+      filter.gain.value = gainDb;
+    }
+    // Reflect the new gain in the cached preset so
+    // getPreset() reports what the user sees.
+    const next: EqPreset = {
+      ...this.currentPreset,
+      bands: this.currentPreset.bands.map((b, i) =>
+        i === band ? { ...b, gain: gainDb } : b,
+      ) as EqPreset["bands"],
+    };
+    this.currentPreset = next;
+  }
+
   /** The 5 live BiquadFilterNodes (for visualization that reads
    *  the actual `frequency` / `gain` values). Returns [] if the
    *  graph hasn't been initialized. */

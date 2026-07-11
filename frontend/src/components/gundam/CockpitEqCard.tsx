@@ -250,8 +250,15 @@ export function CockpitEqCard({ live = false }: { live?: boolean }) {
                   value={localGains[i]}
                   onChange={(e) => {
                     const next = [...localGains] as typeof localGains;
-                    next[i] = Number(e.target.value);
+                    const newGain = Number(e.target.value);
+                    next[i] = newGain;
                     setLocalGains(next);
+                    // Sprint 64 A-A4 (audio): wire the slider
+                    // to the BiquadFilterNode. The user hears
+                    // the change immediately. The graph
+                    // also updates its currentPreset so
+                    // getPreset() reports the new value.
+                    graph.setBandGain(i as 0 | 1 | 2 | 3 | 4, newGain);
                   }}
                   aria-label={`${band.freq} ${band.shape} gain in dB`}
                   data-testid={`eq-editor-band-${i}`}
@@ -266,6 +273,62 @@ export function CockpitEqCard({ live = false }: { live?: boolean }) {
                 </span>
               </div>
             ))}
+          </div>
+        )}
+        {/* Sprint 64 A-A4 (audio): Apply + Reset buttons.
+            Apply promotes the per-band edits to a
+            permanent override (writes to useEqStore). Reset
+            restores the preset's default gains and clears
+            editMode. */}
+        {editMode && (
+          <div
+            className="mt-2 flex items-center gap-1"
+            data-testid="eq-editor-actions"
+          >
+            <button
+              type="button"
+              data-testid="eq-editor-apply"
+              onClick={() => {
+                // Build a new EqPreset from the local gains
+                // and the current preset's band metadata
+                // (frequency, Q, type).
+                const newPreset: EqPreset = {
+                  ...preset,
+                  name: `${preset.name} (custom)`,
+                  bands: preset.bands.map((b, i) => ({
+                    ...b,
+                    gain: localGains[i] ?? b.gain,
+                  })) as EqPreset["bands"],
+                };
+                setEqPreset(newPreset);
+                setEditMode(false);
+              }}
+              className="text-[9px] font-mono px-1.5 py-0.5 border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--bg-primary)] transition-colors"
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              data-testid="eq-editor-reset"
+              onClick={() => {
+                // Restore the preset's default gains.
+                setLocalGains(
+                  preset.bands.map((b) => b.gain) as [
+                    number,
+                    number,
+                    number,
+                    number,
+                    number,
+                  ],
+                );
+                // Re-apply the preset to the graph.
+                graph.setPreset(preset);
+                setEditMode(false);
+              }}
+              className="text-[9px] font-mono text-[var(--text-muted)] hover:text-[var(--danger)]"
+            >
+              Reset
+            </button>
           </div>
         )}
       </HudCard>

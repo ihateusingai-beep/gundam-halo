@@ -11,10 +11,30 @@
  * for the canonical list.
  */
 
+import { z } from "zod";
+
 import { Button } from "@/components/ui/button";
+import { useStepValidation } from "@/hooks/useStepValidation";
 import { cn } from "@/lib/utils";
 import type { ThemeConfig } from "@/types/api";
 import type { WizardError } from "@/hooks/useSetupWizard";
+
+/** Sprint 64 W-A4 (migrate 2): Zod schema for StepTheme.
+ *  StepTheme is simple — 1 field (themeId). The Zod
+ *  migration is the smallest possible: a 1-key enum. */
+const themeSchema = z.object({
+  themeId: z.enum([
+    "gundam-ntd",
+    "gundam-seed",
+    "gundam-crossbone",
+    "gundam-ntd-green",
+    "gundam-00",
+    "gundam-destiny",
+    "gundam-god",
+    "gundam-cartoon",
+    "gundam-halo",
+  ]),
+});
 
 export interface StepThemeProps {
   form: ThemeConfig;
@@ -42,6 +62,19 @@ const THEMES: ThemeMeta[] = [
 ];
 
 export function StepTheme({ form, onChange, errors, busy }: StepThemeProps) {
+  // Sprint 64 W-A4: Zod validation. Theme is a single enum
+  // field; the Zod check is mostly defensive (a typo in the
+  // schema would surface as a runtime error). The error
+  // merge is the same pattern as StepLLM.
+  const zodValidation = useStepValidation(themeSchema, form);
+  const allErrors: WizardError[] = [
+    ...zodValidation.errors.map((e) => ({
+      field: e.field,
+      code: "zod",
+      message: e.message,
+    })),
+    ...errors,
+  ];
   return (
     <div className="space-y-3 py-2" data-testid="step-theme">
       <h2 className="text-lg font-[Rajdhani] text-[var(--text-primary)]">
@@ -97,9 +130,9 @@ export function StepTheme({ form, onChange, errors, busy }: StepThemeProps) {
         })}
       </div>
 
-      {errors.length > 0 && (
+      {allErrors.length > 0 && (
         <p className="text-[10px] text-[var(--danger)] font-mono">
-          {errors[0].message}
+          {allErrors[0].message}
         </p>
       )}
 

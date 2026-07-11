@@ -12,11 +12,23 @@
  */
 
 import { useState } from "react";
+import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
+import { useStepValidation } from "@/hooks/useStepValidation";
 import { cn } from "@/lib/utils";
 import type { VoiceASRConfig } from "@/types/api";
 import type { WizardError } from "@/hooks/useSetupWizard";
+
+/** Sprint 64 W-A4 (migrate 2): Zod schema for StepVoiceASR.
+ *  Mirrors the StepLLM pilot. The other 4 wizard steps
+ *  still use hand-rolled validation (deferred to Sprint 65+). */
+const asrSchema = z.object({
+  backend: z.enum(["whisper_local", "sherpa", "yuesub"]),
+  model_size: z.string().min(1, "Model size is required"),
+  model_path: z.string().optional(),
+  device: z.enum(["cpu", "cuda", "mps"]),
+});
 
 export interface StepVoiceASRProps {
   form: VoiceASRConfig;
@@ -29,6 +41,18 @@ const MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v3"];
 
 export function StepVoiceASR({ form, onSubmit, errors, busy }: StepVoiceASRProps) {
   const [draft, setDraft] = useState<VoiceASRConfig>(form);
+  // Sprint 64 W-A4: Zod validation. Zod errors take precedence
+  // over backend errors for the same field (same pattern as
+  // StepLLM).
+  const zodValidation = useStepValidation(asrSchema, draft);
+  const allErrors: WizardError[] = [
+    ...zodValidation.errors.map((e) => ({
+      field: e.field,
+      code: "zod",
+      message: e.message,
+    })),
+    ...errors,
+  ];
 
   const needsModelSize = draft.backend === "whisper_local";
   const needsModelPath =

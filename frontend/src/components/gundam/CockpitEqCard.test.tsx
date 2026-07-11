@@ -19,6 +19,10 @@ vi.mock("@/lib/audio-graph", () => ({
     setPreset(p: typeof FLAT_PRESET) {
       this.currentPreset = p;
     }
+    setBandGain(_band: number, _gainDb: number) {
+      // No-op in tests (the real implementation writes to
+      // BiquadFilterNode.gain, which doesn't exist in jsdom).
+    }
     getPreset() {
       return this.currentPreset;
     }
@@ -159,5 +163,40 @@ describe("CockpitEqCard A/B compare (Sprint 62 A-A3)", () => {
     expect(
       screen.getByTestId("eq-editor-band-4-readout").textContent,
     ).toMatch(/−3\.0 dB|-3\.0 dB/);
+  });
+
+  // Sprint 64 A-A4 (audio): Apply + Reset buttons
+  it("Apply button promotes per-band edits to a permanent override", () => {
+    render(<CockpitEqCard />);
+    fireEvent.click(screen.getByTestId("eq-edit-toggle"));
+    // Edit band 0
+    fireEvent.change(screen.getByTestId("eq-editor-band-0"), {
+      target: { value: "6" },
+    });
+    // Apply
+    fireEvent.click(screen.getByTestId("eq-editor-apply"));
+    expect(mockSetPreset).toHaveBeenCalledTimes(1);
+    const arg = mockSetPreset.mock.calls[0]?.[0] as { name: string; bands: { gain: number }[] };
+    expect(arg.name).toContain("(custom)");
+    expect(arg.bands[0]?.gain).toBe(6);
+  });
+
+  it("Reset button restores the preset's default gains", () => {
+    render(<CockpitEqCard />);
+    fireEvent.click(screen.getByTestId("eq-edit-toggle"));
+    // Edit band 0 to something wild
+    fireEvent.change(screen.getByTestId("eq-editor-band-0"), {
+      target: { value: "10" },
+    });
+    expect(screen.getByTestId("eq-editor-band-0-readout").textContent).toMatch(
+      /\+10\.0 dB/,
+    );
+    // Reset
+    fireEvent.click(screen.getByTestId("eq-editor-reset"));
+    // Edit mode closed (the readout + actions are gone)
+    expect(screen.queryByTestId("eq-editor-actions")).toBeNull();
+    expect(screen.queryByTestId("eq-editor-band-0-readout")).toBeNull();
+    // The Edit button is back, allowing the user to re-open
+    expect(screen.getByTestId("eq-edit-toggle")).toBeTruthy();
   });
 });
