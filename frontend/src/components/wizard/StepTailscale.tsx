@@ -11,11 +11,26 @@
  */
 
 import { useState } from "react";
+import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
+import { useStepValidation } from "@/hooks/useStepValidation";
 import { cn } from "@/lib/utils";
 import type { TailscaleConfig } from "@/types/api";
 import type { WizardError } from "@/hooks/useSetupWizard";
+
+/** Sprint 65 W-A4 (migrate 2): Zod schema for StepTailscale.
+ *  Uses a discriminated union: hostname is required only
+ *  when `enabled: true`. When `enabled: false`, hostname
+ *  can be any string (or empty).
+ *  Mirrors the existing TailscaleConfig type in @/types/api. */
+const tailscaleSchema = z.discriminatedUnion("enabled", [
+  z.object({ enabled: z.literal(false), hostname: z.string() }),
+  z.object({
+    enabled: z.literal(true),
+    hostname: z.string().min(1, "Hostname is required when Tailscale is enabled"),
+  }),
+]);
 
 export interface StepTailscaleProps {
   form: TailscaleConfig;
@@ -26,6 +41,19 @@ export interface StepTailscaleProps {
 
 export function StepTailscale({ form, onSubmit, errors, busy }: StepTailscaleProps) {
   const [draft, setDraft] = useState<TailscaleConfig>(form);
+  // Sprint 65 W-A4: Zod validation. Zod errors take precedence
+  // over backend errors (same pattern as StepLLM / StepVoiceASR).
+  // The discriminated union means the schema catches the
+  // "enabled but no hostname" case.
+  const zodValidation = useStepValidation(tailscaleSchema, draft);
+  const allErrors: WizardError[] = [
+    ...zodValidation.errors.map((e) => ({
+      field: e.field,
+      code: "zod",
+      message: e.message,
+    })),
+    ...errors,
+  ];
 
   return (
     <div className="space-y-3 py-2" data-testid="step-tailscale">
@@ -71,9 +99,12 @@ export function StepTailscale({ form, onSubmit, errors, busy }: StepTailscalePro
         />
       </div>
 
-      {errors.length > 0 && (
-        <p className="text-[10px] text-[var(--danger)] font-mono">
-          {errors[0].message}
+      {allErrors.length > 0 && (
+        <p
+          data-testid="tailscale-validation-error"
+          className="text-[10px] text-[var(--danger)] font-mono"
+        >
+          {allErrors[0].message}
         </p>
       )}
 

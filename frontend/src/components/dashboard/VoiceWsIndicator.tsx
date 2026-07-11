@@ -126,6 +126,7 @@ export function VoiceWsIndicator() {
           </span>
           <span
             className={`inline-block h-2 w-2 rounded-full ${STATE_COLORS[snap.state]}`}
+            role="status"
             aria-label={`voice state: ${snap.state}`}
           />
         </div>

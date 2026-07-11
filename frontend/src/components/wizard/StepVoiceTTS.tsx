@@ -12,11 +12,23 @@
  */
 
 import { useState } from "react";
+import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
+import { useStepValidation } from "@/hooks/useStepValidation";
 import { cn } from "@/lib/utils";
 import type { VoiceTTSConfig } from "@/types/api";
 import type { WizardError } from "@/hooks/useSetupWizard";
+
+/** Sprint 65 W-A4 (migrate 2): Zod schema for StepVoiceTTS.
+ *  Mirrors the existing VoiceTTSConfig type in @/types/api. */
+const ttsSchema = z.object({
+  backend: z.enum(["edge", "azure", "piper"]),
+  voice: z.string().min(1, "Voice is required"),
+  rate: z.string().min(1, "Rate is required"),
+  pitch: z.string().min(1, "Pitch is required"),
+  volume: z.string().min(1, "Volume is required"),
+});
 
 export interface StepVoiceTTSProps {
   form: VoiceTTSConfig;
@@ -52,6 +64,17 @@ export function StepVoiceTTS({ form, onSubmit, onPreview, errors, busy }: StepVo
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [previewAudio, setPreviewAudio] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Sprint 65 W-A4: Zod validation. Zod errors take precedence
+  // over backend errors (same pattern as StepLLM / StepVoiceASR).
+  const zodValidation = useStepValidation(ttsSchema, draft);
+  const allErrors: WizardError[] = [
+    ...zodValidation.errors.map((e) => ({
+      field: e.field,
+      code: "zod",
+      message: e.message,
+    })),
+    ...errors,
+  ];
 
   const voices = VOICES[draft.backend] ?? [];
 
@@ -199,6 +222,15 @@ export function StepVoiceTTS({ form, onSubmit, onPreview, errors, busy }: StepVo
           />
         </div>
       </div>
+
+      {allErrors.length > 0 && (
+        <p
+          data-testid="tts-validation-error"
+          className="text-[10px] text-[var(--danger)] font-mono"
+        >
+          {allErrors[0].message}
+        </p>
+      )}
 
       <Button
         onClick={() => onSubmit(draft)}

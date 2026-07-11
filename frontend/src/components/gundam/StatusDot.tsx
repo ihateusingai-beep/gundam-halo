@@ -16,6 +16,7 @@ export function StatusDot({ status, className, label }: StatusDotProps) {
           status === "warn" && "gundam-status-warn",
           status === "alert" && "gundam-status-alert",
         )}
+        role="status"
         aria-label={`Status: ${status}`}
       >
         ●
