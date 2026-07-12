@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, API_BASE } from "./api";
+import { ApiError, API_BASE, api } from "./api";
 
 describe("API_BASE (B2)", () => {
   const originalWindow = (globalThis as { window?: unknown }).window;
@@ -44,3 +44,51 @@ describe("requestJson (B4 — res.clone() body-stream fix)", () => {
     expect(typeof API_BASE).toBe("string");
   });
 });
+
+describe("api methods (Sprint 66 X-A1b coverage ratchet)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    (globalThis as { fetch?: unknown }).fetch = fetchMock;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("api.health() calls /health", async () => {
+    await api.health();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/health"),
+      expect.objectContaining({}),
+    );
+  });
+
+  it("api.listProjects() calls /api/projects", async () => {
+    await api.listProjects();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/projects"),
+      expect.objectContaining({}),
+    );
+  });
+
+  it("api.getSettings() calls /api/settings", async () => {
+    await api.getSettings();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/settings"),
+      expect.objectContaining({}),
+    );
+  });
+
+  it("api.getAuditLog(500) calls /api/settings/audit?limit=500", async () => {
+    await api.getAuditLog(500);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/settings/audit?limit=500"),
+      expect.objectContaining({}),
+    );
+  });
+});
+

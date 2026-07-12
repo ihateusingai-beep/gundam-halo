@@ -36,8 +36,8 @@ describe("auth-bootstrap", () => {
     await import("@/lib/auth-bootstrap");
     // Find the auth warning (other warnings may also fire).
     const authWarn = warnSpy.mock.calls
-      .map((c) => String(c[0] ?? ""))
-      .find((m) => m.includes("Sprint 48 auth"));
+      .map((c: unknown[]) => String(c[0] ?? ""))
+      .find((m: string) => m.includes("Sprint 48 auth"));
     expect(authWarn).toBeDefined();
     expect(authWarn).toContain("no bearer token");
   });
@@ -48,8 +48,8 @@ describe("auth-bootstrap", () => {
     vi.resetModules();
     await import("@/lib/auth-bootstrap");
     const authLog = logSpy.mock.calls
-      .map((c) => String(c[0] ?? ""))
-      .find((m) => m.includes("Sprint 48 auth"));
+      .map((c: unknown[]) => String(c[0] ?? ""))
+      .find((m: string) => m.includes("Sprint 48 auth"));
     expect(authLog).toBeDefined();
     expect(authLog).toContain("bearer token loaded");
   });
