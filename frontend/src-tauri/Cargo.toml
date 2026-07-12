@@ -1,6 +1,6 @@
 [package]
 name = "gundam-halo"
-version = "0.3.8"
+version = "0.3.9"
 description = "Gundam Halo — personal AI agent on Mac"
 authors = ["Ken Cheng"]
 edition = "2021"

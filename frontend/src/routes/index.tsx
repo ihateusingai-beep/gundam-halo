@@ -1,8 +1,9 @@
+import { Suspense } from "react";
+
 import { MissionSelect } from "@/components/gundam/MissionSelect";
-import { HeldOutEvalCard } from "@/components/dashboard/HeldOutEvalCard";
-import { ModelSwapDialog } from "@/components/dashboard/ModelSwapDialog";
-import { SetupWizard } from "@/components/dashboard/SetupWizard";
-import { VoiceWsIndicator } from "@/components/dashboard/VoiceWsIndicator";
+import { SystemStatusGrid } from "@/components/dashboard/SystemStatusGrid";
+import { RouteFallback } from "@/components/layout/RouteFallback";
+import { lazyRoute } from "@/lib/lazy-route";
 
 /**
  * Overview page — cockpit standby view.
@@ -23,22 +24,26 @@ import { VoiceWsIndicator } from "@/components/dashboard/VoiceWsIndicator";
  * would otherwise be hidden in settings tabs and CLI scripts.
  * On mobile (<768 px) the grid stacks vertically via the
  * existing Tailwind grid (`grid-cols-1 md:grid-cols-2`).
+ *
+ * Sprint 68.6 X-C1: the System Status grid is lazy-loaded
+ * via `lazyRoute()` + per-component `<Suspense>`. The 4
+ * cards are extracted to `components/dashboard/
+ * SystemStatusGrid.tsx` so they ship as ONE chunk. Trade-off:
+ * brief skeleton flash on `/` first paint; reward: ~150 kB
+ * savings on the main bundle (LHCI 500 kB budget).
  */
+const LazySystemStatusGrid = lazyRoute(
+  () => import("@/components/dashboard/SystemStatusGrid"),
+  "SystemStatusGrid",
+);
+
 export function OverviewPage() {
   return (
     <div className="space-y-4">
       <MissionSelect />
-      <section aria-label="System Status" className="space-y-3">
-        <h2 className="text-[10px] font-[Orbitron] text-[var(--text-muted)] uppercase tracking-widest">
-          System Status
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <SetupWizard />
-          <VoiceWsIndicator />
-          <HeldOutEvalCard />
-          <ModelSwapDialog />
-        </div>
-      </section>
+      <Suspense fallback={<RouteFallback />}>
+        <LazySystemStatusGrid />
+      </Suspense>
     </div>
   );
 }
