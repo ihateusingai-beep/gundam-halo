@@ -1,8 +1,10 @@
 import { Routes, Route } from "react-router";
+import { Suspense } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { CockpitLayout } from "@/components/layout/CockpitLayout";
 import { MobileLayout } from "@/components/layout/MobileLayout";
+import { RouteFallback } from "@/components/layout/RouteFallback";
 import { OverviewPage } from "@/routes/index";
 import { NewProjectPage } from "@/routes/projects/new";
 import { ProjectDetailPage } from "@/routes/projects/[id]";
@@ -10,12 +12,30 @@ import { ProjectMemoryPage } from "@/routes/projects/[id]/memory";
 import { SessionDetailPage } from "@/routes/projects/[id]/sessions/[sessionId]";
 import { SettingsPage } from "@/routes/settings";
 import { SetupPage } from "@/routes/setup";
-import { AuditDashboardPage } from "@/routes/audit";
-import { NotFoundPage } from "@/routes/NotFound";
 import { ThemeSwitcher } from "@/components/gundam/ThemeSwitcher";
 import { CommandPalette } from "@/components/gundam/CommandPalette";
 import { HaloLive2DProvider } from "@/context/live2d-bridge-context";
+import { lazyRoute } from "@/lib/lazy-route";
 import { useResponsive } from "@/lib/use-responsive";
+
+// Sprint 68 X-B1: code-split 783KB initial bundle. Lazy-load
+// the 2 lowest-risk routes via `lazyRoute()` + per-route
+// `<Suspense>`. The remaining 5 routes (Settings, Setup, the 3
+// project routes) stay eager for now — defer to Sprint 68.5
+// after this pilot proves the pattern.
+//
+// `lazyRoute()` wraps `React.lazy()` with named-export support
+// (the route module-graph test convention from Sprint 60 uses
+// `export function FooPage()` not `export default`). See
+// `lib/lazy-route.tsx` for the full rationale.
+const AuditDashboardPage = lazyRoute(
+  () => import("@/routes/audit"),
+  "AuditDashboardPage",
+);
+const NotFoundPage = lazyRoute(
+  () => import("@/routes/NotFound"),
+  "NotFoundPage",
+);
 
 /**
  * Single source of truth for the route map. Previously the same `<Routes>`
@@ -62,12 +82,30 @@ function AppRoutes() {
       />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/setup" element={<SetupPage />} />
-      <Route path="/audit" element={<AuditDashboardPage />} />
+      {/* Sprint 68 X-B1: lazy route + per-route Suspense so the
+          cockpit chrome stays mounted while the chunk loads. */}
+      <Route
+        path="/audit"
+        element={
+          <Suspense fallback={<RouteFallback />}>
+            <AuditDashboardPage />
+          </Suspense>
+        }
+      />
       {/* Sprint 60 R-A3: friendly 404 instead of silent redirect.
           The previous `<Navigate to="/" replace />` swallowed the
           user's typo with no feedback — they ended up on `/`
-          wondering why their deep link didn't work. */}
-      <Route path="*" element={<NotFoundPage />} />
+          wondering why their deep link didn't work. Sprint 68
+          X-B1: also lazy-loaded — 404s are the lowest-traffic
+          route, so this is the safest pilot candidate. */}
+      <Route
+        path="*"
+        element={
+          <Suspense fallback={<RouteFallback />}>
+            <NotFoundPage />
+          </Suspense>
+        }
+      />
     </Routes>
   );
 }

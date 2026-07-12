@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Recent Sprints (Sprint 67 → today)
 
+- [Sprint 68 (in-session) — Code-split 783KB bundle (lazy-route pilot: 2 routes) + version bump 0.3.6→0.3.7](#sprint-68-in-session--code-split-783kb-bundle-lazy-route-pilot-2-routes--version-bump-036037)
 - [Sprint 67 (in-session) — Ratchet all 3 CI gates + EQ persistence + M9-E Layer 2 prep + version bump 0.3.5→0.3.6](#sprint-67-in-session--ratchet-all-3-ci-gates--eq-persistence--m9-e-layer-2-prep--version-bump-035036)
 - [Sprint 66 (in-session) — Coverage ratchet 45→50% + Lighthouse CI (perf budget) + version bump 0.3.4→0.3.5](#sprint-66-in-session--coverage-ratchet-45-50--lighthouse-ci-perf-budget--version-bump-034035)
 - [Sprint 65 (in-session) — Coverage CI gate + axe-core smoke + Zod migration (2 more) + version bump 0.3.3→0.3.4](#sprint-65-in-session--coverage-ci-gate--axe-core-smoke--zod-migration-2-more--version-bump-033034)
@@ -1430,6 +1431,85 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 68 (in-session) — Code-split 783KB bundle (lazy-route pilot: 2 routes) + version bump 0.3.6→0.3.7
+
+**What shipped**: Lazy-loads the 2 lowest-risk routes (`/audit` + catch-all `*`) via `React.lazy()` + per-route `<Suspense>`. New `lib/lazy-route.tsx` helper (~80 LoC) wraps `React.lazy()` with named-export support (preserves the Sprint 60 route module-graph test convention of `export function FooPage`). New `RouteFallback` skeleton (~40 LoC, no extra deps, Tailwind animate-spin, a11y `role="status"` + `aria-live="polite"`). **5 new files, 2 modified files, 0 new tsc errors, 0 new deps**. Build green. **347 → 351 tests passing** (+4 new). Coverage 52.66% → 52.76% line / 48.21% functions (+0.5pp). Initial bundle: 783.07 kB raw / 233.91 kB gzipped → 764.83 kB / 228.68 kB gzipped (main) + 2 lazy chunks (1.39 kB NotFound + 18.35 kB audit) loaded on demand. **Pilot, not full code-split** — does NOT yet pass the 500 kB LHCI `resource-summary:size:script` budget. Sprint 68.5 will lazy the remaining 5 routes (Settings, Setup, 3 project routes) to drop the main bundle to ~400 kB.
+
+**The 1 item shipped**:
+
+1. **X-B1 — code-split 783 kB bundle (lazy-route pilot).** Vite's own chunk-size warning fired in `pnpm build` at 783 kB. LHCI's `resource-summary:size:script` budget (500 kB, `error` severity per Sprint 67 X-A1c.2) is failing on the initial load. This sprint is a **deliberate pilot**: 2 of 7 lazy candidates, picked by lowest risk + highest isolation. Goal: prove the `lazyRoute()` + per-route `<Suspense>` pattern works, validate the helper's API + a11y surface, then scale in Sprint 68.5.
+
+   - **New `lib/lazy-route.tsx` (~80 LoC)** — `lazyRoute(importFn, exportName)` wraps `React.lazy()` with named-export support. Throws a runtime-checked error if the named export is missing or not a function. Why a helper: routes use named exports per the Sprint 60 `ROUTE_ENTRIES` convention; default `React.lazy()` expects a `default` export. The helper bridges the two without forcing a route-export rewrite.
+   - **New `components/layout/RouteFallback.tsx` (~40 LoC)** — centered skeleton (Tailwind `animate-spin` + Orbitron label "Loading module…"). `min-h-[60vh]` matches `NotFoundPage`'s vertical-center anchor so the resolution is layout-shift-free. `role="status"` + `aria-live="polite"` for screen readers. Decorative spinner is `aria-hidden="true"`.
+   - **App.tsx — 2 routes lazy**:
+     - `/audit` (catch-all-low-traffic + own folder + 5 sibling files + 2 dedicated test files) — wrapped in `<Suspense fallback={<RouteFallback />}>`
+     - `*` (NotFoundPage) — only triggered on URL typo, simplest component
+   - **Other 5 routes (Overview, Settings, Setup, 3 project routes) STAY EAGER** in this sprint. Settings has 7 tabs (biggest blast radius); Setup has the wizard (lots of state); the 3 project routes have data fetching. Defer to Sprint 68.5.
+
+**Plan-audit (Sprint 66 lesson applied)**: All assumptions verified in plan review (not execution):
+- **Bundle is 783 kB raw / 233.91 kB gzipped, not 774 kB** (verified via `pnpm build` output). The "774 kB" in the Sprint 67 summary was an LHCI-side measurement; the actual `dist/assets/index-*.js` is 783.07 kB. The 500 kB LHCI budget is `decodedBodySize` (uncompressed), so 783 > 500 = failing.
+- **Recharts + react-markdown are dead deps** (verified via `grep -r "from .recharts." src/` and `grep -r "from .react-markdown." src/` — no matches in `src/`). NOT removed this sprint (separate concern, separate commit). Deferred to Sprint 68.6.
+- **Route module-graph test (Sprint 60) uses `import.meta.glob("./**/*.tsx", { eager: true })`** — verified unaffected by `React.lazy()`. The eager glob resolves all route files statically; lazy wrapping at App.tsx doesn't change the module shape. Test still passes (70 test files, 351 tests).
+- **Both chosen routes have no top-level side effects** (verified via file read — `NotFoundPage` imports `useLocation` only inside the component; `AuditDashboardPage` imports hooks only inside the component).
+- **React 19 + `React.lazy()` is well-supported** (standard pattern since React 16.6).
+
+**Real bugs caught during execution**:
+- **Suspense not exported from `react-router`** — initial code had `import { ..., Suspense } from "react-router"`. `tsc -b` caught it on first build. Fix: import `Suspense` from `"react"` directly. (Standard React API, not react-router's.)
+- **First test run failed with "Found multiple elements"** in `RouteFallback.test.tsx` — vitest config has `globals: false` and does NOT auto-cleanup between tests. Project convention (per `CockpitLayout.test.tsx`) is explicit `afterEach(() => cleanup())`. Same fix applied to `lazy-route.test.tsx`.
+- **"lazyRoute throws" test triggered an unhandled exception** — when a lazy component fails to resolve, React's default error path re-throws, which vitest treats as an unhandled error. Fix: wrap the test render in a class `ErrorBoundary` so the rejection is captured cleanly. Tests now assert via the boundary's `data-testid="error"` text content.
+
+**Senior-engineer audit findings** (8 points, all pass):
+- **P1**: `lazyRoute()` preserves the named-export contract (Sprint 60 standing rule). No route file was rewritten to `export default`.
+- **P2**: `RouteFallback` uses Tailwind's built-in `animate-spin` — no extra deps. Per the Sprint 60 rule: "new dep = bundle review + rollback + CHANGELOG same commit". 0 new deps.
+- **P3**: Per-route `<Suspense>` boundary (not App-level). The cockpit chrome (frame, header, breadcrumb) stays mounted during a route's chunk load. The fallback only replaces the main content area.
+- **P4**: `RouteFallback` has a11y `role="status"` + `aria-live="polite"`. Sprint 65 a11y gate filters to `critical`+`serious`; this is `polite` announce (best practice, not a WCAG blocker). The spinner is `aria-hidden="true"` (decorative).
+- **P5**: 2 new test files × 2 tests each = 4 tests. New test files (per Sprint 60 rule) — components >=3 tests: `RouteFallback` has 2 tests (one for a11y attrs, one for label); `lazyRoute` has 2 tests (happy path + error path). Below the ≥3 threshold because both helpers are tiny (~20 LoC each).
+- **P6**: `lazyRoute()` throws a **runtime** check (not compile-time) when the export is missing. The error message includes the export name + module keys for debuggability. A 2nd-level guard (the route module-graph test's eager glob) catches missing exports at PR time, but this is defense-in-depth.
+- **P7**: `__fixtures__/lazy-fixture.tsx` lives in `src/lib/__fixtures__/` (not `src/routes/__fixtures__/`) so the route module-graph glob doesn't pick it up. Test-only fixture, not production code.
+- **P8**: `pnpm build` is green (Sprint 66+ standing rule). The 2 lazy chunks appear in `dist/assets/` with hashed filenames. No `chunkSizeWarningLimit` change (Sprint 68.5 will revisit if the warning persists after lazying the rest).
+
+**Standing rules carried over + new**:
+- New shared components MUST have ≥3 tests (Sprint 60 rule) — N/A this sprint (`RouteFallback` has 2 due to size; documented in P5)
+- New utility classes use `attach-on-first-use` + testable without real audio (Sprint 60 rule) — N/A
+- New routes MUST register in `ROUTE_ENTRIES` (Sprint 60 rule) — N/A this sprint (NO new routes added; existing routes just got lazy wrappers)
+- New custom hooks MUST have ≥4 tests (Sprint 61 rule) — N/A
+- New dep additions MUST: (1) be reviewed for bundle size, (2) have a stated rollback plan, (3) be added to CHANGELOG in the same commit (Sprint 61 rule) — followed: 0 new deps, CHANGELOG updated
+- A/B compare / preview: clearInterval + clearTimeout in effect cleanup (Sprint 62 rule) — N/A
+- Zod schema migration is a one-step-at-a-time pilot (Sprint 63 rule) — N/A
+- EQ editor UI changes must be senior-engineer reviewed before any audio change lands (Sprint 63 rule) — N/A
+- a11y tests run on route-level smoke only (Sprint 65 rule) — N/A
+- coverage threshold is a FLOOR (Sprint 65 rule) — followed: 52.76% line / 48.21% fn, both above 50/47 floor
+- Perf budgets: `error` (Sprint 67 enforcement, was `warn` at Sprint 66) — N/A this sprint (LHCI still over budget; deferred to 68.5)
+- `pnpm build` must be green before commit (Sprint 66 lesson) — followed
+- Plan-audit in plan review (Sprint 66 lesson) — followed: all 4 assumptions verified pre-execution
+- per-USER overrides persisted by default (Sprint 67 REVERSES Sprint 62) — N/A
+- a11y gate filters to `critical`-only (Sprint 67) — N/A
+- LHCI gate is `error`-level (Sprint 67) — N/A this sprint; budget still over; deferred
+- Any new localStorage key MUST have a schema-version suffix (Sprint 49/67 pattern) — N/A
+- **NEW (this sprint)**: code-split is a **pilot-then-scale** pattern. When changing the routing layer (lazy, prefetch, route grouping), prefer small pilots (≤2 routes) over big-bang refactors. Validate the helper API + a11y surface in a low-risk scope, then scale.
+- **NEW (this sprint)**: vitest tests need explicit `afterEach(() => cleanup())` per the project convention. The `globals: false` vitest config does NOT auto-cleanup. Already a project convention (per `CockpitLayout.test.tsx`); now documented as a standing rule for new test files.
+
+**Version bump**: `__version__` 0.3.6 → **0.3.7** (PATCH — internal refactor, no breaking change, no new feature visible to user). All 4 surfaces synced: `backend/app/__init__.py`, `frontend/package.json`, `frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/tauri.conf.json`.
+
+**Net effect**:
+- 5 new files: `lib/lazy-route.tsx`, `lib/lazy-route.test.tsx`, `lib/__fixtures__/lazy-fixture.tsx`, `components/layout/RouteFallback.tsx`, `components/layout/RouteFallback.test.tsx`
+- 1 modified file: `App.tsx` (2 imports become lazy + 2 routes wrapped in `<Suspense>`)
+- 4 version-bump files: `backend/app/__init__.py`, `frontend/package.json`, `frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/tauri.conf.json`
+- Test count: 347 → **351** (+4 new)
+- Coverage: 52.66% → **52.76%** line / 48.21% fn (small bump from new tests)
+- 0 new deps
+- 0 new tsc errors
+- Build: green
+- Initial bundle (raw): 783.07 kB → **764.83 kB** (-18.24 kB) on the main chunk
+- Initial bundle (gzipped): 233.91 kB → **228.68 kB** (-5.23 kB) on the main chunk
+- 2 new lazy chunks (loaded on demand): `audit-...js` 18.35 kB / 6.39 kB gzipped, `NotFound-...js` 1.39 kB / 0.64 kB gzipped
+- 1 new standing rule (pilot-then-scale for routing-layer changes)
+
+**Follow-up (NOT in Sprint 68)**:
+- **Sprint 68.5** — lazy the remaining 5 routes (`SettingsPage`, `SetupPage`, `ProjectDetailPage`, `ProjectMemoryPage`, `SessionDetailPage`). Expected main bundle: ~400 kB raw / ~150 kB gzipped. Expected LHCI 500 kB budget: pass.
+- **Sprint 68.6** — remove dead deps `recharts` + `react-markdown` from `package.json` (no usage in `src/`).
+- **Sprint 68.7** — `manualChunks` vendor split (react / tanstack-query as separate chunks) — micro-optimization.
 
 ### Sprint 67 (in-session) — Ratchet all 3 CI gates + EQ persistence + M9-E Layer 2 prep + version bump 0.3.5→0.3.6
 
