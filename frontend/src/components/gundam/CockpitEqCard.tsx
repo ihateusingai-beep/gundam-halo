@@ -211,8 +211,9 @@ export function CockpitEqCard({ live = false }: { live?: boolean }) {
                   onClick={resetEq}
                   data-testid="eq-compare-reset-override"
                   className="text-[9px] font-mono text-[var(--danger)] hover:underline ml-auto"
+                  title="Revert to the theme's default preset. The override is saved across page reloads (Sprint 67 C-A1)."
                 >
-                  Reset override
+                  ↻ Persisted · Reset
                 </button>
               )}
             </>

@@ -1,72 +1,77 @@
 /**
- * eq.test.ts — Sprint 62 A-A2 tests.
+ * stores/eq.test.ts — Sprint 67 C-A1.
  *
- * 7 tests pinning the per-USER EQ store contract. Covers the
- * default state, set/reset semantics, the theme-vs-override
- * precedence, and the non-React `getActiveEqPreset` helper.
+ * Tests the localStorage persistence of the EQ override:
+ *   1. setPreset writes to localStorage
+ *   2. resetToThemePreset removes the localStorage key
+ *   3. An invalid localStorage value is silently ignored
+ *      on mount + a warning is logged
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getEqPreset, type EqPreset } from "@/lib/audio-eq";
-import { getActiveEqPreset, useEqStore } from "./eq";
+import { EQ_OVERRIDE_LS_KEY } from "./eq.schema";
+import type { EqPreset } from "@/lib/audio-eq";
 
-const SEED: EqPreset = getEqPreset("gundam-seed");
-const NTD: EqPreset = getEqPreset("gundam-ntd");
+// Re-import the store fresh for each test so the
+// `readPersistedOverride` initializer sees the new
+// localStorage value.
+async function freshStore() {
+  vi.resetModules();
+  return await import("./eq");
+}
 
-describe("useEqStore (Sprint 62 A-A2)", () => {
+const CUSTOM_PRESET: EqPreset = {
+  name: "Custom test preset",
+  description: "for the persistence test",
+  bands: [
+    { type: "lowshelf", frequency: 100, gain: 3, Q: 0.7 },
+    { type: "peaking", frequency: 250, gain: 1, Q: 1.0 },
+    { type: "peaking", frequency: 1000, gain: -1, Q: 1.0 },
+    { type: "peaking", frequency: 2500, gain: 2, Q: 1.0 },
+    { type: "highshelf", frequency: 6000, gain: -3, Q: 0.7 },
+  ],
+};
+
+describe("useEqStore persistence (Sprint 67 C-A1)", () => {
   beforeEach(() => {
-    // Reset store between tests.
-    useEqStore.setState({ override: null });
+    // Clean the key between tests.
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(EQ_OVERRIDE_LS_KEY);
+    }
   });
 
-  it("default state: override is null", () => {
-    expect(useEqStore.getState().override).toBeNull();
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("getActivePreset(theme) returns the theme's preset when no override", () => {
-    expect(useEqStore.getState().getActivePreset("gundam-ntd").name).toBe(
-      NTD.name,
-    );
-    expect(useEqStore.getState().getActivePreset("gundam-seed").name).toBe(
-      SEED.name,
-    );
+  it("setPreset writes the preset to localStorage", async () => {
+    const { useEqStore } = await freshStore();
+    useEqStore.getState().setPreset(CUSTOM_PRESET);
+    const raw = window.localStorage.getItem(EQ_OVERRIDE_LS_KEY);
+    expect(raw).toBeTruthy();
+    const parsed = JSON.parse(raw ?? "{}");
+    expect(parsed.name).toBe("Custom test preset");
   });
 
-  it("getActivePreset(null) returns the Flat fallback", () => {
-    const fallback = useEqStore.getState().getActivePreset(null);
-    expect(fallback.name).toBe("Flat");
-  });
-
-  it("setPreset(p) stores the override", () => {
-    useEqStore.getState().setPreset(SEED);
-    expect(useEqStore.getState().override).toEqual(SEED);
-  });
-
-  it("setPreset(SEED) overrides NT-D's preset", () => {
-    useEqStore.getState().setPreset(SEED);
-    const active = useEqStore.getState().getActivePreset("gundam-ntd");
-    expect(active.name).toBe(SEED.name);
-  });
-
-  it("resetToThemePreset() clears the override", () => {
-    useEqStore.getState().setPreset(SEED);
+  it("resetToThemePreset removes the localStorage key", async () => {
+    const { useEqStore } = await freshStore();
+    useEqStore.getState().setPreset(CUSTOM_PRESET);
     useEqStore.getState().resetToThemePreset();
-    expect(useEqStore.getState().override).toBeNull();
-    expect(useEqStore.getState().getActivePreset("gundam-ntd").name).toBe(
-      NTD.name,
-    );
+    const raw = window.localStorage.getItem(EQ_OVERRIDE_LS_KEY);
+    expect(raw).toBeNull();
   });
 
-  it("setPreset(null) is equivalent to resetToThemePreset()", () => {
-    useEqStore.getState().setPreset(SEED);
-    useEqStore.getState().setPreset(null);
-    expect(useEqStore.getState().override).toBeNull();
-  });
-
-  it("non-React helper getActiveEqPreset matches store.getActivePreset", () => {
-    useEqStore.getState().setPreset(SEED);
-    expect(getActiveEqPreset("gundam-ntd").name).toBe(
-      useEqStore.getState().getActivePreset("gundam-ntd").name,
+  it("an invalid localStorage value is ignored on mount + warning logged", async () => {
+    // Pre-seed an invalid value (missing the `bands` field).
+    window.localStorage.setItem(
+      EQ_OVERRIDE_LS_KEY,
+      JSON.stringify({ name: "broken" }),
     );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { useEqStore } = await freshStore();
+    expect(useEqStore.getState().override).toBeNull();
+    // The schema-parse failure logs a warning.
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

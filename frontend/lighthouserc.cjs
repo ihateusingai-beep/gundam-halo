@@ -55,19 +55,19 @@ module.exports = {
       },
     },
     assert: {
-      // 5 perf budgets (FLOOR not target; Sprint 67+
-      // can ratchet). First violation = warning (CI
-      // passes); second consecutive = fail. Sprint 66
-      // is the baseline; no ratchet in this sprint.
+      // Sprint 67 X-A1c.2: promoted from `warn` to `error`.
+      // Sprint 66 was the baseline (warn); Sprint 67 enforces
+      // (error). A failing budget now blocks the merge.
+      // Run with `pnpm test:lhci` (manual pre-merge step).
       assertions: {
-        "categories:performance": ["warn", { minScore: 0.85 }],
-        "largest-contentful-paint": ["warn", { maxNumericValue: 2000 }],
-        "first-contentful-paint": ["warn", { maxNumericValue: 1000 }],
-        "interactive": ["warn", { maxNumericValue: 3000 }],
-        "total-blocking-time": ["warn", { maxNumericValue: 300 }],
-        "cumulative-layout-shift": ["warn", { maxNumericValue: 0.1 }],
+        "categories:performance": ["error", { minScore: 0.85 }],
+        "largest-contentful-paint": ["error", { maxNumericValue: 2000 }],
+        "first-contentful-paint": ["error", { maxNumericValue: 1000 }],
+        "interactive": ["error", { maxNumericValue: 3000 }],
+        "total-blocking-time": ["error", { maxNumericValue: 300 }],
+        "cumulative-layout-shift": ["error", { maxNumericValue: 0.1 }],
         "resource-summary:size:script": [
-          "warn",
+          "error",
           { maxNumericValue: 500 * 1024 },
         ],
       },

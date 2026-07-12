@@ -15,14 +15,17 @@
  * to get the effective preset — the override if set, else
  * the theme's default.
  *
- * ## Persistence
+ * ## Persistence (Sprint 67 C-A1)
  *
- * The override is **session-only** (NOT persisted to
- * localStorage in Sprint 62). Page reload resets the
- * override; the user must re-set it. This is intentional —
- * the override is a "today's vibe" affordance, not a
- * permanent config. Adding localStorage persistence is
- * deferred to Sprint 63+ (UX review needed first).
+ * The override is now **persisted to localStorage** with a
+ * schema-versioned key (`halo.eq.override.v1` — see
+ * `@/stores/eq.schema`). On mount, the store reads the
+ * key; if present + valid, the override is restored.
+ *
+ * Sprint 62's standing rule was "session-only by default";
+ * Sprint 67 reverses that for EQ (the user has been
+ * requesting persistence since Sprint 62). The default
+ * is now "persisted, opt-out via Reset".
  *
  * ## API
  *
@@ -36,6 +39,8 @@
 import { create } from "zustand";
 
 import { getEqPreset, type EqPreset } from "@/lib/audio-eq";
+
+import { EQ_OVERRIDE_LS_KEY, persistedEqOverrideSchema } from "./eq.schema";
 
 interface EqState {
   /** The active override. `null` = "no override, use the
@@ -58,12 +63,66 @@ interface EqState {
   getActivePreset: (themeId: string | null) => EqPreset;
 }
 
+// ---------------------------------------------------------------------------
+// localStorage I/O (Sprint 67 C-A1)
+// ---------------------------------------------------------------------------
+
+/** Read the persisted override from localStorage. Returns
+ *  `null` if the key is missing OR the stored value fails
+ *  Zod validation. Logs a warning on parse failure. */
+function readPersistedOverride(): EqPreset | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(EQ_OVERRIDE_LS_KEY);
+    if (raw == null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    const result = persistedEqOverrideSchema.safeParse(parsed);
+    if (!result.success) {
+      console.warn(
+        `[useEqStore] persisted override failed schema validation, ignoring. errors=${result.error.message}`,
+      );
+      return null;
+    }
+    return result.data;
+  } catch (e) {
+    console.warn("[useEqStore] failed to read persisted override:", e);
+    return null;
+  }
+}
+
+/** Write the override to localStorage. Pass `null` to
+ *  remove the key (the "no override" state). */
+function writePersistedOverride(preset: EqPreset | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (preset == null) {
+      window.localStorage.removeItem(EQ_OVERRIDE_LS_KEY);
+    } else {
+      window.localStorage.setItem(
+        EQ_OVERRIDE_LS_KEY,
+        JSON.stringify(preset),
+      );
+    }
+  } catch (e) {
+    console.warn("[useEqStore] failed to write persisted override:", e);
+  }
+}
+
 export const useEqStore = create<EqState>((set, get) => ({
-  override: null,
+  // Sprint 67 C-A1: hydrate from localStorage on store init.
+  // Zustand's create() runs the initializer eagerly, so the
+  // first React render sees the persisted value (or null).
+  override: readPersistedOverride(),
 
-  setPreset: (p) => set({ override: p }),
+  setPreset: (p) => {
+    writePersistedOverride(p);
+    set({ override: p });
+  },
 
-  resetToThemePreset: () => set({ override: null }),
+  resetToThemePreset: () => {
+    writePersistedOverride(null);
+    set({ override: null });
+  },
 
   getActivePreset: (themeId) => {
     const override = get().override;
