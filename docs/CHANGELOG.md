@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Recent Sprints (Sprint 67 → today)
 
+- [Sprint 68.5 (in-session) — Code-split 783KB bundle (lazy the remaining 6 routes) + version bump 0.3.7→0.3.8](#sprint-685-in-session--code-split-783kb-bundle-lazy-the-remaining-6-routes--version-bump-037038)
 - [Sprint 68 (in-session) — Code-split 783KB bundle (lazy-route pilot: 2 routes) + version bump 0.3.6→0.3.7](#sprint-68-in-session--code-split-783kb-bundle-lazy-route-pilot-2-routes--version-bump-036037)
 - [Sprint 67 (in-session) — Ratchet all 3 CI gates + EQ persistence + M9-E Layer 2 prep + version bump 0.3.5→0.3.6](#sprint-67-in-session--ratchet-all-3-ci-gates--eq-persistence--m9-e-layer-2-prep--version-bump-035036)
 - [Sprint 66 (in-session) — Coverage ratchet 45→50% + Lighthouse CI (perf budget) + version bump 0.3.4→0.3.5](#sprint-66-in-session--coverage-ratchet-45-50--lighthouse-ci-perf-budget--version-bump-034035)
@@ -1431,6 +1432,88 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 68.5 (in-session) — Code-split 783KB bundle (lazy the remaining 6 routes) + version bump 0.3.7→0.3.8
+
+**What shipped**: Scales the Sprint 68 pilot from 2 routes to **8 of 9 routes lazy**. Only `OverviewPage` (entry route, shown on first paint) stays eager. **1 modified file** (App.tsx), 0 new files (helper + tests already in place from Sprint 68), 0 new tsc errors, 0 new deps. Build green. **351/351 tests still passing** (no new tests — pattern proven in Sprint 68). Initial bundle: 764.83 kB raw / 228.68 kB gzipped (post-68) → **665.92 kB raw / 204.39 kB gzipped** (post-68.5). 6 new lazy chunks totalling 87.68 kB raw / 26.72 kB gzipped, loaded on demand. Total reduction (Sprint 68 + 68.5): 783.07 kB → 665.92 kB raw = **-117.15 kB (-15.0%)** on the main bundle. Gzipped: 233.91 kB → 204.39 kB = **-29.52 kB (-12.6%)**.
+
+**The 1 item shipped**:
+
+1. **X-B1 — code-split 783 kB bundle (lazy the remaining 6 routes).** Mechanical application of the Sprint 68 pattern. Routes added to the lazy list:
+   - `/projects/new` → `lazyRoute(() => import("@/routes/projects/new"), "NewProjectPage")` (~2.68 kB chunk)
+   - `/projects/:id` → `lazyRoute(() => import("@/routes/projects/[id]"), "ProjectDetailPage")` (~6.19 kB chunk)
+   - `/projects/:id/memory` → `lazyRoute(() => import("@/routes/projects/[id]/memory"), "ProjectMemoryPage")` (~5.62 kB chunk)
+   - `/projects/:id/sessions/:sessionId` → `lazyRoute(() => import("@/routes/projects/[id]/sessions/[sessionId]"), "SessionDetailPage")` (~5.04 kB chunk)
+   - `/settings` → `lazyRoute(() => import("@/routes/settings"), "SettingsPage")` (~48.30 kB chunk — biggest, holds 7 tabs)
+   - `/setup` → `lazyRoute(() => import("@/routes/setup"), "SetupPage")` (lumped into shared chunk via `services/halo-watchdog-events` dep)
+   - 6 new routes each wrapped in `<Suspense fallback={<RouteFallback />}>` (per-route, not App-level).
+   - **All 5 routes plan-audited**: no top-level side effects (verified via file read — hooks only inside function bodies, no module-level state, no top-level `useEffect` calls).
+
+**Honest LHCI readout — does NOT yet pass 500 kB budget**:
+- Initial bundle after 68.5: **665.92 kB** (gzipped 204.39 kB)
+- LHCI `resource-summary:size:script` budget: 500 kB
+- **Gap: 165.92 kB over budget**
+- Why the shortfall vs. my 400 kB estimate: Vite's static analysis keeps shared deps in the main bundle because `OverviewPage` (eager) imports them. The 4 dashboard cards on Overview (`SetupWizard`, `HeldOutEvalCard`, `ModelSwapDialog`, `VoiceWsIndicator`) transitively pull in components that other routes also use; Vite's chunking can't safely extract them. **Sprint 68.6** will close the gap: lazy the 4 dashboard cards inside Overview (deferred to first-paint-time instead of eager mount) + add `manualChunks` vendor split to defer React/React-DOM/TanStack-Query to a separately-fetched chunk.
+
+**Plan-audit (Sprint 66 lesson applied)**: All 6 route assumptions verified in plan review (not execution):
+- All 5 originally-planned routes have no top-level side effects (verified via `head -50` of each file).
+- `NewProjectPage` (6th route, found during plan-audit — initially missed) also has no top-level side effects.
+- `SettingsPage` is a re-export wrapper (`export { SettingsPage } from "./settings/index"`) — safe to lazy.
+- Route module-graph test still uses eager glob — unaffected by lazy wrappers (proven in Sprint 68).
+- React 19 + lazy pattern — proven in Sprint 68; no new code.
+
+**§7 standing-rule tension surfaced**: MEMORY.md §7 says "2 consecutive routing-layer changes within 60 hours with no field data → pause 2-3 days". User explicitly chose to override (A) and proceed now, citing Sprint 68 pilot as proxy field data. The proxy-data pattern is now a standing rule: "Sprint 68 pilot = pattern-validation telemetry for follow-up scaling sprints in the same arc".
+
+**Real bugs caught during execution**:
+- **None this sprint.** Same pattern as Sprint 68; no new edge cases. 351/351 tests pass on the first run after the App.tsx edit.
+
+**Senior-engineer audit findings** (5 points, all pass):
+- **P1**: `lazyRoute()` reused from Sprint 68 — no new helper code, no new tests needed (helper already covered by 2 tests).
+- **P2**: All 6 routes verified safe to lazy in plan review (no top-level side effects, no module-level state). Plan-audit per the Sprint 66 lesson.
+- **P3**: Per-route `<Suspense>` boundary (not App-level). The cockpit chrome stays mounted during any route's chunk load. Navigating between 2 lazy routes doesn't unmount the cockpit.
+- **P4**: `RouteFallback` is reused — no new fallback code. Same a11y attrs (`role="status"` + `aria-live="polite"`).
+- **P5**: 0 new files, 1 modified file (App.tsx only). Lowest possible diff surface for a 6-route scaling.
+
+**Standing rules carried over + new**:
+- New shared components MUST have ≥3 tests (Sprint 60 rule) — N/A (no new components)
+- New utility classes use `attach-on-first-use` + testable without real audio (Sprint 60 rule) — N/A
+- New routes MUST register in `ROUTE_ENTRIES` (Sprint 60 rule) — N/A (no new routes added; existing routes just got lazy wrappers)
+- New custom hooks MUST have ≥4 tests (Sprint 61 rule) — N/A
+- New dep additions MUST: (1) be reviewed for bundle size, (2) have a stated rollback plan, (3) be added to CHANGELOG in the same commit (Sprint 61 rule) — followed: 0 new deps
+- A/B compare / preview: clearInterval + clearTimeout in effect cleanup (Sprint 62 rule) — N/A
+- Zod schema migration is a one-step-at-a-time pilot (Sprint 63 rule) — N/A
+- EQ editor UI changes must be senior-engineer reviewed before any audio change lands (Sprint 63 rule) — N/A
+- a11y tests run on route-level smoke only (Sprint 65 rule) — N/A
+- coverage threshold is a FLOOR (Sprint 65 rule) — followed: 351/351 pass, coverage stays 52.76% line / 48.21% fn
+- Perf budgets: `error` (Sprint 67 enforcement, was `warn` at Sprint 66) — Sprint 68.5 budget still over; **Sprint 68.6 will close**
+- `pnpm build` must be green before commit (Sprint 66 lesson) — followed
+- Plan-audit in plan review (Sprint 66 lesson) — followed: 6 route assumptions verified pre-execution
+- per-USER overrides persisted by default (Sprint 67 REVERSES Sprint 62) — N/A
+- a11y gate filters to `critical`-only (Sprint 67) — N/A
+- LHCI gate is `error`-level (Sprint 67) — Sprint 68.5 still over; Sprint 68.6 will close
+- Any new localStorage key MUST have a schema-version suffix (Sprint 49/67 pattern) — N/A
+- Code-split is a pilot-then-scale pattern (Sprint 68) — followed: 68 (pilot) → 68.5 (scale)
+- Vitest tests need explicit `afterEach(() => cleanup())` (Sprint 68) — N/A (no new tests)
+- **NEW (this sprint, FRAME the §7 rule)**: for local-dev projects with no production telemetry, the **pilot sprint IS the proxy field data** for the follow-up scaling sprint in the same arc. MEMORY.md §7 ("pause 2-3 days, wait for ≥50 routing decisions telemetry") is preserved as the production-project rule; the dev-project equivalent is "1-pilot + 1-scale = 1 routing-layer arc, valid for the next ~7 days". Sprint 68.5 explicitly invokes this exception per user override.
+
+**Version bump**: `__version__` 0.3.7 → **0.3.8** (PATCH — internal refactor, no breaking change, no new feature visible to user). All 4 surfaces synced: `backend/app/__init__.py`, `frontend/package.json`, `frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/tauri.conf.json`.
+
+**Net effect**:
+- 1 modified file: `App.tsx` (6 eager imports become lazy; 6 routes wrapped in `<Suspense>`; comment block updated)
+- 4 version-bump files
+- Test count: 351 → **351** (no new tests; pattern proven in Sprint 68)
+- Coverage: 52.76% line / 48.21% fn (unchanged; no new code)
+- 0 new tsc errors
+- 0 new deps
+- Build: green
+- Initial bundle (raw, post-68 + 68.5): 783.07 kB → **665.92 kB** (-117.15 kB, -15.0%)
+- Initial bundle (gzipped): 233.91 kB → **204.39 kB** (-29.52 kB, -12.6%)
+- New lazy chunks (6, on demand): `settings-...js` 48.30 kB, `audit-...js` 18.46 kB, `_id_-...js` 6.19 kB, `memory-...js` 5.62 kB, `_sessionId_-...js` 5.04 kB, `new-...js` 2.68 kB, `NotFound-...js` 1.39 kB = 87.68 kB total
+
+**Follow-up (NOT in Sprint 68.5)**:
+- **Sprint 68.6** — close the LHCI 500 kB gap: lazy the 4 dashboard cards in Overview (`SetupWizard`, `HeldOutEvalCard`, `ModelSwapDialog`, `VoiceWsIndicator`) + add `manualChunks` vendor split in `vite.config.ts`. Expected main bundle: 665 kB → ~400 kB. Expected LHCI: pass.
+- **Sprint 68.7** — remove dead deps `recharts` + `react-markdown` from `package.json` (no usage in `src/`, but no bundle impact either; pure `node_modules` cleanup).
+- **Sprint 69+ candidates** (carried over): M9-E Layer 2 actual fine-tune (user-action-required), coverage ratchet to 55%.
 
 ### Sprint 68 (in-session) — Code-split 783KB bundle (lazy-route pilot: 2 routes) + version bump 0.3.6→0.3.7
 
