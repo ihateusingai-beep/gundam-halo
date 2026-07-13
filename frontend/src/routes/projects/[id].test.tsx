@@ -85,4 +85,19 @@ describe("ProjectDetailPage", () => {
       expect(screen.getByText(/test-project/i)).toBeTruthy();
     });
   });
+
+  it("shows the error state when the project fetch rejects", async () => {
+    // Override the mock to reject for this test only.
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.getProject).mockRejectedValueOnce(new Error("not found"));
+
+    renderWithProviders("/projects/missing-project");
+
+    // The page should render an error message. The error
+    // toast fires too, but we just assert the page rendered
+    // with the error state.
+    await waitFor(() => {
+      expect(screen.getByText(/not found/i)).toBeInTheDocument();
+    });
+  });
 });

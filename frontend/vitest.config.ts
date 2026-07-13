@@ -30,21 +30,21 @@ export default defineConfig({
       reporter: ["text", "html"],
       // Sprint 65 X-A1 → Sprint 66 X-A1b → Sprint 67 X-A1c
       // → Sprint 69 X-A1d → Sprint 70 X-A1e → Sprint 71
-      // X-A1f:
+      // X-A1f → Sprint 72 X-A1g:
       // coverage gate (FLOOR, not target). Ratcheted at
-      // Sprint 71: lines 52→54, functions 47→49, statements
-      // 51→53. Branches unchanged (Sprint 65 rule: ratchet
-      // up; never down — branches actual 50.94% would
-      // suggest floor 47, same as current).
-      // Actual at Sprint 71: lines 57.32%, branches 50.94%,
-      // functions 52.87%, statements 56.23%. Floor set
+      // Sprint 72: lines 54→56, functions 49→51, branches
+      // 47→51, statements 53→55. All metrics raised (~2-4pp
+      // each, per the actual - 3pp formula + "ratchet up;
+      // never down" rule).
+      // Actual at Sprint 72: lines 59.4%, branches 54.33%,
+      // functions 54.58%, statements 58.13%. Floor set
       // ~3pp BELOW current to catch catastrophic drops
       // without blocking incremental growth.
       thresholds: {
-        lines: 54,
-        functions: 49,
-        branches: 47,
-        statements: 53,
+        lines: 56,
+        functions: 51,
+        branches: 51,
+        statements: 55,
       },
     },
   },
