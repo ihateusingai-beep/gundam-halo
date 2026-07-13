@@ -54,8 +54,21 @@ import { describe, expect, it } from "vitest";
 // class of bug. `{ eager: true }` returns the modules
 // synchronously; we then inspect the exports to confirm the
 // module exposes a component.
+//
+// **Exclude `.test.{ts,tsx}` files** (Sprint 69 X-A1d): the
+// eager glob evaluates every matched file at module-load time.
+// Test files have their own `describe` blocks + `vi.mock`
+// calls. If they're loaded via this glob, their describes
+// register in the route module-graph test's file context —
+// where the mocks don't apply — and the tests fail in the
+// full suite with "fetch failed" / "Element type is invalid".
+// vitest also picks up `.test.{ts,tsx}` via its own discovery
+// (`include: ["src/**/*.test.{ts,tsx}"]`), so the test runs
+// correctly as a separate test file. Excluding here prevents
+// the duplicate registration. Vite's glob supports an array
+// of patterns where subsequent entries are exclusion globs.
 const ROUTE_MODULES = import.meta.glob<Record<string, unknown>>(
-  "./**/*.tsx",
+  ["./**/*.tsx", "!./**/*.test.tsx"],
   { eager: true },
 );
 

@@ -28,17 +28,17 @@ export default defineConfig({
       enabled: false, // opt-in via `pnpm test:coverage`
       provider: "v8",
       reporter: ["text", "html"],
-      // Sprint 65 X-A1 → Sprint 66 X-A1b → Sprint 67 X-A1c:
+      // Sprint 65 X-A1 → Sprint 66 X-A1b → Sprint 67 X-A1c
+      // → Sprint 69 X-A1d:
       // coverage gate (FLOOR, not target). Ratcheted at
-      // Sprint 67: lines 45→50, branches 42→47,
-      // functions 42→47, statements 45→50.
-      // Actual at Sprint 67: lines 52.51%, branches 48.31%,
-      // functions 48.09%, statements 51.69%. Floor set
-      // ~3pp BELOW current to catch catastrophic drops
-      // without blocking incremental growth. Sprint 68+
-      // can ratchet up; never down.
+      // Sprint 69: lines 50→51. Other metrics unchanged
+      // (Sprint 65 rule: ratchet up; never down).
+      // Actual at Sprint 69: lines 53.16%, branches 47.45%,
+      // functions 48.53%, statements 52.23%. Floor set
+      // ~2pp BELOW current to catch catastrophic drops
+      // without blocking incremental growth.
       thresholds: {
-        lines: 50,
+        lines: 51,
         functions: 47,
         branches: 47,
         statements: 50,
