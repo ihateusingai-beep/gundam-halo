@@ -29,22 +29,22 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "html"],
       // Sprint 65 X-A1 → Sprint 66 X-A1b → Sprint 67 X-A1c
-      // → Sprint 69 X-A1d → Sprint 70 X-A1e:
+      // → Sprint 69 X-A1d → Sprint 70 X-A1e → Sprint 71
+      // X-A1f:
       // coverage gate (FLOOR, not target). Ratcheted at
-      // Sprint 70: lines 51→52, statements 50→51. Other
-      // metrics unchanged (Sprint 65 rule: ratchet up;
-      // never down — branches actual 49.05% would
-      // suggest floor 46, but current 47 is higher so we
-      // keep 47).
-      // Actual at Sprint 70: lines 55.56%, branches 49.05%,
-      // functions 50.75%, statements 54.48%. Floor set
+      // Sprint 71: lines 52→54, functions 47→49, statements
+      // 51→53. Branches unchanged (Sprint 65 rule: ratchet
+      // up; never down — branches actual 50.94% would
+      // suggest floor 47, same as current).
+      // Actual at Sprint 71: lines 57.32%, branches 50.94%,
+      // functions 52.87%, statements 56.23%. Floor set
       // ~3pp BELOW current to catch catastrophic drops
       // without blocking incremental growth.
       thresholds: {
-        lines: 52,
-        functions: 47,
+        lines: 54,
+        functions: 49,
         branches: 47,
-        statements: 51,
+        statements: 53,
       },
     },
   },
