@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, Suspense, useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { Toaster } from "sonner";
 
@@ -14,7 +14,7 @@ import { BackendHealthBanner } from "@/components/gundam/BackendHealthBanner";
 import { RestartNudgeBanner } from "@/components/gundam/RestartNudgeBanner";
 import { SignalCard } from "@/components/gundam/SignalCard";
 import { CockpitEqCard } from "@/components/gundam/CockpitEqCard";
-import { AvatarCard } from "@/components/live2d/AvatarCard";
+import { lazyRoute } from "@/lib/lazy-route";
 import { useBackendVersion } from "@/hooks/use-backend-version";
 import { useProjectsStore } from "@/stores/projects";
 import { useSystemStore } from "@/stores/system";
@@ -33,6 +33,19 @@ import {
   voiceSendAudio,
 } from "@/services/halo-voice-ws";
 import { VoicePanel } from "@/components/gundam/VoicePanel";
+
+// Sprint 68.7 X-C2: lazy AvatarCard. The avatar (CSSAvatar +
+// ImageSetAvatar + Live2D bridge context consumers) was a
+// significant contributor to the main bundle. The avatar is a
+// visual element in the top-right of the cockpit — not
+// critical for the first paint. The HaloLive2DProvider stays
+// mounted in App.tsx (it's always above CockpitLayout) so the
+// lazy AvatarCard can still consume the context when its
+// chunk resolves.
+const AvatarCard = lazyRoute(
+  () => import("@/components/live2d/AvatarCard"),
+  "AvatarCard",
+);
 
 interface CockpitLayoutProps {
   children: ReactNode;
@@ -558,7 +571,20 @@ export function CockpitLayout({ children }: CockpitLayoutProps) {
                 <SignalCard mic={mic} />
               </HudCard>
 
-              <AvatarCard />
+              <Suspense
+                fallback={
+                  <HudCard
+                    className="min-h-[120px] flex items-center justify-center"
+                    aria-label="Avatar loading"
+                  >
+                    <span className="text-[10px] font-[Orbitron] text-[var(--text-muted)] uppercase tracking-widest">
+                      Loading…
+                    </span>
+                  </HudCard>
+                }
+              >
+                <AvatarCard />
+              </Suspense>
 
               <HudCard>
                 <VoicePanel
