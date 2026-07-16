@@ -13,7 +13,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router";
-import { NewProjectPage } from "./new";
 
 // Mock the projects store so we don't need a real zustand
 // instance + so the `createProject` action is observable.

@@ -13,7 +13,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MacTab } from "./MacTab";
 import type { Settings } from "@/types/api";
 
-const TEST_SETTINGS: Settings = {
+// MacTab only reads `settings.mac.*`; the rest of the Settings
+// shape is irrelevant to the test. Cast through `as Settings`
+// to satisfy the type without spinning up a full fixture.
+const TEST_SETTINGS = {
   mac: {
     default_path_policy: "project_only",
     file_read_paths: ["~/projects/**", "/tmp/**"],
@@ -23,7 +26,7 @@ const TEST_SETTINGS: Settings = {
     notifications_enabled: true,
     a11y_enabled: false,
   },
-};
+} as unknown as Settings;
 
 afterEach(() => {
   cleanup();
