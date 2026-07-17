@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Recent Sprints (Sprint 67 → today)
 
+- [Sprint 74 X-A (in-session) — Wizard progressive disclosure (essential 3-step + advanced 7-step) + SetupState.mode + /api/setup/mode endpoint + coverage 59.68%→60.44%](#sprint-74-x-a-in-session--wizard-progressive-disclosure-essential-3-step--advanced-7-step--setupstatemode--apisetupmode-endpoint--coverage-59686044)
 - [Sprint 72 (in-session) — Coverage ratchet 57%→59% (SecretsTab + MacTab + GeneralTab + [id].tsx expand) + version bump 0.3.13→0.3.14](#sprint-72-in-session--coverage-ratchet-5759-secretstab--mactab--generaltab--idtsx-expand--version-bump-031314)
 - [Sprint 71 (in-session) — Coverage ratchet 55%→57% (expanded backend-error + SecurityTab + ws hooks) + version bump 0.3.12→0.3.13](#sprint-71-in-session--coverage-ratchet-5557-expanded-backend-error--securitytab--ws-hooks--version-bump-031213)
 - [Sprint 70 (in-session) — Coverage ratchet 53%→55% (VoiceTab + PersonalisedFineTuneSection mount tests + HudCard fix) + version bump 0.3.11→0.3.12](#sprint-70-in-session--coverage-ratchet-5355-voicetab--personalisedfinetunesection-mount-tests--hudcard-fix--version-bump-031112)
@@ -1438,6 +1439,40 @@ being committed:
    `vi.stubGlobal("WebSocket", MySpyClass)` to override
   the unconditional stub from `src/test/setup.ts`. See
   `src/test/ws-stub.ts` for the docstring.
+
+### Sprint 74 X-A (in-session) — Wizard progressive disclosure (essential 3-step + advanced 7-step) + SetupState.mode + /api/setup/mode endpoint + coverage 59.68%→60.44%
+
+> **Status**: In-session · 2026-07-17 (Day 1-2 of 12-18d sprint)
+> **Comes after**: Sprint 73 (`4fd2414` — HudCard refactor)
+> **Picked by user**: Top 3 of 6 features from the post-Sprint-73 strategic proposal
+> **Goal**: 3 user-trust foundation features in one sprint — onboarding progressive disclosure, memory write UI, automatic data backup.
+> **This commit covers only X-A** (Onboarding redesign). X-B (Memory edit) and X-C (Auto-backup) ship in subsequent commits per the [Sprint 74 plan](SPRINT-74-PLAN.md).
+
+**What shipped**: backend `SetupState.mode` field + `POST /api/setup/mode` endpoint + frontend wizard mode toggle + 2-tier StepIndicator (3 essential / 7 advanced) + cockpit card reads `total_steps` from server + 15 new tests (7 backend + 8 frontend). **Coverage: 59.68% → 60.44% line (+0.76pp, already past 60% target)**. Tests: 369 → 377 (+8 new, all 83 test files green). Build green. tsc clean. No version bump — Sprint 74 final bump happens after X-B + X-C land.
+
+**Bug fix as side effect**: pre-Sprint-74 cockpit card had `TOTAL_STEPS = 8` (counted `StepFinish` as a step). `WizardShell` correctly showed 7 navigable steps. Sprint 74 X-A.0 reconciles this: the cockpit card now reads `total_steps` from the server response (3 in essential, 7 in advanced). "X/8 done" was wrong from Sprint 39 onwards.
+
+**Files touched (12)**:
+
+| File | LoC | Kind |
+|------|-----|------|
+| `backend/app/core/setup_state.py` | +79 / -2 | M (mode field + _safe_wizard_mode + set_wizard_mode) |
+| `backend/app/api/setup.py` | +78 / -1 | M (POST /mode + WizardModeRequest + _step_payload adds mode/total_steps) |
+| `backend/tests/api/test_setup.py` | +97 | M (TestSetupModeEndpoint, 7 new tests) |
+| `frontend/src/types/api.ts` | +10 / -5 | M (SetupState.mode + total_steps) |
+| `frontend/src/lib/setup-api.ts` | +9 | M (setMode method) |
+| `frontend/src/hooks/useSetupWizard.ts` | +75 / -3 | M (mode state + setMode + ESSENTIAL/ADVANCED constants) |
+| `frontend/src/hooks/useSetupWizard.test.ts` | +55 | M (2 new mode tests) |
+| `frontend/src/components/wizard/WizardShell.tsx` | +110 / -25 | M (mode toggle + 2-tier StepIndicator + Advanced-required hint) |
+| `frontend/src/components/wizard/WizardShell.test.tsx` | +218 | A (new file, 4 tests) |
+| `frontend/src/components/wizard/StepSmoke.test.tsx` | +11 | M (mock shape updated for new mode fields) |
+| `frontend/src/components/dashboard/SetupWizard.tsx` | +22 / -19 | M (read total_steps from server, drop hardcoded 8) |
+| `frontend/src/components/dashboard/SetupWizard.test.tsx` | +87 / -14 | M (3 new tests, replace old "of 8" test) |
+| **Total** | **+622 / -36** | — |
+
+**Pre-existing modifications NOT from this batch**: None. The 4 version surfaces (`backend/app/__init__.py`, `frontend/package.json`, `frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/tauri.conf.json`) remain at `0.3.14`. Sprint 74's final version bump (0.3.14 → 0.3.15) happens at end-of-sprint (after X-B + X-C land) per the [Sprint 74 plan §6](SPRINT-74-PLAN.md#6-sprint-plan-1-sprint-delivery-12-18-days).
+
+---
 
 ### Sprint 72 (in-session) — Coverage ratchet 57%→59% (SecretsTab + MacTab + GeneralTab + [id].tsx expand) + version bump 0.3.13→0.3.14
 

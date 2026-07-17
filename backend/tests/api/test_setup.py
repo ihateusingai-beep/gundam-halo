@@ -1050,3 +1050,100 @@ def test_setup_tts_preview_returns_audio_or_graceful_error(tmp_path, _fresh_app,
             "tts_render_failed",
             "empty_audio",
         }
+
+
+# ---------------------------------------------------------------------------
+# Sprint 74 X-A — wizard mode toggle
+# ---------------------------------------------------------------------------
+
+
+class TestSetupModeEndpoint:
+    """POST /api/setup/mode — flip between essential (3-step) and
+    advanced (7-step) wizard modes. Persisted to setup_state.json."""
+
+    BEARER = {"Authorization": "Bearer test-bearer-token-shared-fixture"}
+
+    def test_state_default_mode_is_essential(self, client, halo_home):
+        """Fresh HALO_HOME — wizard defaults to essential mode (3 steps)."""
+        r = client.get("/api/setup/state")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["mode"] == "essential"
+        assert data["total_steps"] == 3
+
+    def test_post_mode_advanced_persists(self, client, halo_home):
+        """POST advanced → 200, mode + total_steps reflect new state,
+        and the change is written to setup_state.json."""
+        r = client.post(
+            "/api/setup/mode", json={"mode": "advanced"}, headers=self.BEARER
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["mode"] == "advanced"
+        assert data["total_steps"] == 7
+
+        # Confirm persisted to disk.
+        state_path = halo_home / "setup_state.json"
+        assert state_path.exists()
+        body = json.loads(state_path.read_text())
+        assert body["mode"] == "advanced"
+
+    def test_post_mode_toggle_back(self, client, halo_home):
+        """Toggle to advanced, then back to essential — state reflects the
+        latest value and persists."""
+        client.post(
+            "/api/setup/mode", json={"mode": "advanced"}, headers=self.BEARER
+        )
+        r = client.post(
+            "/api/setup/mode", json={"mode": "essential"}, headers=self.BEARER
+        )
+        assert r.status_code == 200
+        assert r.json()["mode"] == "essential"
+        assert r.json()["total_steps"] == 3
+
+    def test_post_mode_invalid_value_returns_422(self, client, halo_home):
+        """Validation rejects unknown modes with 422 (Pydantic)."""
+        r = client.post(
+            "/api/setup/mode", json={"mode": "broken"}, headers=self.BEARER
+        )
+        assert r.status_code == 422
+
+    def test_post_mode_empty_body_returns_422(self, client, halo_home):
+        """Missing mode field → 422."""
+        r = client.post("/api/setup/mode", json={}, headers=self.BEARER)
+        assert r.status_code == 422
+
+    def test_state_after_mode_change_reflects_new_total(
+        self, client, halo_home
+    ):
+        """GET /state after POST advanced → total_steps = 7."""
+        client.post(
+            "/api/setup/mode", json={"mode": "advanced"}, headers=self.BEARER
+        )
+        r = client.get("/api/setup/state")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["mode"] == "advanced"
+        assert data["total_steps"] == 7
+
+    def test_old_state_file_without_mode_field_defaults_to_essential(
+        self, client, halo_home
+    ):
+        """Backward compat: pre-0.3.15 setup_state.json without `mode`
+        field is treated as essential on load."""
+        state_path = halo_home / "setup_state.json"
+        state_path.write_text(json.dumps({
+            "version": 1,
+            "status": "needs_setup",
+            "current_step": 2,
+            "completed_steps": [1],
+            "started_at": "2026-07-01T10:00:00+00:00",
+            "finished_at": None,
+            "skipped": False,
+            "reason": "",
+        }))
+        r = client.get("/api/setup/state")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["mode"] == "essential"
+        assert data["total_steps"] == 3

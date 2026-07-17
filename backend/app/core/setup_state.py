@@ -81,6 +81,20 @@ ALLOWED_ASR_BACKENDS: list[str] = ["whisper_local", "sherpa"]
 #: The 3 TTS backends the wizard exposes.
 ALLOWED_TTS_BACKENDS: list[str] = ["edge", "openai", "cosyvoice"]
 
+#: Wizard mode — Sprint 74 progressive disclosure (X-A).
+#: "essential" = 3-step fast path (Welcome, LLM, Smoke).
+#: "advanced"  = 7-step full path (Welcome, LLM, ASR, TTS, Theme, Tailscale, Smoke).
+#: Old setup_state.json files without `mode` default to "essential" — see
+#: :meth:`SetupState.from_dict` for the backward-compat rule.
+WIZARD_MODE_ESSENTIAL = "essential"
+WIZARD_MODE_ADVANCED = "advanced"
+ALLOWED_WIZARD_MODES: tuple[str, ...] = (WIZARD_MODE_ESSENTIAL, WIZARD_MODE_ADVANCED)
+
+#: Total step counts per wizard mode. The wizard's UI dots are
+#: rendered against this — see ``SetupWizard.tsx`` cockpit card.
+ESSENTIAL_TOTAL_STEPS = 3
+ADVANCED_TOTAL_STEPS = 7
+
 
 # ---------------------------------------------------------------------------
 # Dataclass
@@ -117,6 +131,12 @@ class SetupState:
         Diagnostic string for the dashboard's "why is the wizard
         showing?" tooltip. E.g. ``"no config.toml"`` or
         ``"missing: ['llm.api_key', 'voice.asr.model_path']"``.
+    mode
+        Sprint 74 (X-A) — wizard mode. ``"essential"`` (3-step fast
+        path: Welcome → LLM → Smoke) or ``"advanced"`` (7-step full
+        path). Default is ``"essential"``. Old on-disk state files
+        without this field are treated as ``"essential"`` for
+        backward compatibility — see :meth:`from_dict`.
     """
 
     version: int = STATE_VERSION
@@ -127,12 +147,17 @@ class SetupState:
     finished_at: str | None = None
     skipped: bool = False
     reason: str = ""
+    mode: str = WIZARD_MODE_ESSENTIAL
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe dict (matches the on-disk shape 1:1)."""
         d = asdict(self)
         # asdict gives us a regular list for completed_steps; ensure sorted.
         d["completed_steps"] = sorted(set(self.completed_steps))
+        # Defensive: never emit a mode that is not in the allow-list.
+        # (Catches a future bug if someone hand-edits a state file.)
+        if d["mode"] not in ALLOWED_WIZARD_MODES:
+            d["mode"] = WIZARD_MODE_ESSENTIAL
         return d
 
     @classmethod
@@ -153,6 +178,18 @@ class SetupState:
             if isinstance(v, (str, type(None))):
                 return v
             return None
+
+        def _safe_wizard_mode(v: Any) -> str:
+            """Coerce an on-disk mode value to one of the allowed strings.
+
+            Anything not in ``ALLOWED_WIZARD_MODES`` (missing, wrong type,
+            or a future-invalid value) falls back to the safe default
+            ``WIZARD_MODE_ESSENTIAL``. We never raise here — a corrupt
+            state file should not block the wizard from loading.
+            """
+            if isinstance(v, str) and v in ALLOWED_WIZARD_MODES:
+                return v
+            return WIZARD_MODE_ESSENTIAL
 
         completed = data.get("completed_steps", []) or []
         if not isinstance(completed, list):
@@ -175,6 +212,11 @@ class SetupState:
             finished_at=_safe_str_or_none(data.get("finished_at")),
             skipped=bool(data.get("skipped", False)),
             reason=str(data.get("reason", "") or ""),
+            # Sprint 74 X-A: backward-compatible mode load. Old state files
+            # (pre-0.3.15) won't have a `mode` field — treat them as
+            # essential. Unknown / corrupted values also default to
+            # essential rather than crashing the wizard.
+            mode=_safe_wizard_mode(data.get("mode")),
         )
 
 
@@ -432,18 +474,55 @@ def now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
+# ---------------------------------------------------------------------------
+# Sprint 74 X-A — wizard mode
+# ---------------------------------------------------------------------------
+
+
+def set_wizard_mode(home: Path, mode: str) -> SetupState:
+    """Persist the wizard's *mode* (essential | advanced) to state.
+
+    Loads the current state, mutates ``mode`` to the requested value,
+    and saves atomically. Does **not** change ``current_step`` or
+    ``completed_steps`` — those are mode-agnostic. The frontend renders
+    the dot indicator against the active mode's total step count.
+
+    Used by ``POST /api/setup/mode``. The endpoint validates the mode
+    value before calling this, so an unknown mode would be caught
+    earlier (HTTP 400). This function still defends against that case
+    by rejecting non-allow-list values.
+
+    Returns the updated ``SetupState`` after save.
+    """
+    if mode not in ALLOWED_WIZARD_MODES:
+        raise ValueError(
+            f"Unknown wizard mode {mode!r}. "
+            f"Expected one of {list(ALLOWED_WIZARD_MODES)}."
+        )
+    state = load_setup_state(home)
+    state.mode = mode
+    save_setup_state(home, state)
+    return state
+
+
 __all__ = [
+    "ADVANCED_TOTAL_STEPS",
     "ALLOWED_LLM_PROVIDERS",
     "ALLOWED_ASR_BACKENDS",
     "ALLOWED_TTS_BACKENDS",
     "ALLOWED_THEMES",
+    "ALLOWED_WIZARD_MODES",
+    "ESSENTIAL_TOTAL_STEPS",
     "STATE_FILENAME",
     "STATE_VERSION",
     "SetupState",
+    "WIZARD_MODE_ADVANCED",
+    "WIZARD_MODE_ESSENTIAL",
     "compute_setup_state",
     "is_tailscale_reachable",
     "load_setup_state",
     "now_iso",
     "reset_setup_state",
     "save_setup_state",
+    "set_wizard_mode",
 ]

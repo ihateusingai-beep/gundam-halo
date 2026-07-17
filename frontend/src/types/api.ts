@@ -337,14 +337,22 @@ export type VoiceConfigWithRestart = {
 };
 
 // Sprint 39 — setup wizard state for the SetupWizard card.
+// Sprint 74 X-A — added `mode` (essential | advanced) and
+// `total_steps` (3 | 7) so the cockpit card renders the right number
+// of progress dots without a hardcoded constant.
 export interface SetupState {
   status: string;          // "in_progress" | "complete" | "skipped" | "pending"
-  current_step: number;    // 1..8
+  current_step: number;    // 1..7 (advanced); 1..3 (essential)
   completed_steps: number[];
   started_at: string | null;
   finished_at: string | null;
   skipped: boolean;
   reason: string | null;
+  // "essential" (3 steps: Welcome, LLM, Smoke) | "advanced" (7 steps)
+  mode: "essential" | "advanced";
+  // Total step count for the active mode (3 in essential, 7 in advanced).
+  // The cockpit card renders this many progress dots.
+  total_steps: 3 | 7;
 }
 
 // Sprint 44 — wizard step payload (returned by every /api/setup/* POST).

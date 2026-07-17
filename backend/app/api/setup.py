@@ -57,17 +57,23 @@ from app.core.secrets_store import SECRET_KEYS, get_secret_store
 from app.core.toml_doc import read_doc as _toml_read
 from app.core.toml_doc import write_doc as _toml_write
 from app.core.setup_state import (
+    ADVANCED_TOTAL_STEPS,
     ALLOWED_ASR_BACKENDS,
     ALLOWED_LLM_PROVIDERS,
     ALLOWED_THEMES,
     ALLOWED_TTS_BACKENDS,
+    ALLOWED_WIZARD_MODES,
+    ESSENTIAL_TOTAL_STEPS,
     SetupState,
+    WIZARD_MODE_ADVANCED,
+    WIZARD_MODE_ESSENTIAL,
     compute_setup_state,
     is_tailscale_reachable,
     load_setup_state,
     now_iso,
     reset_setup_state,
     save_setup_state,
+    set_wizard_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -185,6 +191,31 @@ class ResetRequest(BaseModel):
     """Body for POST /api/setup/reset (no fields; placeholder)."""
 
     pass
+
+
+class WizardModeRequest(BaseModel):
+    """Body for POST /api/setup/mode (Sprint 74 X-A).
+
+    The wizard exposes a 2-tier mode:
+    - ``"essential"`` (default): 3-step fast path (Welcome, LLM, Smoke).
+    - ``"advanced"``: 7-step full path (adds ASR, TTS, Theme, Tailscale).
+
+    Pilots flip between the two mid-flow — the toggle is in
+    ``WizardShell.tsx``. Persisted to ``setup_state.json`` so the
+    choice survives a refresh.
+    """
+
+    mode: str = Field(..., min_length=1, max_length=16)
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ALLOWED_WIZARD_MODES:
+            raise ValueError(
+                f"mode must be one of {list(ALLOWED_WIZARD_MODES)}"
+            )
+        return v
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +517,15 @@ def _step_payload(state: SetupState) -> dict[str, Any]:
         "finished_at": state.finished_at,
         "skipped": state.skipped,
         "reason": state.reason,
+        # Sprint 74 X-A — wizard mode (essential | advanced) + total
+        # step counts for the active mode. The frontend renders the
+        # progress dots against `total_steps`, not a hardcoded number.
+        "mode": state.mode,
+        "total_steps": (
+            ADVANCED_TOTAL_STEPS
+            if state.mode == WIZARD_MODE_ADVANCED
+            else ESSENTIAL_TOTAL_STEPS
+        ),
     }
 
 
@@ -542,6 +582,10 @@ async def get_setup_state() -> dict[str, Any]:
         finished_at=persisted.finished_at,
         skipped=persisted.skipped,
         reason=detected.reason,
+        # Sprint 74 X-A — wizard mode flows through from persisted state.
+        # Old state files (pre-0.3.15) default to "essential" via
+        # SetupState.from_dict().
+        mode=persisted.mode,
     )
     return {
         "status": combined.status,
@@ -551,6 +595,12 @@ async def get_setup_state() -> dict[str, Any]:
         "finished_at": combined.finished_at,
         "skipped": combined.skipped,
         "reason": combined.reason,
+        "mode": combined.mode,
+        "total_steps": (
+            ADVANCED_TOTAL_STEPS
+            if combined.mode == WIZARD_MODE_ADVANCED
+            else ESSENTIAL_TOTAL_STEPS
+        ),
     }
 
 
@@ -566,6 +616,34 @@ async def post_setup_start() -> dict[str, Any]:
     state.completed_steps = []
     state.reason = ""
     save_setup_state(home, state)
+    return _step_payload(state)
+
+
+@router.post("/mode", response_model=dict[str, Any], dependencies=[Depends(require_auth)])
+async def post_setup_mode(payload: WizardModeRequest) -> dict[str, Any]:
+    """POST /api/setup/mode — flip the wizard's mode (Sprint 74 X-A).
+
+    The wizard exposes 2 tiers: ``essential`` (3 steps) and
+    ``advanced`` (7 steps). The mode is persisted to setup_state.json
+    so the choice survives a refresh / crash recovery.
+
+    The mode is independent of ``current_step`` and
+    ``completed_steps`` — those are mode-agnostic. The frontend
+    renders the dot indicator against the active mode's total step
+    count (3 dots in essential, 7 in advanced).
+
+    Switching from essential to advanced is non-destructive: any
+    steps the pilot has already completed (e.g. step 1, 2) remain
+    marked. Switching from advanced to essential is also safe — the
+    advanced steps in ``completed_steps`` are simply ignored by the
+    essential-mode UI.
+
+    Validation: ``WizardModeRequest.mode`` is checked against
+    ``ALLOWED_WIZARD_MODES`` by the Pydantic validator, so a bad
+    value returns 422 before this handler runs.
+    """
+    home = _get_halo_home()
+    state = set_wizard_mode(home, payload.mode)
     return _step_payload(state)
 
 

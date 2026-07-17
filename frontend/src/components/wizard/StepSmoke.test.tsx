@@ -18,6 +18,12 @@ vi.mock("@/hooks/useSetupWizard", () => ({
     completedSteps: [1, 2, 3, 4, 5, 6],
     errors: [],
     redirect: null,
+    // Sprint 74 X-A — wizard mode + totalSteps + setMode added.
+    // StepSmoke doesn't read them, but TS requires the mocked
+    // shape to match UseSetupWizardResult.
+    mode: "advanced" as const,
+    totalSteps: 7 as const,
+    setMode: vi.fn(),
     runSmoke: mockRunSmoke,
     finish: mockFinish,
     submitLLM: vi.fn(),
@@ -57,6 +63,11 @@ describe("StepSmoke", () => {
       completedSteps: [1, 2, 3, 4, 5, 6] as [1, 2, 3, 4, 5, 6],
       errors: [],
       redirect: null,
+      // Sprint 74 X-A — mirror the hook's new fields so the
+      // mocked shape matches UseSetupWizardResult.
+      mode: "advanced" as const,
+      totalSteps: 7 as const,
+      setMode: vi.fn(),
       runSmoke: mockRunSmoke,
       finish: mockFinish,
       submitLLM: vi.fn(),

@@ -9,8 +9,8 @@
  *      no state file on disk) → green HudCard with "Setup
  *      complete" + "Review" link to `/setup`.
  *   2. **In progress** (status === "in_progress") → yellow
- *      pulsing HudCard with "Step N of 8" + "Resume setup"
- *      link.
+ *      pulsing HudCard with "Step N of 3" (essential) or
+ *      "Step N of 7" (advanced) + "Resume setup" link.
  *   3. **Skipped** (status === "skipped") → grey HudCard with
  *      "Setup skipped" + reason text.
  *
@@ -18,6 +18,13 @@
  * existing `/setup` page reads). We poll every 5s when the
  * card is mounted so the pulse state stays current without
  * requiring a page reload after each wizard step.
+ *
+ * Sprint 74 X-A — the dot count + "Step N of M" label now
+ * reads `total_steps` and `mode` from the server response
+ * (3 dots in essential, 7 in advanced). The old hardcoded
+ * `TOTAL_STEPS = 8` was wrong (it counted `StepFinish` as a
+ * navigable step; Finish is only rendered when the wizard
+ * is finished).
  *
  * Graceful degradation: if `/api/setup/state` returns 404
  * (wizard hasn't been started yet — no state file), the
@@ -36,7 +43,6 @@ import { HudCard } from "@/components/gundam/HudCard";
 import { api } from "@/lib/api";
 import type { SetupState } from "@/types/api";
 
-const TOTAL_STEPS = 8;
 /** Polling interval for the setup state. 5s matches the VoiceTab poll. */
 const POLL_INTERVAL_MS = 5_000;
 
@@ -121,7 +127,8 @@ export function SetupWizard() {
             Complete
           </h3>
           <p className="text-[10px] text-[var(--text-muted)] font-mono mt-1">
-            All {TOTAL_STEPS} steps finished.
+            All {display.state.total_steps ?? 3} steps finished
+            {display.state.mode === "advanced" ? " (advanced)" : ""}.
           </p>
           <Link
             to="/setup"
@@ -204,25 +211,31 @@ export function SetupWizard() {
 
   // In progress — the most visually prominent state.
   const { state } = display;
-  const stepLabel = `Step ${state.current_step} of ${TOTAL_STEPS}`;
+  // Sprint 74 X-A — totalSteps is read from the server's
+  // setup_state.json (3 in essential, 7 in advanced). Old responses
+  // (pre-0.3.15 backend) won't have it; fall back to 3 (essential).
+  const totalSteps = state.total_steps ?? 3;
+  const stepLabel = `Step ${state.current_step} of ${totalSteps}`;
   const completedCount = state.completed_steps.length;
+  const modeLabel = state.mode === "advanced" ? "advanced" : "essential";
   return (
     <HudCard pulse>
       <div data-testid="setup-wizard-card" data-state="in_progress">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-[Orbitron] text-[var(--warning)] uppercase tracking-widest">
-            Setup
+            Setup · {modeLabel}
           </span>
           <span className="text-[10px] font-mono text-[var(--text-muted)]">
-            {completedCount}/{TOTAL_STEPS} done
+            {completedCount}/{totalSteps} done
           </span>
         </div>
         <h3 className="text-lg font-[Rajdhani] text-[var(--warning)] mt-1">
           {stepLabel}
         </h3>
-        {/* Tiny progress dots — visual cue for "X of Y". */}
+        {/* Tiny progress dots — visual cue for "X of Y". Renders
+         * 3 dots in essential mode, 7 in advanced. */}
         <div className="flex gap-1 mt-2" aria-hidden>
-          {Array.from({ length: TOTAL_STEPS }).map((_, i) => {
+          {Array.from({ length: totalSteps }).map((_, i) => {
             const stepNum = i + 1;
             const isDone = state.completed_steps.includes(stepNum);
             const isCurrent = stepNum === state.current_step;

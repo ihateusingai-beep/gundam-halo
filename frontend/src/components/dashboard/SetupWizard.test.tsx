@@ -1,11 +1,14 @@
 /**
- * SetupWizard.test.tsx — Sprint 39 Track B acceptance test.
+ * SetupWizard.test.tsx — Sprint 39 Track B + Sprint 74 X-A acceptance.
  *
- * Verifies the in-progress branch renders the right "Step N of 8"
- * label + "Resume setup" link. Other branches (complete / skipped /
- * not_started / unavailable) are covered by the live smoke test
- * (the card is mounted on `/`); we only test the most visually
- * load-bearing branch here to keep the unit-test surface small.
+ * Sprint 39: verifies the in-progress branch renders the right
+ * "Step N of M" label + "Resume setup" link.
+ *
+ * Sprint 74 X-A: the cockpit card's "N" + "M" come from the
+ * server response (`mode` + `total_steps`). The hardcoded
+ * `TOTAL_STEPS = 8` was a pre-Sprint-74 bug (it counted
+ * `StepFinish` as a navigable step). Tests now exercise both
+ * essential (3 dots) and advanced (7 dots) branches.
  *
  * Mocking strategy:
  *   - `api.getSetupState` is mocked to return the in-progress state
@@ -34,11 +37,83 @@ afterEach(() => {
 });
 
 describe("SetupWizard", () => {
-  it("renders the in_progress state with step label and resume link", async () => {
+  it("renders essential in_progress state with 3-dot step label", async () => {
+    // Sprint 74 X-A — essential mode = 3 steps. current_step=2 of
+    // 3 means the user is mid-LLM step.
     getSetupStateMock.mockResolvedValue({
       status: "in_progress",
-      current_step: 3,
-      completed_steps: [1, 2],
+      current_step: 2,
+      completed_steps: [1],
+      started_at: "2026-07-17T00:00:00+00:00",
+      finished_at: null,
+      skipped: false,
+      reason: null,
+      mode: "essential",
+      total_steps: 3,
+    });
+
+    render(
+      <MemoryRouter>
+        <SetupWizard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("setup-wizard-card")).toBeTruthy();
+    });
+
+    const card = screen.getByTestId("setup-wizard-card");
+    expect(card.getAttribute("data-state")).toBe("in_progress");
+    expect(card.textContent).toContain("Step 2 of 3");
+    expect(card.textContent).toContain("1/3 done");
+    // Mode label surfaces in the header.
+    expect(card.textContent).toContain("essential");
+
+    // Resume setup link.
+    const link = screen.getByRole("link", { name: /resume setup/i });
+    expect(link.getAttribute("href")).toBe("/setup");
+  });
+
+  it("renders advanced in_progress state with 7-dot step label", async () => {
+    // Sprint 74 X-A — advanced mode = 7 steps. Pilot has done
+    // 1+2 (Welcome + LLM) and is currently on step 4 (Voice TTS).
+    getSetupStateMock.mockResolvedValue({
+      status: "in_progress",
+      current_step: 4,
+      completed_steps: [1, 2, 3],
+      started_at: "2026-07-17T00:00:00+00:00",
+      finished_at: null,
+      skipped: false,
+      reason: null,
+      mode: "advanced",
+      total_steps: 7,
+    });
+
+    render(
+      <MemoryRouter>
+        <SetupWizard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("setup-wizard-card")).toBeTruthy();
+    });
+
+    const card = screen.getByTestId("setup-wizard-card");
+    expect(card.getAttribute("data-state")).toBe("in_progress");
+    expect(card.textContent).toContain("Step 4 of 7");
+    expect(card.textContent).toContain("3/7 done");
+    expect(card.textContent).toContain("advanced");
+  });
+
+  it("falls back to 3 dots when total_steps is missing (pre-0.3.15 backend)", async () => {
+    // Defensive: a pre-Sprint-74 backend doesn't return
+    // `total_steps`. The card should default to 3 (essential)
+    // rather than crash or render 0 dots.
+    getSetupStateMock.mockResolvedValue({
+      status: "in_progress",
+      current_step: 1,
+      completed_steps: [],
       started_at: "2026-06-26T00:00:00+00:00",
       finished_at: null,
       skipped: false,
@@ -56,12 +131,7 @@ describe("SetupWizard", () => {
     });
 
     const card = screen.getByTestId("setup-wizard-card");
-    expect(card.getAttribute("data-state")).toBe("in_progress");
-    expect(card.textContent).toContain("Step 3 of 8");
-    expect(card.textContent).toContain("2/8 done");
-
-    // The "Resume setup" link points at /setup.
-    const link = screen.getByRole("link", { name: /resume setup/i });
-    expect(link.getAttribute("href")).toBe("/setup");
+    expect(card.textContent).toContain("Step 1 of 3");
+    expect(card.textContent).toContain("0/3 done");
   });
 });

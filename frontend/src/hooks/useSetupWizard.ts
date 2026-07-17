@@ -41,6 +41,15 @@ export type WizardStatus =
   | "error"
   | "finished";
 
+// Sprint 74 X-A — wizard mode. "essential" is the 3-step fast path
+// (Welcome → LLM → Smoke); "advanced" is the full 7-step path
+// (+ ASR, TTS, Theme, Tailscale). The choice is persisted to
+// setup_state.json via POST /api/setup/mode.
+export type WizardMode = "essential" | "advanced";
+
+export const ESSENTIAL_TOTAL_STEPS = 3;
+export const ADVANCED_TOTAL_STEPS = 7;
+
 export interface WizardError {
   field: string;
   code: string;
@@ -53,6 +62,12 @@ export interface UseSetupWizardResult {
   completedSteps: WizardStep[];
   errors: WizardError[];
   redirect: string | null;
+
+  // Sprint 74 X-A — wizard mode (essential | advanced) + total step
+  // count for the active mode. Persisted via setupApi.setMode().
+  mode: WizardMode;
+  totalSteps: 3 | 7;
+  setMode: (mode: WizardMode) => Promise<void>;
 
   // Step submit handlers.
   submitLLM: (cfg: LLMConfig) => Promise<void>;
@@ -117,6 +132,10 @@ export function useSetupWizard(): UseSetupWizardResult {
   const [status, setStatus] = useState<WizardStatus>("loading");
   const [errors, setErrors] = useState<WizardError[]>([]);
   const [redirect, setRedirect] = useState<string | null>(null);
+  // Sprint 74 X-A — wizard mode. Default "essential" matches the
+  // backend's default for fresh state files. Persisted via
+  // setupApi.setMode() (POST /api/setup/mode) when toggled.
+  const [mode, setModeState] = useState<WizardMode>("essential");
 
   const [llmForm, setLlmForm] = useState<LLMConfig>(DEFAULT_LLM);
   const [asrForm, setAsrForm] = useState<VoiceASRConfig>(DEFAULT_ASR);
@@ -133,6 +152,10 @@ export function useSetupWizard(): UseSetupWizardResult {
         const s = await setupApi.getState();
         if (cancelled) return;
         setState(s);
+        // Sprint 74 X-A — hydrate mode from server. Defensive: an
+        // old (pre-0.3.15) backend that doesn't return `mode` defaults
+        // to "essential" rather than crashing the wizard.
+        setModeState(s.mode ?? "essential");
         if (s.status === "complete") {
           setStatus("finished");
         } else {
@@ -149,6 +172,8 @@ export function useSetupWizard(): UseSetupWizardResult {
           finished_at: null,
           skipped: false,
           reason: null,
+          mode: "essential",
+          total_steps: 3,
         });
         setStatus("active");
       }
@@ -168,6 +193,14 @@ export function useSetupWizard(): UseSetupWizardResult {
       finished_at: res.finished_at,
       skipped: res.skipped,
       reason: res.reason,
+      // Sprint 74 X-A — backend always includes mode + total_steps
+      // (post-0.3.15). If a pre-0.3.15 backend reply is somehow
+      // threaded through, fall back to the current mode rather
+      // than crash.
+      mode: (res.mode as WizardMode | undefined) ?? mode,
+      total_steps:
+        (res.total_steps as 3 | 7 | undefined) ??
+        (mode === "advanced" ? ADVANCED_TOTAL_STEPS : ESSENTIAL_TOTAL_STEPS),
     });
     if (res.errors && res.errors.length > 0) {
       setErrors(res.errors);
@@ -268,6 +301,43 @@ export function useSetupWizard(): UseSetupWizardResult {
     [runSubmit],
   );
 
+  // Sprint 74 X-A — flip the wizard's mode (essential | advanced).
+  // Persists to the backend via POST /api/setup/mode, then mirrors
+  // the response into local state. Returns a promise so the caller
+  // can show a toast or animate the transition.
+  const setMode = useCallback(async (next: WizardMode) => {
+    if (next === mode) return;
+    try {
+      const res = await setupApi.setMode(next);
+      setModeState(next);
+      // Update the cached state object too so a subsequent
+      // applyResponse() doesn't overwrite the mode we just set.
+      if (res) {
+        setState((prev) =>
+          prev
+            ? {
+                ...prev,
+                mode: res.mode ?? next,
+                current_step: res.current_step ?? prev.current_step,
+                completed_steps: res.completed_steps ?? prev.completed_steps,
+                status: res.status ?? prev.status,
+              }
+            : prev,
+        );
+      }
+    } catch (e) {
+      // Surface as a wizard-level error so the caller can show a toast.
+      setErrors([
+        {
+          field: "wizard",
+          code: "mode_change_failed",
+          message: e instanceof Error ? e.message : String(e),
+        },
+      ]);
+      setStatus("error");
+    }
+  }, [mode]);
+
   const validateLLM = useCallback(
     (cfg: LLMConfig) => setupApi.validateLLM(cfg),
     [],
@@ -285,6 +355,11 @@ export function useSetupWizard(): UseSetupWizardResult {
     completedSteps: (state?.completed_steps ?? []) as WizardStep[],
     errors,
     redirect,
+    // Sprint 74 X-A — expose mode + totalSteps so the cockpit card
+    // and WizardShell can render mode-aware UI without recomputing.
+    mode,
+    totalSteps: mode === "advanced" ? ADVANCED_TOTAL_STEPS : ESSENTIAL_TOTAL_STEPS,
+    setMode,
     submitLLM,
     submitASR,
     submitTTS,

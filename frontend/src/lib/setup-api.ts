@@ -165,4 +165,13 @@ export const setupApi = {
 
   reset: () =>
     authedRequest<SetupStepPayload>("/api/setup/reset", { method: "POST" }),
+
+  /** Sprint 74 X-A — flip the wizard's mode (essential | advanced).
+   *  Persisted to setup_state.json via POST /api/setup/mode. The
+   *  response mirrors the /api/setup/state shape (full SetupState). */
+  setMode: (mode: "essential" | "advanced") =>
+    authedRequest<SetupStepPayload>("/api/setup/mode", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
 };
